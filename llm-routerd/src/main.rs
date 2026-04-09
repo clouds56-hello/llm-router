@@ -1,4 +1,10 @@
-use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Instant};
+use std::{
+  collections::HashMap,
+  net::SocketAddr,
+  path::{Path, PathBuf},
+  sync::Arc,
+  time::Instant,
+};
 
 use adapter_claude::ClaudeAdapter;
 use adapter_codex::CodexAdapter;
@@ -28,12 +34,22 @@ use viewer_web::ViewerState;
 #[derive(Clone)]
 struct RuntimeState {
   engine: Arc<RouterEngine>,
+  availability: EndpointAvailability,
+  enabled_providers: Vec<String>,
+  disabled_providers: Vec<(String, String)>,
 }
 
 #[derive(Clone)]
 struct AppState {
   runtime: Arc<RwLock<RuntimeState>>,
   plugins: PluginManager,
+}
+
+#[derive(Clone, Copy)]
+struct EndpointAvailability {
+  chat: bool,
+  embeddings: bool,
+  models: bool,
 }
 
 #[tokio::main]
@@ -48,9 +64,15 @@ async fn main() -> anyhow::Result<()> {
     .nth(1)
     .map(PathBuf::from)
     .unwrap_or_else(|| PathBuf::from("router.yaml"));
+  let dotenv_path = config_path
+    .parent()
+    .map(|p| p.join(".env"))
+    .unwrap_or_else(|| PathBuf::from(".env"));
 
   let config = load_config(&config_path)?;
-  let engine = build_engine(config.clone())?;
+  let dotenv_overlay = load_dotenv_map(&dotenv_path)?;
+  let runtime_state = build_runtime(config.clone(), &dotenv_overlay)?;
+  log_runtime_state("startup", &runtime_state);
 
   let store = SqliteStore::new(
     &config.viewer.sqlite_path,
@@ -65,16 +87,14 @@ async fn main() -> anyhow::Result<()> {
   ];
   let plugin_manager = PluginManager::new(plugins, 2048);
 
-  let runtime = Arc::new(RwLock::new(RuntimeState {
-    engine: Arc::new(engine),
-  }));
+  let runtime = Arc::new(RwLock::new(runtime_state));
 
   let state = AppState {
     runtime: runtime.clone(),
     plugins: plugin_manager,
   };
 
-  spawn_hot_reload(config_path.clone(), runtime.clone());
+  spawn_hot_reload(config_path.clone(), dotenv_path.clone(), runtime.clone());
   spawn_retention_pruner(store.clone());
 
   let mut app = Router::new()
@@ -108,12 +128,42 @@ fn load_config(path: &PathBuf) -> anyhow::Result<RouterConfig> {
   Ok(cfg)
 }
 
-fn build_engine(config: RouterConfig) -> anyhow::Result<RouterEngine> {
+fn load_dotenv_map(path: &Path) -> anyhow::Result<HashMap<String, String>> {
+  let mut out = HashMap::new();
+  if !path.exists() {
+    return Ok(out);
+  }
+
+  let iter = dotenvy::from_path_iter(path).with_context(|| format!("read .env failed: {}", path.display()))?;
+  for row in iter {
+    let (k, v) = row.with_context(|| format!("parse .env failed: {}", path.display()))?;
+    out.insert(k, v);
+  }
+
+  Ok(out)
+}
+
+fn build_runtime(config: RouterConfig, dotenv_overlay: &HashMap<String, String>) -> anyhow::Result<RuntimeState> {
   let resolved = config
-    .validate_and_resolve()
+    .validate_and_resolve_with_lookup(|key| std::env::var(key).ok().or_else(|| dotenv_overlay.get(key).cloned()))
     .map_err(|e| anyhow::anyhow!(e.to_string()))?;
   let registry = build_registry(&resolved);
-  Ok(RouterEngine::new(resolved, Arc::new(registry)))
+
+  let availability = compute_availability(&resolved);
+  let mut enabled_providers: Vec<String> = resolved.providers.keys().cloned().collect();
+  enabled_providers.sort();
+  let disabled_providers = resolved
+    .disabled_providers
+    .iter()
+    .map(|d| (d.name.clone(), d.reason.clone()))
+    .collect();
+
+  Ok(RuntimeState {
+    engine: Arc::new(RouterEngine::new(resolved, Arc::new(registry))),
+    availability,
+    enabled_providers,
+    disabled_providers,
+  })
 }
 
 fn build_registry(resolved: &ResolvedConfig) -> AdapterRegistry {
@@ -146,7 +196,52 @@ fn build_registry(resolved: &ResolvedConfig) -> AdapterRegistry {
   reg
 }
 
-fn spawn_hot_reload(path: PathBuf, runtime: Arc<RwLock<RuntimeState>>) {
+fn compute_availability(resolved: &ResolvedConfig) -> EndpointAvailability {
+  let mut chat = false;
+  let mut embeddings = false;
+  let models = !resolved.providers.is_empty();
+
+  for rp in resolved.providers.values() {
+    match rp.config.kind {
+      ProviderKind::OpenAi | ProviderKind::Copilot | ProviderKind::Codex => {
+        chat = true;
+        embeddings = true;
+      }
+      ProviderKind::Claude => {
+        chat = true;
+      }
+    }
+  }
+
+  EndpointAvailability {
+    chat,
+    embeddings,
+    models,
+  }
+}
+
+fn log_runtime_state(prefix: &str, runtime: &RuntimeState) {
+  if runtime.enabled_providers.is_empty() {
+    warn!("[{}] no enabled providers", prefix);
+  } else {
+    info!(
+      "[{}] enabled providers: {}",
+      prefix,
+      runtime.enabled_providers.join(", ")
+    );
+  }
+
+  for (name, reason) in &runtime.disabled_providers {
+    warn!("[{}] disabled provider '{}' ({})", prefix, name, reason);
+  }
+
+  info!(
+    "[{}] endpoint availability: chat={}, embeddings={}, models={}",
+    prefix, runtime.availability.chat, runtime.availability.embeddings, runtime.availability.models
+  );
+}
+
+fn spawn_hot_reload(path: PathBuf, dotenv_path: PathBuf, runtime: Arc<RwLock<RuntimeState>>) {
   tokio::spawn(async move {
     let (tx, mut rx) = tokio::sync::mpsc::channel(16);
     let mut watcher = match notify::recommended_watcher(move |res| {
@@ -166,16 +261,27 @@ fn spawn_hot_reload(path: PathBuf, runtime: Arc<RwLock<RuntimeState>>) {
 
     while let Some(event) = rx.recv().await {
       match event {
-        Ok(_evt) => match load_config(&path).and_then(build_engine) {
-          Ok(new_engine) => {
-            let mut guard = runtime.write().await;
-            guard.engine = Arc::new(new_engine);
-            info!("hot reload applied from {}", path.display());
+        Ok(_evt) => {
+          let dotenv_overlay = match load_dotenv_map(&dotenv_path) {
+            Ok(v) => v,
+            Err(err) => {
+              warn!("dotenv reload failed ({}): {}", dotenv_path.display(), err);
+              continue;
+            }
+          };
+
+          match load_config(&path).and_then(|cfg| build_runtime(cfg, &dotenv_overlay)) {
+            Ok(new_runtime) => {
+              log_runtime_state("hot-reload", &new_runtime);
+              let mut guard = runtime.write().await;
+              *guard = new_runtime;
+              info!("hot reload applied from {}", path.display());
+            }
+            Err(err) => {
+              warn!("hot reload rejected ({}): {}", path.display(), err);
+            }
           }
-          Err(err) => {
-            warn!("hot reload rejected ({}): {}", path.display(), err);
-          }
-        },
+        }
         Err(err) => warn!("watch error: {}", err),
       }
     }
@@ -193,13 +299,27 @@ fn spawn_retention_pruner(store: SqliteStore) {
   });
 }
 
+fn endpoint_disabled_response(endpoint: &str) -> Response {
+  error_response(RouterError::NotFound(format!(
+    "endpoint '{}' is disabled because no provider API key is available",
+    endpoint
+  )))
+}
+
 async fn healthz() -> impl IntoResponse {
   Json(serde_json::json!({"ok": true}))
 }
 
 async fn list_models(State(state): State<AppState>, headers: HeaderMap) -> Response {
+  let (enabled, engine) = {
+    let guard = state.runtime.read().await;
+    (guard.availability.models, guard.engine.clone())
+  };
+  if !enabled {
+    return endpoint_disabled_response("/v1/models");
+  }
+
   let ctx = RequestContext::new(extract_api_key(&headers));
-  let engine = state.runtime.read().await.engine.clone();
   match engine.list_models(&ctx).await {
     Ok(models) => Json(models).into_response(),
     Err(err) => error_response(err),
@@ -211,9 +331,16 @@ async fn embeddings(
   headers: HeaderMap,
   Json(req): Json<OpenAiEmbeddingRequest>,
 ) -> Response {
+  let (enabled, engine) = {
+    let guard = state.runtime.read().await;
+    (guard.availability.embeddings, guard.engine.clone())
+  };
+  if !enabled {
+    return endpoint_disabled_response("/v1/embeddings");
+  }
+
   let mut ctx = RequestContext::new(extract_api_key(&headers));
   let started = Instant::now();
-  let engine = state.runtime.read().await.engine.clone();
 
   let synthetic_chat_req = OpenAiChatCompletionRequest {
     model: req.model.clone(),
@@ -251,9 +378,16 @@ async fn chat_completions(
   headers: HeaderMap,
   Json(req): Json<OpenAiChatCompletionRequest>,
 ) -> Response {
+  let (enabled, engine) = {
+    let guard = state.runtime.read().await;
+    (guard.availability.chat, guard.engine.clone())
+  };
+  if !enabled {
+    return endpoint_disabled_response("/v1/chat/completions");
+  }
+
   let mut ctx = RequestContext::new(extract_api_key(&headers));
   let started = Instant::now();
-  let engine = state.runtime.read().await.engine.clone();
 
   state.plugins.emit(EventRecord::RequestStart {
     ctx: ctx.clone(),

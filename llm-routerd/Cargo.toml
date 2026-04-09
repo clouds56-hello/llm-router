@@ -12,6 +12,7 @@ adapter-openai = { path = "../adapter-openai" }
 anyhow.workspace = true
 axum.workspace = true
 chrono.workspace = true
+dotenvy.workspace = true
 futures.workspace = true
 notify.workspace = true
 plugin-api = { path = "../plugin-api" }

@@ -155,6 +155,7 @@ fn mk_resolved() -> ResolvedConfig {
     raw,
     providers,
     model_map,
+    disabled_providers: vec![],
   }
 }
 
@@ -208,7 +209,7 @@ fn openai_error_envelope_has_expected_type() {
 }
 
 #[test]
-fn config_requires_provider_env_key() {
+fn config_disables_provider_when_env_missing() {
   let cfg = RouterConfig {
     api_version: "v1".to_string(),
     listener: ListenerConfig {
@@ -234,6 +235,74 @@ fn config_requires_provider_env_key() {
   };
 
   std::env::remove_var("MISSING_ENV_FOR_TEST");
-  let err = cfg.validate_and_resolve().expect_err("must fail without env");
-  assert!(matches!(err, RouterError::Config(_)));
+  let resolved = cfg.validate_and_resolve().expect("should resolve");
+  assert!(resolved.providers.is_empty());
+  assert_eq!(resolved.disabled_providers.len(), 1);
+  assert_eq!(resolved.disabled_providers[0].name, "openai");
+}
+
+#[test]
+fn config_prunes_routes_and_model_mappings_for_disabled_provider() {
+  let cfg = RouterConfig {
+    api_version: "v1".to_string(),
+    listener: ListenerConfig {
+      bind: "127.0.0.1:8787".to_string(),
+    },
+    providers: vec![
+      ProviderConfig {
+        name: "openai".to_string(),
+        kind: ProviderKind::OpenAi,
+        base_url: "https://api.openai.com".to_string(),
+        api_key_env: "OPENAI_API_KEY".to_string(),
+        timeout_ms: 1000,
+        backoff_ms: 1000,
+      },
+      ProviderConfig {
+        name: "claude".to_string(),
+        kind: ProviderKind::Claude,
+        base_url: "https://api.anthropic.com".to_string(),
+        api_key_env: "ANTHROPIC_API_KEY".to_string(),
+        timeout_ms: 1000,
+        backoff_ms: 1000,
+      },
+    ],
+    routes: vec![RouteConfig {
+      name: "chat".to_string(),
+      model_aliases: vec!["gpt-4o".to_string(), "claude-3-7-sonnet".to_string()],
+      failover_chain: vec!["openai".to_string(), "claude".to_string()],
+      retry_budget: 2,
+      circuit_open_after_failures: 1,
+    }],
+    model_mappings: vec![
+      ModelMapping {
+        public_model: "gpt-4o".to_string(),
+        provider: "openai".to_string(),
+        provider_model: "gpt-4o".to_string(),
+      },
+      ModelMapping {
+        public_model: "claude-3-7-sonnet".to_string(),
+        provider: "claude".to_string(),
+        provider_model: "claude-3-7-sonnet-latest".to_string(),
+      },
+    ],
+    viewer: ViewerConfig {
+      enabled: false,
+      path_prefix: "/viewer".to_string(),
+      sqlite_path: ":memory:".to_string(),
+      max_rows: 1000,
+      max_age_seconds: 3600,
+    },
+  };
+
+  std::env::set_var("OPENAI_API_KEY", "k");
+  std::env::remove_var("ANTHROPIC_API_KEY");
+  let resolved = cfg.validate_and_resolve().expect("resolve");
+
+  assert_eq!(resolved.providers.len(), 1);
+  assert!(resolved.providers.contains_key("openai"));
+  assert_eq!(resolved.model_map.len(), 1);
+  assert!(resolved.model_map.contains_key("gpt-4o"));
+  assert_eq!(resolved.raw.routes.len(), 1);
+  assert_eq!(resolved.raw.routes[0].failover_chain, vec!["openai".to_string()]);
+  assert_eq!(resolved.raw.routes[0].model_aliases, vec!["gpt-4o".to_string()]);
 }

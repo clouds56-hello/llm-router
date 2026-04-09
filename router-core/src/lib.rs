@@ -1,4 +1,9 @@
-use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
+use std::{
+  collections::{HashMap, HashSet},
+  pin::Pin,
+  sync::Arc,
+  time::Duration,
+};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -119,32 +124,80 @@ pub struct RouterConfig {
 
 impl RouterConfig {
   pub fn validate_and_resolve(&self) -> Result<ResolvedConfig, RouterError> {
+    self.validate_and_resolve_with_lookup(|key| std::env::var(key).ok())
+  }
+
+  pub fn validate_and_resolve_with_lookup<F>(&self, mut lookup: F) -> Result<ResolvedConfig, RouterError>
+  where
+    F: FnMut(&str) -> Option<String>,
+  {
     if self.api_version.trim().is_empty() {
       return Err(RouterError::Config("apiVersion must be non-empty".to_string()));
     }
 
     let mut providers = HashMap::new();
+    let mut disabled_providers = Vec::new();
     for p in &self.providers {
-      let key = std::env::var(&p.api_key_env)
-        .map_err(|_| RouterError::Config(format!("missing env var '{}' for provider '{}'", p.api_key_env, p.name)))?;
-      providers.insert(
-        p.name.clone(),
-        ResolvedProvider {
-          config: p.clone(),
-          api_key: key,
-        },
-      );
+      match lookup(&p.api_key_env).filter(|v| !v.trim().is_empty()) {
+        Some(key) => {
+          providers.insert(
+            p.name.clone(),
+            ResolvedProvider {
+              config: p.clone(),
+              api_key: key,
+            },
+          );
+        }
+        None => {
+          disabled_providers.push(DisabledProvider {
+            name: p.name.clone(),
+            reason: format!("missing env var '{}'", p.api_key_env),
+          });
+        }
+      }
     }
 
+    let enabled_provider_names: HashSet<&str> = providers.keys().map(|k| k.as_str()).collect();
     let mut model_map = HashMap::new();
     for m in &self.model_mappings {
-      model_map.insert(m.public_model.clone(), m.clone());
+      if enabled_provider_names.contains(m.provider.as_str()) {
+        model_map.insert(m.public_model.clone(), m.clone());
+      }
     }
 
+    let mut filtered_raw = self.clone();
+    filtered_raw.model_mappings = self
+      .model_mappings
+      .iter()
+      .filter(|m| enabled_provider_names.contains(m.provider.as_str()))
+      .cloned()
+      .collect();
+    filtered_raw.routes = self
+      .routes
+      .iter()
+      .cloned()
+      .map(|mut r| {
+        r.failover_chain = r
+          .failover_chain
+          .iter()
+          .filter(|p| enabled_provider_names.contains(p.as_str()))
+          .cloned()
+          .collect();
+        r.model_aliases = r
+          .model_aliases
+          .iter()
+          .filter(|m| model_map.contains_key(*m))
+          .cloned()
+          .collect();
+        r
+      })
+      .collect();
+
     Ok(ResolvedConfig {
-      raw: self.clone(),
+      raw: filtered_raw,
       providers,
       model_map,
+      disabled_providers,
     })
   }
 }
@@ -156,10 +209,17 @@ pub struct ResolvedProvider {
 }
 
 #[derive(Debug, Clone)]
+pub struct DisabledProvider {
+  pub name: String,
+  pub reason: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct ResolvedConfig {
   pub raw: RouterConfig,
   pub providers: HashMap<String, ResolvedProvider>,
   pub model_map: HashMap<String, ModelMapping>,
+  pub disabled_providers: Vec<DisabledProvider>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

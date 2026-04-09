@@ -16,6 +16,7 @@
 - Adapter abstraction per provider.
 - Route policy with ordered failover chain + retry budget + circuit-open backoff.
 - YAML config (`router.yaml`) with env-secret resolution and file hot reload.
+- `.env` overlay support (re-read on config hot reload).
 - In-process plugin pipeline with bounded queue.
 - Default plugins:
   - Structured JSON logger
@@ -26,13 +27,13 @@
 
 ## Quick Start
 
-1. Set API key env vars referenced by `router.yaml`:
+1. Set API keys in process env or `.env` (same directory as `router.yaml`):
 
 ```bash
-export OPENAI_API_KEY=...
-export ANTHROPIC_API_KEY=...
-export COPILOT_API_KEY=...
-export CODEX_API_KEY=...
+OPENAI_API_KEY=...
+ANTHROPIC_API_KEY=...
+COPILOT_API_KEY=...
+CODEX_API_KEY=...
 ```
 
 2. Start the server:
@@ -67,3 +68,5 @@ curl -s http://127.0.0.1:8787/v1/models
 
 - Streaming currently uses normalized SSE output; upstream true token-stream pass-through can be extended per adapter.
 - Claude embeddings are explicitly unsupported in v1 and return an OpenAI-style request error.
+- Providers without API keys are disabled automatically.
+- Endpoints with no compatible enabled providers return `404` with OpenAI-style error payload.
