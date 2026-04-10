@@ -16,6 +16,25 @@ pub mod openai;
 
 pub type ProviderStream = Pin<Box<dyn Stream<Item = Result<String, ProviderError>> + Send + 'static>>;
 
+#[derive(Debug, Clone, Copy)]
+pub struct ProviderCapabilities {
+  pub chat_completion: bool,
+  pub responses: bool,
+  pub stream_chat_completion: bool,
+  pub stream_responses: bool,
+}
+
+impl ProviderCapabilities {
+  pub const fn all() -> Self {
+    Self {
+      chat_completion: true,
+      responses: true,
+      stream_chat_completion: true,
+      stream_responses: true,
+    }
+  }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ProviderError {
   #[error("http error: {0}")]
@@ -31,6 +50,7 @@ pub enum ProviderError {
 #[async_trait]
 pub trait ProviderAdapter: Send + Sync {
   fn name(&self) -> &'static str;
+  fn capabilities(&self, route: &ModelRoute) -> ProviderCapabilities;
 
   async fn chat_completion(
     &self,
@@ -49,6 +69,14 @@ pub trait ProviderAdapter: Send + Sync {
   ) -> Result<Value, ProviderError>;
 
   async fn stream_chat_completion(
+    &self,
+    config: &ProviderDefinition,
+    creds: Option<&ProviderCredential>,
+    route: &ModelRoute,
+    request_body: Value,
+  ) -> Result<ProviderStream, ProviderError>;
+
+  async fn stream_responses(
     &self,
     config: &ProviderDefinition,
     creds: Option<&ProviderCredential>,

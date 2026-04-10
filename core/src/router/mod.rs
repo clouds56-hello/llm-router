@@ -14,7 +14,7 @@ use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::app_state::AppState;
-use crate::providers::ProviderError;
+use crate::providers::{ProviderError, ProviderStream};
 
 pub fn build_router(state: Arc<AppState>) -> Router {
   Router::new()
@@ -101,45 +101,62 @@ async fn chat_completions(State(state): State<Arc<AppState>>, Json(mut body): Js
     ),
   );
 
+  let caps = adapter.capabilities(route);
+
   if stream_requested {
-    match adapter
-      .stream_chat_completion(&provider_cfg, creds.as_ref(), route, body)
+    if caps.stream_chat_completion {
+      return match adapter
+        .stream_chat_completion(&provider_cfg, creds.as_ref(), route, body)
+        .await
+      {
+        Ok(provider_stream) => sse_response(provider_stream),
+        Err(err) => provider_error_response(err),
+      };
+    }
+    if caps.stream_responses {
+      let converted = chat_request_to_response_request(body);
+      return match adapter
+        .stream_responses(&provider_cfg, creds.as_ref(), route, converted)
+        .await
+      {
+        Ok(provider_stream) => sse_response(convert_response_stream_to_chat_stream(provider_stream, route)),
+        Err(err) => provider_error_response(err),
+      };
+    }
+    return json_error(
+      StatusCode::NOT_IMPLEMENTED,
+      &format!(
+        "provider '{}' does not support streaming chat completions or streaming responses",
+        adapter.name()
+      ),
+    );
+  }
+
+  if caps.chat_completion {
+    return match adapter
+      .chat_completion(&provider_cfg, creds.as_ref(), route, body)
       .await
     {
-      Ok(provider_stream) => {
-        let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(32);
-        tokio::spawn(async move {
-          futures::pin_mut!(provider_stream);
-          while let Some(item) = provider_stream.next().await {
-            let event = match item {
-              Ok(chunk) => Event::default().data(chunk),
-              Err(err) => Event::default()
-                .event("error")
-                .data(json!({"error": err.to_string()}).to_string()),
-            };
-            if tx.send(Ok(event)).await.is_err() {
-              break;
-            }
-          }
-        });
-
-        return Sse::new(ReceiverStream::new(rx))
-          .keep_alive(KeepAlive::default())
-          .into_response();
-      }
-      Err(err) => {
-        return provider_error_response(err);
-      }
-    }
+      Ok(data) => Json(data).into_response(),
+      Err(err) => provider_error_response(err),
+    };
   }
 
-  match adapter
-    .chat_completion(&provider_cfg, creds.as_ref(), route, body)
-    .await
-  {
-    Ok(data) => Json(data).into_response(),
-    Err(err) => provider_error_response(err),
+  if caps.responses {
+    let converted = chat_request_to_response_request(body);
+    return match adapter.responses(&provider_cfg, creds.as_ref(), route, converted).await {
+      Ok(data) => Json(response_to_chat_completion(data, route)).into_response(),
+      Err(err) => provider_error_response(err),
+    };
   }
+
+  json_error(
+    StatusCode::NOT_IMPLEMENTED,
+    &format!(
+      "provider '{}' does not support chat completions or responses",
+      adapter.name()
+    ),
+  )
 }
 
 async fn responses(State(state): State<Arc<AppState>>, Json(mut body): Json<Value>) -> Response {
@@ -153,6 +170,8 @@ async fn responses(State(state): State<Arc<AppState>>, Json(mut body): Json<Valu
   if let Some(obj) = body.as_object_mut() {
     obj.insert("model".to_string(), Value::String(route.openai_name.clone()));
   }
+
+  let stream_requested = body.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
 
   let (adapter, provider_cfg, creds) = match state.providers().adapter_for_provider(&loaded, route) {
     Ok(v) => v,
@@ -169,10 +188,385 @@ async fn responses(State(state): State<Arc<AppState>>, Json(mut body): Json<Valu
     ),
   );
 
-  match adapter.responses(&provider_cfg, creds.as_ref(), route, body).await {
-    Ok(data) => Json(data).into_response(),
-    Err(err) => provider_error_response(err),
+  let caps = adapter.capabilities(route);
+  if stream_requested {
+    if caps.stream_responses {
+      return match adapter
+        .stream_responses(&provider_cfg, creds.as_ref(), route, body)
+        .await
+      {
+        Ok(provider_stream) => sse_response(provider_stream),
+        Err(err) => provider_error_response(err),
+      };
+    }
+    if caps.stream_chat_completion {
+      let converted = response_request_to_chat_request(body);
+      return match adapter
+        .stream_chat_completion(&provider_cfg, creds.as_ref(), route, converted)
+        .await
+      {
+        Ok(provider_stream) => sse_response(convert_chat_stream_to_response_stream(provider_stream)),
+        Err(err) => provider_error_response(err),
+      };
+    }
+    return json_error(
+      StatusCode::NOT_IMPLEMENTED,
+      &format!(
+        "provider '{}' does not support streaming responses or streaming chat completions",
+        adapter.name()
+      ),
+    );
   }
+
+  if caps.responses {
+    return match adapter.responses(&provider_cfg, creds.as_ref(), route, body).await {
+      Ok(data) => Json(data).into_response(),
+      Err(err) => provider_error_response(err),
+    };
+  }
+
+  if caps.chat_completion {
+    let converted = response_request_to_chat_request(body);
+    return match adapter
+      .chat_completion(&provider_cfg, creds.as_ref(), route, converted)
+      .await
+    {
+      Ok(data) => Json(chat_completion_to_response(data, route)).into_response(),
+      Err(err) => provider_error_response(err),
+    };
+  }
+
+  json_error(
+    StatusCode::NOT_IMPLEMENTED,
+    &format!(
+      "provider '{}' does not support responses or chat completions",
+      adapter.name()
+    ),
+  )
+}
+
+fn response_request_to_chat_request(body: Value) -> Value {
+  let stream = body.get("stream").cloned();
+  let model = body.get("model").cloned();
+  let input = body.get("input").cloned();
+  let mut out = if let Some(messages) = body.get("messages").cloned() {
+    json!({ "messages": messages })
+  } else {
+    let text = input_to_text(input.as_ref());
+    json!({
+      "messages": [{"role":"user","content": text}]
+    })
+  };
+  if let Some(obj) = out.as_object_mut() {
+    if let Some(v) = stream {
+      obj.insert("stream".to_string(), v);
+    }
+    if let Some(v) = model {
+      obj.insert("model".to_string(), v);
+    }
+    if let Some(v) = body.get("temperature").cloned() {
+      obj.insert("temperature".to_string(), v);
+    }
+    if let Some(v) = body.get("max_output_tokens").cloned() {
+      obj.insert("max_tokens".to_string(), v);
+    } else if let Some(v) = body.get("max_tokens").cloned() {
+      obj.insert("max_tokens".to_string(), v);
+    }
+  }
+  out
+}
+
+fn chat_request_to_response_request(body: Value) -> Value {
+  let model = body.get("model").cloned();
+  let stream = body.get("stream").cloned();
+  let messages = body.get("messages").cloned();
+  let input = if let Some(messages) = messages {
+    Value::String(messages_to_text(&messages))
+  } else if let Some(input) = body.get("input").cloned() {
+    input
+  } else {
+    Value::String(String::new())
+  };
+  let mut out = json!({ "input": input });
+  if let Some(obj) = out.as_object_mut() {
+    if let Some(v) = model {
+      obj.insert("model".to_string(), v);
+    }
+    if let Some(v) = stream {
+      obj.insert("stream".to_string(), v);
+    }
+    if let Some(v) = body.get("temperature").cloned() {
+      obj.insert("temperature".to_string(), v);
+    }
+    if let Some(v) = body.get("max_tokens").cloned() {
+      obj.insert("max_output_tokens".to_string(), v);
+    } else if let Some(v) = body.get("max_output_tokens").cloned() {
+      obj.insert("max_output_tokens".to_string(), v);
+    }
+  }
+  out
+}
+
+fn chat_completion_to_response(chat: Value, route: &crate::config::ModelRoute) -> Value {
+  let text = chat
+    .get("choices")
+    .and_then(|c| c.as_array())
+    .and_then(|choices| choices.first())
+    .and_then(|choice| choice.get("message"))
+    .and_then(|m| m.get("content"))
+    .and_then(|v| v.as_str())
+    .unwrap_or_default()
+    .to_string();
+  json!({
+    "id": chat.get("id").cloned().unwrap_or_else(|| Value::String("resp-converted".to_string())),
+    "object": "response",
+    "status": "completed",
+    "model": route.openai_name,
+    "output": [{
+      "type": "message",
+      "role": "assistant",
+      "content": [{"type":"output_text","text": text}]
+    }],
+    "output_text": text,
+  })
+}
+
+fn response_to_chat_completion(response: Value, route: &crate::config::ModelRoute) -> Value {
+  let text = response_to_text(&response);
+  json!({
+    "id": response.get("id").cloned().unwrap_or_else(|| Value::String("chatcmpl-converted".to_string())),
+    "object": "chat.completion",
+    "created": 0,
+    "model": route.openai_name,
+    "choices": [{
+      "index": 0,
+      "message": {"role":"assistant","content": text},
+      "finish_reason": "stop"
+    }]
+  })
+}
+
+fn convert_chat_stream_to_response_stream(provider_stream: ProviderStream) -> ProviderStream {
+  let (tx, rx) = tokio::sync::mpsc::channel::<Result<String, ProviderError>>(32);
+  tokio::spawn(async move {
+    futures::pin_mut!(provider_stream);
+    while let Some(item) = provider_stream.next().await {
+      let payload = match item {
+        Ok(v) => v,
+        Err(err) => {
+          let _ = tx.send(Err(err)).await;
+          return;
+        }
+      };
+      if payload.trim() == "[DONE]" {
+        if tx
+          .send(Ok(json!({"type":"response.completed"}).to_string()))
+          .await
+          .is_err()
+        {
+          return;
+        }
+        let _ = tx.send(Ok("[DONE]".to_string())).await;
+        return;
+      }
+      if let Ok(value) = serde_json::from_str::<Value>(&payload) {
+        let delta = value
+          .get("choices")
+          .and_then(|c| c.as_array())
+          .and_then(|choices| choices.first())
+          .and_then(|choice| choice.get("delta"))
+          .and_then(|d| d.get("content"))
+          .and_then(|v| v.as_str())
+          .unwrap_or_default();
+        if !delta.is_empty() {
+          if tx
+            .send(Ok(
+              json!({"type":"response.output_text.delta","delta":delta}).to_string(),
+            ))
+            .await
+            .is_err()
+          {
+            return;
+          }
+        }
+      }
+    }
+    let _ = tx.send(Ok(json!({"type":"response.completed"}).to_string())).await;
+    let _ = tx.send(Ok("[DONE]".to_string())).await;
+  });
+  Box::pin(ReceiverStream::new(rx))
+}
+
+fn convert_response_stream_to_chat_stream(
+  provider_stream: ProviderStream,
+  route: &crate::config::ModelRoute,
+) -> ProviderStream {
+  let (tx, rx) = tokio::sync::mpsc::channel::<Result<String, ProviderError>>(32);
+  let model = route.openai_name.clone();
+  tokio::spawn(async move {
+    futures::pin_mut!(provider_stream);
+    let mut sent_role = false;
+    while let Some(item) = provider_stream.next().await {
+      let payload = match item {
+        Ok(v) => v,
+        Err(err) => {
+          let _ = tx.send(Err(err)).await;
+          return;
+        }
+      };
+      if payload.trim() == "[DONE]" {
+        if tx.send(Ok("[DONE]".to_string())).await.is_err() {
+          return;
+        }
+        return;
+      }
+      let Ok(value) = serde_json::from_str::<Value>(&payload) else {
+        continue;
+      };
+      if let Some(kind) = value.get("type").and_then(|v| v.as_str()) {
+        if kind == "response.output_text.delta" {
+          let delta = value.get("delta").and_then(|v| v.as_str()).unwrap_or_default();
+          if !sent_role {
+            let _ = tx
+              .send(Ok(
+                json!({
+                  "id":"chatcmpl-converted",
+                  "object":"chat.completion.chunk",
+                  "created":0,
+                  "model":model,
+                  "choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":Value::Null}]
+                })
+                .to_string(),
+              ))
+              .await;
+            sent_role = true;
+          }
+          if tx
+            .send(Ok(
+              json!({
+                "id":"chatcmpl-converted",
+                "object":"chat.completion.chunk",
+                "created":0,
+                "model":model,
+                "choices":[{"index":0,"delta":{"content":delta},"finish_reason":Value::Null}]
+              })
+              .to_string(),
+            ))
+            .await
+            .is_err()
+          {
+            return;
+          }
+        } else if kind == "response.completed" {
+          let _ = tx
+            .send(Ok(
+              json!({
+                "id":"chatcmpl-converted",
+                "object":"chat.completion.chunk",
+                "created":0,
+                "model":model,
+                "choices":[{"index":0,"delta":{},"finish_reason":"stop"}]
+              })
+              .to_string(),
+            ))
+            .await;
+        }
+      }
+    }
+  });
+  Box::pin(ReceiverStream::new(rx))
+}
+
+fn response_to_text(response: &Value) -> String {
+  if let Some(text) = response.get("output_text").and_then(|v| v.as_str()) {
+    return text.to_string();
+  }
+  response
+    .get("output")
+    .and_then(|v| v.as_array())
+    .and_then(|items| items.first())
+    .and_then(|item| item.get("content"))
+    .and_then(|v| v.as_array())
+    .and_then(|items| items.first())
+    .and_then(|item| item.get("text"))
+    .and_then(|v| v.as_str())
+    .unwrap_or_default()
+    .to_string()
+}
+
+fn messages_to_text(messages: &Value) -> String {
+  messages
+    .as_array()
+    .map(|items| {
+      items
+        .iter()
+        .filter_map(|item| item.get("content"))
+        .map(content_to_text)
+        .collect::<Vec<String>>()
+        .join("\n")
+    })
+    .unwrap_or_default()
+}
+
+fn input_to_text(input: Option<&Value>) -> String {
+  match input {
+    Some(Value::String(s)) => s.clone(),
+    Some(Value::Array(items)) => items.iter().map(content_to_text).collect::<Vec<String>>().join("\n"),
+    Some(other) => content_to_text(other),
+    None => String::new(),
+  }
+}
+
+fn content_to_text(content: &Value) -> String {
+  if let Some(s) = content.as_str() {
+    return s.to_string();
+  }
+  if let Some(obj) = content.as_object() {
+    if let Some(text) = obj.get("text").and_then(|v| v.as_str()) {
+      return text.to_string();
+    }
+  }
+  if let Some(arr) = content.as_array() {
+    return arr
+      .iter()
+      .map(|item| {
+        if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
+          text.to_string()
+        } else if let Some(text) = item.get("content").and_then(|v| v.as_str()) {
+          text.to_string()
+        } else if let Some(text) = item.as_str() {
+          text.to_string()
+        } else {
+          String::new()
+        }
+      })
+      .filter(|s| !s.is_empty())
+      .collect::<Vec<String>>()
+      .join("\n");
+  }
+  String::new()
+}
+
+fn sse_response(provider_stream: ProviderStream) -> Response {
+  let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(32);
+  tokio::spawn(async move {
+    futures::pin_mut!(provider_stream);
+    while let Some(item) = provider_stream.next().await {
+      let event = match item {
+        Ok(chunk) => Event::default().data(chunk),
+        Err(err) => Event::default()
+          .event("error")
+          .data(json!({"error": err.to_string()}).to_string()),
+      };
+      if tx.send(Ok(event)).await.is_err() {
+        break;
+      }
+    }
+  });
+
+  Sse::new(ReceiverStream::new(rx))
+    .keep_alive(KeepAlive::default())
+    .into_response()
 }
 
 fn provider_error_response(err: ProviderError) -> Response {
@@ -201,14 +595,19 @@ mod tests {
   use tower::ServiceExt;
 
   use crate::config::{ModelRoute, ProviderCredential, ProviderDefinition};
-  use crate::providers::{ProviderAdapter, ProviderRegistry, ProviderStream};
+  use crate::providers::{ProviderAdapter, ProviderCapabilities, ProviderRegistry, ProviderStream};
 
   struct MockAdapter;
+  struct ChatOnlyAdapter;
 
   #[async_trait]
   impl ProviderAdapter for MockAdapter {
     fn name(&self) -> &'static str {
       "mock-openai"
+    }
+
+    fn capabilities(&self, _route: &ModelRoute) -> ProviderCapabilities {
+      ProviderCapabilities::all()
     }
 
     async fn chat_completion(
@@ -241,6 +640,95 @@ mod tests {
       let s = stream::iter(vec![Ok("data: {\"id\":\"chunk-1\"}\n\n".to_string())]);
       Ok(Box::pin(s))
     }
+
+    async fn stream_responses(
+      &self,
+      _config: &ProviderDefinition,
+      _creds: Option<&ProviderCredential>,
+      _route: &ModelRoute,
+      _request_body: Value,
+    ) -> Result<ProviderStream, crate::providers::ProviderError> {
+      let s = stream::iter(vec![
+        Ok("{\"id\":\"resp-chunk-1\"}".to_string()),
+        Ok("[DONE]".to_string()),
+      ]);
+      Ok(Box::pin(s))
+    }
+  }
+
+  #[async_trait]
+  impl ProviderAdapter for ChatOnlyAdapter {
+    fn name(&self) -> &'static str {
+      "chat-only"
+    }
+
+    fn capabilities(&self, _route: &ModelRoute) -> ProviderCapabilities {
+      ProviderCapabilities {
+        chat_completion: true,
+        responses: false,
+        stream_chat_completion: true,
+        stream_responses: false,
+      }
+    }
+
+    async fn chat_completion(
+      &self,
+      _config: &ProviderDefinition,
+      _creds: Option<&ProviderCredential>,
+      _route: &ModelRoute,
+      _request_body: Value,
+    ) -> Result<Value, crate::providers::ProviderError> {
+      Ok(json!({
+        "id":"chat_123",
+        "object":"chat.completion",
+        "choices":[{"index":0,"message":{"role":"assistant","content":"hello from chat-only"}}]
+      }))
+    }
+
+    async fn responses(
+      &self,
+      _config: &ProviderDefinition,
+      _creds: Option<&ProviderCredential>,
+      _route: &ModelRoute,
+      _request_body: Value,
+    ) -> Result<Value, crate::providers::ProviderError> {
+      Err(crate::providers::ProviderError::Unsupported(
+        "responses unsupported".to_string(),
+      ))
+    }
+
+    async fn stream_chat_completion(
+      &self,
+      _config: &ProviderDefinition,
+      _creds: Option<&ProviderCredential>,
+      _route: &ModelRoute,
+      _request_body: Value,
+    ) -> Result<ProviderStream, crate::providers::ProviderError> {
+      let s = stream::iter(vec![
+        Ok(
+          json!({
+            "id":"chatcmpl_1",
+            "object":"chat.completion.chunk",
+            "choices":[{"index":0,"delta":{"content":"hello"},"finish_reason":Value::Null}]
+          })
+          .to_string(),
+        ),
+        Ok("[DONE]".to_string()),
+      ]);
+      Ok(Box::pin(s))
+    }
+
+    async fn stream_responses(
+      &self,
+      _config: &ProviderDefinition,
+      _creds: Option<&ProviderCredential>,
+      _route: &ModelRoute,
+      _request_body: Value,
+    ) -> Result<ProviderStream, crate::providers::ProviderError> {
+      Err(crate::providers::ProviderError::Unsupported(
+        "streaming responses unsupported".to_string(),
+      ))
+    }
   }
 
   fn write_config(dir: &Path, base_url: &str) {
@@ -268,6 +756,20 @@ mod tests {
     write_config(dir.path(), "http://unused.local");
     let mut adapters: HashMap<String, Arc<dyn ProviderAdapter>> = HashMap::new();
     adapters.insert("openai".to_string(), Arc::new(MockAdapter));
+    let registry = ProviderRegistry::from_adapters(adapters);
+    let state = Arc::new(
+      crate::app_state::AppState::new_for_tests(dir.path().to_path_buf(), registry)
+        .await
+        .unwrap(),
+    );
+    build_router(state)
+  }
+
+  async fn test_app_with_adapter(adapter: Arc<dyn ProviderAdapter>) -> Router {
+    let dir = tempfile::tempdir_in("/tmp").unwrap();
+    write_config(dir.path(), "http://unused.local");
+    let mut adapters: HashMap<String, Arc<dyn ProviderAdapter>> = HashMap::new();
+    adapters.insert("openai".to_string(), adapter);
     let registry = ProviderRegistry::from_adapters(adapters);
     let state = Arc::new(
       crate::app_state::AppState::new_for_tests(dir.path().to_path_buf(), registry)
@@ -348,5 +850,91 @@ mod tests {
     assert!(content_type.contains("text/event-stream"));
     let body = res.into_body().collect().await.unwrap().to_bytes();
     assert!(String::from_utf8_lossy(&body).contains("chunk-1"));
+  }
+
+  #[tokio::test]
+  async fn supports_sse_streaming_responses() {
+    let app = test_app().await;
+    let req = axum::http::Request::builder()
+      .method("POST")
+      .uri("/v1/responses")
+      .header("content-type", "application/json")
+      .body(axum::body::Body::from(
+        json!({
+            "model": "gpt-test",
+            "stream": true,
+            "input": "hi"
+        })
+        .to_string(),
+      ))
+      .unwrap();
+
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let content_type = res
+      .headers()
+      .get("content-type")
+      .and_then(|v| v.to_str().ok())
+      .unwrap_or_default();
+    assert!(content_type.contains("text/event-stream"));
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    let body_text = String::from_utf8_lossy(&body);
+    assert!(body_text.contains("resp-chunk-1"));
+    assert!(body_text.contains("[DONE]"));
+  }
+
+  #[tokio::test]
+  async fn converts_chat_to_responses_for_chat_only_adapter() {
+    let app = test_app_with_adapter(Arc::new(ChatOnlyAdapter)).await;
+    let req = axum::http::Request::builder()
+      .method("POST")
+      .uri("/v1/responses")
+      .header("content-type", "application/json")
+      .body(axum::body::Body::from(
+        json!({
+          "model": "gpt-test",
+          "input": "hi"
+        })
+        .to_string(),
+      ))
+      .unwrap();
+
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    let body_text = String::from_utf8_lossy(&body);
+    assert!(body_text.contains("\"object\":\"response\""));
+    assert!(body_text.contains("hello from chat-only"));
+  }
+
+  #[tokio::test]
+  async fn converts_chat_stream_to_responses_stream_for_chat_only_adapter() {
+    let app = test_app_with_adapter(Arc::new(ChatOnlyAdapter)).await;
+    let req = axum::http::Request::builder()
+      .method("POST")
+      .uri("/v1/responses")
+      .header("content-type", "application/json")
+      .body(axum::body::Body::from(
+        json!({
+          "model": "gpt-test",
+          "stream": true,
+          "input": "hi"
+        })
+        .to_string(),
+      ))
+      .unwrap();
+
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let content_type = res
+      .headers()
+      .get("content-type")
+      .and_then(|v| v.to_str().ok())
+      .unwrap_or_default();
+    assert!(content_type.contains("text/event-stream"));
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    let body_text = String::from_utf8_lossy(&body);
+    assert!(body_text.contains("response.output_text.delta"));
+    assert!(body_text.contains("[DONE]"));
   }
 }

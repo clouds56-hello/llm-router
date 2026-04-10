@@ -1,7 +1,8 @@
 use async_trait::async_trait;
 use serde_json::Value;
 
-use super::{ProviderAdapter, ProviderError, ProviderStream};
+use super::openai::OpenAiAdapter;
+use super::{ProviderAdapter, ProviderCapabilities, ProviderError, ProviderStream};
 use crate::config::{ModelRoute, ProviderCredential, ProviderDefinition};
 
 pub struct DeepSeekAdapter;
@@ -18,35 +19,62 @@ impl ProviderAdapter for DeepSeekAdapter {
     "deepseek"
   }
 
+  fn capabilities(&self, _route: &ModelRoute) -> ProviderCapabilities {
+    ProviderCapabilities {
+      chat_completion: true,
+      responses: false,
+      stream_chat_completion: true,
+      stream_responses: false,
+    }
+  }
+
   async fn chat_completion(
     &self,
-    _config: &ProviderDefinition,
-    _creds: Option<&ProviderCredential>,
-    _route: &ModelRoute,
-    _request_body: Value,
+    config: &ProviderDefinition,
+    creds: Option<&ProviderCredential>,
+    route: &ModelRoute,
+    request_body: Value,
   ) -> Result<Value, ProviderError> {
-    Err(ProviderError::Unsupported(
-      "deepseek adapter TODO: implement provider-specific behavior".to_string(),
-    ))
+    OpenAiAdapter::new()
+      .chat_completion(config, creds, route, request_body)
+      .await
   }
 
   async fn responses(
     &self,
-    _config: &ProviderDefinition,
-    _creds: Option<&ProviderCredential>,
-    _route: &ModelRoute,
-    _request_body: Value,
+    config: &ProviderDefinition,
+    creds: Option<&ProviderCredential>,
+    route: &ModelRoute,
+    request_body: Value,
   ) -> Result<Value, ProviderError> {
-    Err(ProviderError::Unsupported("deepseek responses TODO".to_string()))
+    let _ = (config, creds, route, request_body);
+    Err(ProviderError::Unsupported(
+      "deepseek upstream does not support responses".to_string(),
+    ))
   }
 
   async fn stream_chat_completion(
     &self,
-    _config: &ProviderDefinition,
-    _creds: Option<&ProviderCredential>,
-    _route: &ModelRoute,
-    _request_body: Value,
+    config: &ProviderDefinition,
+    creds: Option<&ProviderCredential>,
+    route: &ModelRoute,
+    request_body: Value,
   ) -> Result<ProviderStream, ProviderError> {
-    Err(ProviderError::Unsupported("deepseek streaming TODO".to_string()))
+    OpenAiAdapter::new()
+      .stream_chat_completion(config, creds, route, request_body)
+      .await
+  }
+
+  async fn stream_responses(
+    &self,
+    config: &ProviderDefinition,
+    creds: Option<&ProviderCredential>,
+    route: &ModelRoute,
+    request_body: Value,
+  ) -> Result<ProviderStream, ProviderError> {
+    let _ = (config, creds, route, request_body);
+    Err(ProviderError::Unsupported(
+      "deepseek upstream does not support responses streaming".to_string(),
+    ))
   }
 }
