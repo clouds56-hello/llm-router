@@ -11,8 +11,8 @@ use tokio::task::JoinHandle;
 
 use crate::auth::copilot::CopilotAuthManager;
 use crate::config::ConfigManager;
-use crate::logging::{LogCaptureLayer, LogStore};
-use crate::persistence::RequestStore;
+use crate::db::logging::{LogCaptureLayer, LogStore};
+use crate::db::RequestStore;
 use crate::providers::ProviderRegistry;
 use crate::router;
 

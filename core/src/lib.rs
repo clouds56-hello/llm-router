@@ -1,8 +1,7 @@
 pub mod app_state;
 pub mod auth;
 pub mod config;
-pub mod logging;
-pub mod persistence;
+pub mod db;
 pub mod providers;
 pub mod router;
 

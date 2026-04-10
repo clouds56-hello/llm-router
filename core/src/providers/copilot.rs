@@ -327,7 +327,7 @@ mod tests {
   use tracing::Instrument;
   use tracing_subscriber::layer::SubscriberExt;
 
-  use crate::logging::{LogCaptureLayer, LogQuery, LogStore};
+  use crate::db::logging::{LogCaptureLayer, LogQuery, LogStore};
 
   #[derive(Clone)]
   struct UpstreamStub {

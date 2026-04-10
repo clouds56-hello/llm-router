@@ -9,8 +9,8 @@ use llm_router_core::auth::copilot::{
   DeviceAuthCompleteRequest, DeviceAuthCompleteResponse, DeviceAuthStartRequest, DeviceAuthStartResponse,
 };
 use llm_router_core::config::{AccountView, ConnectAccountInput, UpdateAccountInput};
-use llm_router_core::logging::LogQuery;
-use llm_router_core::persistence::ConversationView;
+use llm_router_core::db::logging::LogQuery;
+use llm_router_core::db::ConversationView;
 
 #[tauri::command]
 pub async fn get_provider_status(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec<Value>, String> {
