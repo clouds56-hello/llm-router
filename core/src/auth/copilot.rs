@@ -8,8 +8,11 @@ use parking_lot::RwLock;
 use reqwest::header::{ACCEPT, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 
+use crate::config::{ConfigManager, ConnectAccountInput};
+
 const GITHUB_CLIENT_ID: &str = "Iv1.b507a08c87ecfe98";
 const DEVICE_FLOW_SCOPE: &str = "read:user copilot";
+const COPILOT_PROVIDER_NAME: &str = "github_copilot";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
@@ -74,54 +77,20 @@ struct TokenResponse {
   error: Option<String>,
 }
 
-trait TokenStore: Send + Sync {
-  fn get(&self, key: &str) -> Result<Option<String>>;
-  fn set(&self, key: &str, value: &str) -> Result<()>;
-  fn delete(&self, key: &str) -> Result<()>;
-}
-
-#[derive(Default)]
-struct KeyringTokenStore;
-
-impl TokenStore for KeyringTokenStore {
-  fn get(&self, key: &str) -> Result<Option<String>> {
-    let entry = keyring::Entry::new("llm-router", key)?;
-    match entry.get_password() {
-      Ok(v) => Ok(Some(v)),
-      Err(keyring::Error::NoEntry) => Ok(None),
-      Err(err) => Err(err.into()),
-    }
-  }
-
-  fn set(&self, key: &str, value: &str) -> Result<()> {
-    let entry = keyring::Entry::new("llm-router", key)?;
-    entry.set_password(value)?;
-    Ok(())
-  }
-
-  fn delete(&self, key: &str) -> Result<()> {
-    let entry = keyring::Entry::new("llm-router", key)?;
-    match entry.delete_credential() {
-      Ok(_) | Err(keyring::Error::NoEntry) => Ok(()),
-      Err(err) => Err(err.into()),
-    }
-  }
-}
-
 #[derive(Clone)]
 pub struct CopilotAuthManager {
   state_file: PathBuf,
   sessions: Arc<RwLock<HashMap<String, PendingDeviceFlow>>>,
-  token_store: Arc<dyn TokenStore>,
+  config: ConfigManager,
   client: reqwest::Client,
 }
 
 impl CopilotAuthManager {
-  pub fn new(config_dir: PathBuf) -> Self {
+  pub fn new(config_dir: PathBuf, config: ConfigManager) -> Self {
     Self {
       state_file: config_dir.join("copilot_auth_state.json"),
       sessions: Arc::new(RwLock::new(HashMap::new())),
-      token_store: Arc::new(KeyringTokenStore),
+      config,
       client: reqwest::Client::new(),
     }
   }
@@ -198,11 +167,30 @@ impl CopilotAuthManager {
     let body: TokenResponse = res.json().await.context("failed to parse token response")?;
 
     if let Some(token) = body.access_token {
-      let key = token_key(&pending.deployment);
-      self
-        .token_store
-        .set(&key, &token)
-        .context("failed to persist token in secure store")?;
+      let account_id = account_id_for_deployment(&pending.deployment);
+      let mut meta = HashMap::new();
+      meta.insert("oauth".to_string(), "true".to_string());
+      meta.insert("deployment".to_string(), deployment_label(&pending.deployment));
+      if let CopilotDeployment::Enterprise { domain } = &pending.deployment {
+        meta.insert("enterprise_domain".to_string(), domain.clone());
+      }
+
+      self.config.connect_account(ConnectAccountInput {
+        provider: COPILOT_PROVIDER_NAME.to_string(),
+        account_id: Some(account_id),
+        label: Some(match &pending.deployment {
+          CopilotDeployment::GitHubCom => "GitHub.com".to_string(),
+          CopilotDeployment::Enterprise { domain } => format!("Enterprise ({domain})"),
+        }),
+        auth_type: Some("bearer".to_string()),
+        secrets: HashMap::from_iter(vec![
+          ("api_key".to_string(), token.clone()),
+          ("oauth_access_token".to_string(), token.clone()),
+        ]),
+        meta,
+        set_default: Some(true),
+        enabled: Some(true),
+      })?;
 
       let auth_state = CopilotAuthState {
         logged_in: true,
@@ -230,9 +218,14 @@ impl CopilotAuthManager {
       return Ok(None);
     };
 
-    let key = token_key(&state.deployment);
-    let has_token = self.token_store.get(&key)?.is_some();
-    if !has_token {
+    let token = self
+      .config
+      .get()
+      .credentials
+      .resolve_runtime_credential(COPILOT_PROVIDER_NAME)?
+      .and_then(|c| c.api_key);
+
+    if token.is_none() {
       return Ok(None);
     }
 
@@ -241,7 +234,8 @@ impl CopilotAuthManager {
 
   pub fn logout(&self) -> Result<()> {
     if let Some(state) = self.read_state()? {
-      self.token_store.delete(&token_key(&state.deployment))?;
+      let account_id = account_id_for_deployment(&state.deployment);
+      self.config.disconnect_account(COPILOT_PROVIDER_NAME, &account_id)?;
     }
     if self.state_file.exists() {
       std::fs::remove_file(&self.state_file).context("failed to remove persisted state")?;
@@ -286,10 +280,17 @@ fn token_preview(token: &str) -> String {
   format!("{start}...{end}")
 }
 
-fn token_key(deployment: &CopilotDeployment) -> String {
+fn account_id_for_deployment(deployment: &CopilotDeployment) -> String {
   match deployment {
     CopilotDeployment::GitHubCom => "copilot-github-com".to_string(),
-    CopilotDeployment::Enterprise { domain } => format!("copilot-enterprise-{domain}"),
+    CopilotDeployment::Enterprise { domain } => format!("copilot-enterprise-{}", domain.replace('.', "-")),
+  }
+}
+
+fn deployment_label(deployment: &CopilotDeployment) -> String {
+  match deployment {
+    CopilotDeployment::GitHubCom => "github.com".to_string(),
+    CopilotDeployment::Enterprise { domain } => format!("enterprise:{domain}"),
   }
 }
 

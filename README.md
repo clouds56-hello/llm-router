@@ -28,6 +28,7 @@ Desktop behavior:
 Dashboard includes:
 - provider status
 - model list
+- credential account manager (connect/disconnect/default/rename/enable)
 - active config inspection
 - request logs
 - login status
@@ -37,7 +38,7 @@ Copilot auth:
 - OAuth device flow scaffold for GitHub.com + Enterprise
 - enterprise domain normalization
 - API base derivation helper
-- secure token persistence via OS keyring
+- OAuth token persistence in `credentials.yaml` provider accounts
 - login/logout/status Tauri commands
 - dedicated adapter scaffold with TODOs for provider-specific request behavior
 
@@ -46,6 +47,12 @@ Config system:
   - `providers.yaml`
   - `models.yaml`
   - `credentials.yaml`
+- `credentials.yaml` uses provider account collections:
+  - `providers.<provider>.accounts[]`
+  - account fields: `id`, `label`, `auth_type`, `is_default`, `enabled`, `secrets`, `meta`
+- inline secret codec:
+  - `enc2:<version>.<algo>.<nonce>.<payload>`
+  - self-contained obfuscation only (not cryptographic security)
 - hot reload watcher (no restart required)
 - validation + reload errors exposed to API/UI logs
 

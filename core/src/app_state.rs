@@ -43,7 +43,7 @@ impl AppState {
     logs: InMemoryLogSink,
     providers: ProviderRegistry,
   ) -> Result<Self> {
-    let copilot_auth = CopilotAuthManager::new(config_dir);
+    let copilot_auth = CopilotAuthManager::new(config_dir, config.clone());
 
     Ok(Self {
       config,

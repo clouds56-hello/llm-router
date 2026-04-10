@@ -64,8 +64,67 @@ button {
   gap: 0.5rem;
 }
 
+.row-tight {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
 .row button {
   flex: 1;
+}
+
+.accounts-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 0.75rem;
+}
+
+.account-provider {
+  border: 1px solid #c8dce0;
+  border-radius: 10px;
+  padding: 0.6rem;
+  background: #f8fcfd;
+}
+
+.account-provider ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.account-provider li {
+  border: 1px solid #d7e6ea;
+  border-radius: 8px;
+  padding: 0.5rem;
+  margin-bottom: 0.5rem;
+  background: #ffffff;
+}
+
+.account-connect,
+.account-rename {
+  border: 1px solid #c8dce0;
+  border-radius: 10px;
+  padding: 0.75rem;
+  margin-bottom: 0.75rem;
+  background: #f8fcfd;
+}
+
+.badge {
+  border: 1px solid #1d7f3a;
+  color: #1d7f3a;
+  border-radius: 99px;
+  padding: 0.05rem 0.45rem;
+  font-size: 0.75rem;
+}
+
+.note {
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.muted {
+  color: #4f666c;
+  margin: 0.2rem 0;
 }
 
 pre {

@@ -8,6 +8,7 @@ use llm_router_core::app_state::AppState;
 use llm_router_core::auth::copilot::{
   DeviceAuthCompleteRequest, DeviceAuthCompleteResponse, DeviceAuthStartRequest, DeviceAuthStartResponse,
 };
+use llm_router_core::config::{AccountView, ConnectAccountInput, UpdateAccountInput};
 
 #[tauri::command]
 pub async fn get_provider_status(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec<Value>, String> {
@@ -43,6 +44,61 @@ pub async fn get_active_config(state: tauri::State<'_, Arc<AppState>>) -> Result
       "credentials": loaded.credentials,
       "last_error": state.config().last_error(),
   }))
+}
+
+#[tauri::command]
+pub async fn list_accounts(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec<AccountView>, String> {
+  Ok(state.config().list_accounts())
+}
+
+#[tauri::command]
+pub async fn connect_account(
+  state: tauri::State<'_, Arc<AppState>>,
+  request: ConnectAccountInput,
+) -> Result<AccountView, String> {
+  state.config().connect_account(request).map_err(|e| e.to_string())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DisconnectAccountRequest {
+  pub provider: String,
+  pub account_id: String,
+}
+
+#[tauri::command]
+pub async fn disconnect_account(
+  state: tauri::State<'_, Arc<AppState>>,
+  request: DisconnectAccountRequest,
+) -> Result<(), String> {
+  state
+    .config()
+    .disconnect_account(&request.provider, &request.account_id)
+    .map_err(|e| e.to_string())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SetDefaultAccountRequest {
+  pub provider: String,
+  pub account_id: String,
+}
+
+#[tauri::command]
+pub async fn set_default_account(
+  state: tauri::State<'_, Arc<AppState>>,
+  request: SetDefaultAccountRequest,
+) -> Result<(), String> {
+  state
+    .config()
+    .set_default_account(&request.provider, &request.account_id)
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn update_account(
+  state: tauri::State<'_, Arc<AppState>>,
+  request: UpdateAccountInput,
+) -> Result<AccountView, String> {
+  state.config().update_account(request).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

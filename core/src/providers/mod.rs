@@ -134,7 +134,7 @@ impl ProviderRegistry {
       .ok_or_else(|| anyhow::anyhow!("adapter '{}' not registered", provider_def.provider_type))?
       .clone();
 
-    let creds = loaded.credentials.providers.get(&route.provider).cloned();
+    let creds = loaded.credentials.resolve_runtime_credential(&route.provider)?;
     Ok((adapter, provider_def, creds))
   }
 
