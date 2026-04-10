@@ -126,6 +126,19 @@ impl RequestStore {
     self.db.record_chat_history(input)
   }
 
+  pub fn append_chat_message(
+    &self,
+    conversation_id: &str,
+    created_at: DateTime<Utc>,
+    role: &str,
+    content_text: &str,
+    raw_json: &str,
+  ) -> Result<()> {
+    self
+      .db
+      .append_chat_message(conversation_id, created_at, role, content_text, raw_json)
+  }
+
   pub fn apply_usage(&self, input: UsageRecord) -> Result<()> {
     self.db.apply_usage(input)
   }
@@ -361,6 +374,42 @@ impl SqliteRequestStore {
       )?;
     }
 
+    tx.commit()?;
+    Ok(())
+  }
+
+  fn append_chat_message(
+    &self,
+    conversation_id: &str,
+    created_at: DateTime<Utc>,
+    role: &str,
+    content_text: &str,
+    raw_json: &str,
+  ) -> Result<()> {
+    let conn = self.conn.lock();
+    let tx = conn.unchecked_transaction()?;
+    let next_seq: i64 = tx.query_row(
+      "SELECT COALESCE(MAX(seq), -1) + 1 FROM chat_messages WHERE conversation_id = ?1",
+      params![conversation_id],
+      |row| row.get(0),
+    )?;
+    tx.execute(
+      "INSERT INTO chat_messages(id, conversation_id, seq, role, content_text, raw_json, created_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+      params![
+        uuid::Uuid::new_v4().to_string(),
+        conversation_id,
+        next_seq,
+        role,
+        content_text,
+        raw_json,
+        created_at.to_rfc3339(),
+      ],
+    )?;
+    tx.execute(
+      "UPDATE chat_conversations SET updated_at = ?2 WHERE id = ?1",
+      params![conversation_id, created_at.to_rfc3339()],
+    )?;
     tx.commit()?;
     Ok(())
   }

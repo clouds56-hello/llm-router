@@ -152,10 +152,35 @@ async fn chat_completions(
   let creds = resolved.creds;
   let effective_account_id = resolved.effective_account_id;
 
+  tracing::info!(
+    target: "router",
+    model = route.openai_name,
+    provider = route.provider,
+    adapter = adapter.name(),
+    "chat request"
+  );
+
+  let caps = adapter.capabilities(route);
+  let upstream_path = if stream_requested {
+    if caps.stream_chat_completion {
+      "/v1/chat/completions"
+    } else if caps.stream_responses {
+      "/v1/responses"
+    } else {
+      "/v1/chat/completions"
+    }
+  } else if caps.chat_completion {
+    "/v1/chat/completions"
+  } else if caps.responses {
+    "/v1/responses"
+  } else {
+    "/v1/chat/completions"
+  };
+  let upstream_endpoint = join_url(&provider_cfg.base_url, upstream_path);
   persist_request_started(
     &state,
     &ctx.request_id,
-    "/v1/chat/completions",
+    &upstream_endpoint,
     route,
     adapter.name(),
     effective_account_id.as_deref(),
@@ -170,16 +195,6 @@ async fn chat_completions(
     &request_body_for_storage,
     "/v1/chat/completions",
   );
-
-  tracing::info!(
-    target: "router",
-    model = route.openai_name,
-    provider = route.provider,
-    adapter = adapter.name(),
-    "chat request"
-  );
-
-  let caps = adapter.capabilities(route);
 
   if stream_requested {
     if caps.stream_chat_completion {
@@ -199,7 +214,7 @@ async fn chat_completions(
           }),
         ),
         Err(err) => {
-          persist_request_failed(&state, &ctx.request_id, None, &err.to_string(), None, ctx.started_at);
+          persist_provider_error(&state, &ctx.request_id, &err, None, ctx.started_at);
           provider_error_response(err)
         }
       };
@@ -222,7 +237,7 @@ async fn chat_completions(
           }),
         ),
         Err(err) => {
-          persist_request_failed(&state, &ctx.request_id, None, &err.to_string(), None, ctx.started_at);
+          persist_provider_error(&state, &ctx.request_id, &err, None, ctx.started_at);
           provider_error_response(err)
         }
       };
@@ -270,10 +285,11 @@ async fn chat_completions(
           route.openai_name.as_str(),
           usage,
         );
+        persist_assistant_message_from_chat_completion(&state, &ctx.request_id, &data);
         Json(data).into_response()
       }
       Err(err) => {
-        persist_request_failed(&state, &ctx.request_id, None, &err.to_string(), None, ctx.started_at);
+        persist_provider_error(&state, &ctx.request_id, &err, None, ctx.started_at);
         provider_error_response(err)
       }
     };
@@ -301,10 +317,11 @@ async fn chat_completions(
           route.openai_name.as_str(),
           usage,
         );
+        persist_assistant_message_from_chat_completion(&state, &ctx.request_id, &chat);
         Json(chat).into_response()
       }
       Err(err) => {
-        persist_request_failed(&state, &ctx.request_id, None, &err.to_string(), None, ctx.started_at);
+        persist_provider_error(&state, &ctx.request_id, &err, None, ctx.started_at);
         provider_error_response(err)
       }
     };
@@ -363,10 +380,35 @@ async fn responses(
   let creds = resolved.creds;
   let effective_account_id = resolved.effective_account_id;
 
+  tracing::info!(
+    target: "router",
+    model = route.openai_name,
+    provider = route.provider,
+    adapter = adapter.name(),
+    "responses request"
+  );
+
+  let caps = adapter.capabilities(route);
+  let upstream_path = if stream_requested {
+    if caps.stream_responses {
+      "/v1/responses"
+    } else if caps.stream_chat_completion {
+      "/v1/chat/completions"
+    } else {
+      "/v1/responses"
+    }
+  } else if caps.responses {
+    "/v1/responses"
+  } else if caps.chat_completion {
+    "/v1/chat/completions"
+  } else {
+    "/v1/responses"
+  };
+  let upstream_endpoint = join_url(&provider_cfg.base_url, upstream_path);
   persist_request_started(
     &state,
     &ctx.request_id,
-    "/v1/responses",
+    &upstream_endpoint,
     route,
     adapter.name(),
     effective_account_id.as_deref(),
@@ -382,15 +424,6 @@ async fn responses(
     "/v1/responses",
   );
 
-  tracing::info!(
-    target: "router",
-    model = route.openai_name,
-    provider = route.provider,
-    adapter = adapter.name(),
-    "responses request"
-  );
-
-  let caps = adapter.capabilities(route);
   if stream_requested {
     if caps.stream_responses {
       return match adapter
@@ -409,7 +442,7 @@ async fn responses(
           }),
         ),
         Err(err) => {
-          persist_request_failed(&state, &ctx.request_id, None, &err.to_string(), None, ctx.started_at);
+          persist_provider_error(&state, &ctx.request_id, &err, None, ctx.started_at);
           provider_error_response(err)
         }
       };
@@ -432,7 +465,7 @@ async fn responses(
           }),
         ),
         Err(err) => {
-          persist_request_failed(&state, &ctx.request_id, None, &err.to_string(), None, ctx.started_at);
+          persist_provider_error(&state, &ctx.request_id, &err, None, ctx.started_at);
           provider_error_response(err)
         }
       };
@@ -477,10 +510,11 @@ async fn responses(
           route.openai_name.as_str(),
           usage,
         );
+        persist_assistant_message_from_response_payload(&state, &ctx.request_id, &data);
         Json(data).into_response()
       }
       Err(err) => {
-        persist_request_failed(&state, &ctx.request_id, None, &err.to_string(), None, ctx.started_at);
+        persist_provider_error(&state, &ctx.request_id, &err, None, ctx.started_at);
         provider_error_response(err)
       }
     };
@@ -511,10 +545,11 @@ async fn responses(
           route.openai_name.as_str(),
           usage,
         );
+        persist_assistant_message_from_response_payload(&state, &ctx.request_id, &response);
         Json(response).into_response()
       }
       Err(err) => {
-        persist_request_failed(&state, &ctx.request_id, None, &err.to_string(), None, ctx.started_at);
+        persist_provider_error(&state, &ctx.request_id, &err, None, ctx.started_at);
         provider_error_response(err)
       }
     };
@@ -925,6 +960,23 @@ fn persist_request_failed(
   }
 }
 
+fn persist_provider_error(
+  state: &Arc<AppState>,
+  request_id: &str,
+  err: &ProviderError,
+  response_sse_text: Option<String>,
+  started_at: Instant,
+) {
+  persist_request_failed(
+    state,
+    request_id,
+    provider_error_status(err),
+    &err.to_string(),
+    response_sse_text,
+    started_at,
+  );
+}
+
 fn persist_chat_history(
   state: &Arc<AppState>,
   request_id: &str,
@@ -948,6 +1000,37 @@ fn persist_chat_history(
   });
   if let Err(err) = result {
     tracing::warn!(target: "persistence", request_id = %request_id, error = %err, "failed to persist chat history");
+  }
+}
+
+fn persist_assistant_message_from_chat_completion(state: &Arc<AppState>, conversation_id: &str, payload: &Value) {
+  let Some((text, raw_json)) = assistant_message_from_chat_completion(payload) else {
+    return;
+  };
+  persist_assistant_message(state, conversation_id, &text, &raw_json);
+}
+
+fn persist_assistant_message_from_response_payload(state: &Arc<AppState>, conversation_id: &str, payload: &Value) {
+  let Some((text, raw_json)) = assistant_message_from_response_payload(payload) else {
+    return;
+  };
+  persist_assistant_message(state, conversation_id, &text, &raw_json);
+}
+
+fn persist_assistant_message(state: &Arc<AppState>, conversation_id: &str, text: &str, raw_json: &str) {
+  if text.trim().is_empty() {
+    return;
+  }
+  let result = state
+    .requests()
+    .append_chat_message(conversation_id, Utc::now(), "assistant", text, raw_json);
+  if let Err(err) = result {
+    tracing::warn!(
+      target: "persistence",
+      conversation_id = %conversation_id,
+      error = %err,
+      "failed to append assistant message"
+    );
   }
 }
 
@@ -1039,11 +1122,94 @@ fn extract_usage_from_chunk(chunk: &str) -> Option<TokenUsage> {
   }
 }
 
+fn extract_stream_text_delta(chunk: &str) -> Option<String> {
+  let parsed: Value = serde_json::from_str(chunk).ok()?;
+  if let Some(delta) = parsed
+    .get("choices")
+    .and_then(Value::as_array)
+    .and_then(|items| items.first())
+    .and_then(|choice| choice.get("delta"))
+    .and_then(|delta| delta.get("content"))
+    .and_then(Value::as_str)
+  {
+    return Some(delta.to_string());
+  }
+  if parsed.get("type").and_then(Value::as_str) == Some("response.output_text.delta") {
+    return parsed.get("delta").and_then(Value::as_str).map(ToString::to_string);
+  }
+  None
+}
+
+fn assistant_message_from_chat_completion(payload: &Value) -> Option<(String, String)> {
+  let message = payload
+    .get("choices")
+    .and_then(Value::as_array)
+    .and_then(|items| items.first())
+    .and_then(|choice| choice.get("message"))?;
+  let text = message
+    .get("content")
+    .map(content_to_text)
+    .unwrap_or_default()
+    .trim()
+    .to_string();
+  if text.is_empty() {
+    return None;
+  }
+  Some((text, message.to_string()))
+}
+
+fn assistant_message_from_response_payload(payload: &Value) -> Option<(String, String)> {
+  if let Some(message) = payload
+    .get("output")
+    .and_then(Value::as_array)
+    .and_then(|items| items.first())
+  {
+    let text = response_to_text(payload).trim().to_string();
+    if !text.is_empty() {
+      return Some((text, message.to_string()));
+    }
+  }
+  let text = response_to_text(payload).trim().to_string();
+  if text.is_empty() {
+    None
+  } else {
+    Some((text.clone(), json!({"role":"assistant","content": text}).to_string()))
+  }
+}
+
+fn provider_error_status(err: &ProviderError) -> Option<u16> {
+  match err {
+    ProviderError::Unauthorized => Some(StatusCode::UNAUTHORIZED.as_u16()),
+    ProviderError::Unsupported(_) => Some(StatusCode::NOT_IMPLEMENTED.as_u16()),
+    ProviderError::Http(msg) | ProviderError::Internal(msg) => infer_status_from_text(msg),
+  }
+}
+
+fn infer_status_from_text(text: &str) -> Option<u16> {
+  for token in text.split(|c: char| !c.is_ascii_digit()) {
+    if token.len() == 3 {
+      if let Ok(code) = token.parse::<u16>() {
+        if (100..=599).contains(&code) {
+          return Some(code);
+        }
+      }
+    }
+  }
+  None
+}
+
+fn join_url(base: &str, path: &str) -> String {
+  let left = base.trim_end_matches('/');
+  let right = path.trim_start_matches('/');
+  format!("{left}/{right}")
+}
+
 fn sse_response(provider_stream: ProviderStream, persistence: Option<StreamPersistence>) -> Response {
   let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(32);
   tokio::spawn(async move {
     futures::pin_mut!(provider_stream);
     let mut sse_capture = String::new();
+    let mut assistant_text = String::new();
     let mut usage = TokenUsage::default();
     let mut saw_stream_error = None::<String>;
     let mut client_disconnected = false;
@@ -1053,6 +1219,9 @@ fn sse_response(provider_stream: ProviderStream, persistence: Option<StreamPersi
         Ok(chunk) => {
           if let Some(next) = extract_usage_from_chunk(&chunk) {
             usage = next;
+          }
+          if let Some(delta) = extract_stream_text_delta(&chunk) {
+            assistant_text.push_str(&delta);
           }
           sse_capture.push_str("data: ");
           sse_capture.push_str(&chunk);
@@ -1080,7 +1249,14 @@ fn sse_response(provider_stream: ProviderStream, persistence: Option<StreamPersi
 
     if let Some(p) = persistence {
       if let Some(err) = saw_stream_error {
-        persist_request_failed(&p.state, &p.request_id, None, &err, Some(sse_capture), p.started_at);
+        persist_request_failed(
+          &p.state,
+          &p.request_id,
+          infer_status_from_text(&err),
+          &err,
+          Some(sse_capture),
+          p.started_at,
+        );
       } else if client_disconnected {
         persist_request_failed(
           &p.state,
@@ -1107,6 +1283,10 @@ fn sse_response(provider_stream: ProviderStream, persistence: Option<StreamPersi
           p.model.as_str(),
           usage,
         );
+        if !assistant_text.trim().is_empty() {
+          let raw_json = json!({"role":"assistant","content": assistant_text}).to_string();
+          persist_assistant_message(&p.state, &p.request_id, &assistant_text, &raw_json);
+        }
       }
     }
   });

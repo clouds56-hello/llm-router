@@ -26,6 +26,8 @@ import {
   readStoredTab,
 } from "./lib/state";
 
+type StreamApiMode = "chat_completions" | "responses";
+
 const LOG_LEVEL_RANK: Record<string, number> = {
   TRACE: 10,
   DEBUG: 20,
@@ -63,6 +65,7 @@ export function App() {
   const [logRequestIdFilter, setLogRequestIdFilter] = useState("");
   const [streamInput, setStreamInput] = useState("Write a haiku about Rust async.");
   const [streamOutput, setStreamOutput] = useState("");
+  const [streamApiMode, setStreamApiMode] = useState<StreamApiMode>("chat_completions");
   const [routerBase, setRouterBase] = useState(ROUTER_BASE_DEFAULT);
   const [streamAccountKey, setStreamAccountKey] = useState("");
   const [deploymentType, setDeploymentType] = useState("github.com");
@@ -225,13 +228,22 @@ export function App() {
     }
 
     setStreamOutput("");
-    const body = {
-      model: selected.modelName,
-      stream: true,
-      messages: [{ role: "user", content: streamInput }],
-    };
+    const endpoint =
+      streamApiMode === "responses" ? `${routerBase}/v1/responses` : `${routerBase}/v1/chat/completions`;
+    const body =
+      streamApiMode === "responses"
+        ? {
+            model: selected.modelName,
+            stream: true,
+            input: streamInput,
+          }
+        : {
+            model: selected.modelName,
+            stream: true,
+            messages: [{ role: "user", content: streamInput }],
+          };
 
-    const res = await fetch(`${routerBase}/v1/chat/completions`, {
+    const res = await fetch(endpoint, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -452,6 +464,8 @@ export function App() {
             setStreamInput={setStreamInput}
             streamAccountKey={streamAccountKey}
             setStreamAccountKey={setStreamAccountKey}
+            streamApiMode={streamApiMode}
+            setStreamApiMode={setStreamApiMode}
             streamAccountOptions={streamAccountOptions.map((opt) => ({
               key: opt.key,
               label: `${opt.label} (${opt.modelName})`,
