@@ -19,6 +19,7 @@ struct AppConfig {
   default_port: u16,
   log_level_filter: String,
   retention_days: i64,
+  request_retention_days: i64,
 }
 
 impl Default for AppConfig {
@@ -27,6 +28,7 @@ impl Default for AppConfig {
       default_port: 11434,
       log_level_filter: "info".to_string(),
       retention_days: 7,
+      request_retention_days: 30,
     }
   }
 }
@@ -36,6 +38,7 @@ struct AppConfigFile {
   default_port: Option<u16>,
   log_level_filter: Option<String>,
   retention_days: Option<i64>,
+  request_retention_days: Option<i64>,
 }
 
 fn load_app_config(config_dir: &Path) -> AppConfig {
@@ -65,6 +68,9 @@ fn load_app_config(config_dir: &Path) -> AppConfig {
       if let Some(v) = file_cfg.retention_days {
         cfg.retention_days = v.max(1);
       }
+      if let Some(v) = file_cfg.request_retention_days {
+        cfg.request_retention_days = v.max(1);
+      }
     }
     Err(err) => {
       eprintln!("failed to parse {}: {err}", path.display());
@@ -78,7 +84,7 @@ fn load_app_config(config_dir: &Path) -> AppConfig {
 async fn main() {
   let config_dir = PathBuf::from("config");
   let app_config = load_app_config(&config_dir);
-  let state = core::build_state(config_dir, app_config.retention_days)
+  let state = core::build_state(config_dir, app_config.retention_days, app_config.request_retention_days)
     .await
     .expect("state initialization failed");
   let env_filter = match std::env::var("RUST_LOG") {
@@ -109,9 +115,11 @@ async fn main() {
       tauri_api::set_provider_enabled,
       tauri_api::set_model_enabled,
       tauri_api::get_request_logs,
+      tauri_api::get_chat_conversations,
       tauri_api::get_login_status,
       tauri_api::copilot_login,
       tauri_api::copilot_complete_login,
+      tauri_api::copilot_refresh_api_key,
       tauri_api::copilot_logout,
       tauri_api::get_router_state,
       tauri_api::start_router_server,

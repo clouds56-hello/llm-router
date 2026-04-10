@@ -10,6 +10,7 @@ use llm_router_core::auth::copilot::{
 };
 use llm_router_core::config::{AccountView, ConnectAccountInput, UpdateAccountInput};
 use llm_router_core::logging::LogQuery;
+use llm_router_core::persistence::ConversationView;
 
 #[tauri::command]
 pub async fn get_provider_status(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec<Value>, String> {
@@ -155,6 +156,23 @@ pub async fn get_request_logs(
 }
 
 #[derive(Debug, Default, Deserialize)]
+pub struct ConversationQueryRequest {
+  pub limit: Option<usize>,
+}
+
+#[tauri::command]
+pub async fn get_chat_conversations(
+  state: tauri::State<'_, Arc<AppState>>,
+  request: Option<ConversationQueryRequest>,
+) -> Result<Vec<ConversationView>, String> {
+  let request = request.unwrap_or_default();
+  state
+    .requests()
+    .query_conversations(request.limit.unwrap_or(100))
+    .map_err(|e| e.to_string())
+}
+
+#[derive(Debug, Default, Deserialize)]
 pub struct LogQueryRequest {
   pub limit: Option<usize>,
   pub level: Option<String>,
@@ -190,6 +208,25 @@ pub async fn copilot_complete_login(
     .complete_device_authorization(request)
     .await
     .map_err(|e| e.to_string())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CopilotRefreshApiKeyRequest {
+  pub account_id: Option<String>,
+}
+
+#[tauri::command]
+pub async fn copilot_refresh_api_key(
+  state: tauri::State<'_, Arc<AppState>>,
+  request: Option<CopilotRefreshApiKeyRequest>,
+) -> Result<Value, String> {
+  let account_id = request.and_then(|r| r.account_id);
+  let auth_state = state
+    .copilot_auth()
+    .refresh_api_key(account_id)
+    .await
+    .map_err(|e| e.to_string())?;
+  Ok(serde_json::json!({ "copilot": auth_state }))
 }
 
 #[tauri::command]

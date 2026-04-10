@@ -142,14 +142,11 @@ export function AccountsPage(props: AccountsPageProps) {
 
   const refreshApiKeyFromOauthToken = async () => {
     if (!editTarget) return;
-    if (!editOauthAccessToken.trim()) {
-      throw new Error("New oauth access token is required");
-    }
 
     await props.onUpdateAccount({
       provider: editTarget.provider,
       accountId: editTarget.id,
-      oauthAccessToken: editOauthAccessToken.trim(),
+      oauthAccessToken: editOauthAccessToken.trim() || undefined,
       refreshApiKey: true,
     });
   };

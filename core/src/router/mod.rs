@@ -1,13 +1,15 @@
 use std::convert::Infallible;
 use std::sync::Arc;
+use std::time::Instant;
 
-use axum::extract::{Query, State};
+use axum::extract::{Extension, Query, State};
 use axum::http::{HeaderMap, Request, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{middleware, middleware::Next};
 use axum::{Json, Router};
+use chrono::Utc;
 use futures::StreamExt;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -19,7 +21,27 @@ use uuid::Uuid;
 
 use crate::app_state::AppState;
 use crate::logging::LogQuery;
+use crate::persistence::{
+  ChatHistoryRecord, ChatMessageRecord, RequestRecordCompleted, RequestRecordFailed, RequestRecordStart, TokenUsage,
+  UsageRecord,
+};
 use crate::providers::{ProviderError, ProviderStream};
+
+#[derive(Clone)]
+struct RequestContext {
+  request_id: String,
+  started_at: Instant,
+}
+
+#[derive(Clone)]
+struct StreamPersistence {
+  state: Arc<AppState>,
+  request_id: String,
+  provider: String,
+  account_id: Option<String>,
+  model: String,
+  started_at: Instant,
+}
 
 pub fn build_router(state: Arc<AppState>) -> Router {
   Router::new()
@@ -99,6 +121,7 @@ async fn request_logs(State(state): State<Arc<AppState>>, Query(query): Query<Re
 
 async fn chat_completions(
   State(state): State<Arc<AppState>>,
+  Extension(ctx): Extension<RequestContext>,
   headers: HeaderMap,
   Json(mut body): Json<Value>,
 ) -> Response {
@@ -114,16 +137,39 @@ async fn chat_completions(
   }
 
   let stream_requested = body.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
+  let request_body_for_storage = body.clone();
 
   let account_override = account_override_from_headers(&headers);
-  let (adapter, provider_cfg, creds) =
-    match state
-      .providers()
-      .adapter_for_provider(&loaded, route, account_override.as_deref())
-    {
-      Ok(v) => v,
-      Err(err) => return json_error(StatusCode::BAD_REQUEST, &err.to_string()),
-    };
+  let resolved = match state
+    .providers()
+    .adapter_for_provider(&loaded, route, account_override.as_deref())
+  {
+    Ok(v) => v,
+    Err(err) => return json_error(StatusCode::BAD_REQUEST, &err.to_string()),
+  };
+  let adapter = resolved.adapter;
+  let provider_cfg = resolved.provider_cfg;
+  let creds = resolved.creds;
+  let effective_account_id = resolved.effective_account_id;
+
+  persist_request_started(
+    &state,
+    &ctx.request_id,
+    "/v1/chat/completions",
+    route,
+    adapter.name(),
+    effective_account_id.as_deref(),
+    stream_requested,
+    &request_body_for_storage,
+  );
+  persist_chat_history(
+    &state,
+    &ctx.request_id,
+    route,
+    effective_account_id.as_deref(),
+    &request_body_for_storage,
+    "/v1/chat/completions",
+  );
 
   tracing::info!(
     target: "router",
@@ -141,8 +187,21 @@ async fn chat_completions(
         .stream_chat_completion(&provider_cfg, creds.as_ref(), route, body)
         .await
       {
-        Ok(provider_stream) => sse_response(provider_stream),
-        Err(err) => provider_error_response(err),
+        Ok(provider_stream) => sse_response(
+          provider_stream,
+          Some(StreamPersistence {
+            state: Arc::clone(&state),
+            request_id: ctx.request_id.clone(),
+            provider: route.provider.clone(),
+            account_id: effective_account_id.clone(),
+            model: route.openai_name.clone(),
+            started_at: ctx.started_at,
+          }),
+        ),
+        Err(err) => {
+          persist_request_failed(&state, &ctx.request_id, None, &err.to_string(), None, ctx.started_at);
+          provider_error_response(err)
+        }
       };
     }
     if caps.stream_responses {
@@ -151,10 +210,34 @@ async fn chat_completions(
         .stream_responses(&provider_cfg, creds.as_ref(), route, converted)
         .await
       {
-        Ok(provider_stream) => sse_response(convert_response_stream_to_chat_stream(provider_stream, route)),
-        Err(err) => provider_error_response(err),
+        Ok(provider_stream) => sse_response(
+          convert_response_stream_to_chat_stream(provider_stream, route),
+          Some(StreamPersistence {
+            state: Arc::clone(&state),
+            request_id: ctx.request_id.clone(),
+            provider: route.provider.clone(),
+            account_id: effective_account_id.clone(),
+            model: route.openai_name.clone(),
+            started_at: ctx.started_at,
+          }),
+        ),
+        Err(err) => {
+          persist_request_failed(&state, &ctx.request_id, None, &err.to_string(), None, ctx.started_at);
+          provider_error_response(err)
+        }
       };
     }
+    persist_request_failed(
+      &state,
+      &ctx.request_id,
+      Some(StatusCode::NOT_IMPLEMENTED.as_u16()),
+      &format!(
+        "provider '{}' does not support streaming chat completions or streaming responses",
+        adapter.name()
+      ),
+      None,
+      ctx.started_at,
+    );
     return json_error(
       StatusCode::NOT_IMPLEMENTED,
       &format!(
@@ -169,19 +252,75 @@ async fn chat_completions(
       .chat_completion(&provider_cfg, creds.as_ref(), route, body)
       .await
     {
-      Ok(data) => Json(data).into_response(),
-      Err(err) => provider_error_response(err),
+      Ok(data) => {
+        let usage = extract_usage(&data);
+        persist_request_completed(
+          &state,
+          &ctx.request_id,
+          Some(StatusCode::OK.as_u16()),
+          Some(&data),
+          None,
+          usage.clone(),
+          ctx.started_at,
+        );
+        apply_usage(
+          &state,
+          route.provider.as_str(),
+          effective_account_id.as_deref(),
+          route.openai_name.as_str(),
+          usage,
+        );
+        Json(data).into_response()
+      }
+      Err(err) => {
+        persist_request_failed(&state, &ctx.request_id, None, &err.to_string(), None, ctx.started_at);
+        provider_error_response(err)
+      }
     };
   }
 
   if caps.responses {
     let converted = chat_request_to_response_request(body);
     return match adapter.responses(&provider_cfg, creds.as_ref(), route, converted).await {
-      Ok(data) => Json(response_to_chat_completion(data, route)).into_response(),
-      Err(err) => provider_error_response(err),
+      Ok(data) => {
+        let chat = response_to_chat_completion(data.clone(), route);
+        let usage = extract_usage(&data);
+        persist_request_completed(
+          &state,
+          &ctx.request_id,
+          Some(StatusCode::OK.as_u16()),
+          Some(&chat),
+          None,
+          usage.clone(),
+          ctx.started_at,
+        );
+        apply_usage(
+          &state,
+          route.provider.as_str(),
+          effective_account_id.as_deref(),
+          route.openai_name.as_str(),
+          usage,
+        );
+        Json(chat).into_response()
+      }
+      Err(err) => {
+        persist_request_failed(&state, &ctx.request_id, None, &err.to_string(), None, ctx.started_at);
+        provider_error_response(err)
+      }
     };
   }
 
+  persist_request_failed(
+    &state,
+    &ctx.request_id,
+    Some(StatusCode::NOT_IMPLEMENTED.as_u16()),
+    &format!(
+      "provider '{}' does not support chat completions or responses",
+      adapter.name()
+    ),
+    None,
+    ctx.started_at,
+  );
   json_error(
     StatusCode::NOT_IMPLEMENTED,
     &format!(
@@ -191,7 +330,12 @@ async fn chat_completions(
   )
 }
 
-async fn responses(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(mut body): Json<Value>) -> Response {
+async fn responses(
+  State(state): State<Arc<AppState>>,
+  Extension(ctx): Extension<RequestContext>,
+  headers: HeaderMap,
+  Json(mut body): Json<Value>,
+) -> Response {
   let loaded = state.config().get();
   let model_name = body.get("model").and_then(|v| v.as_str()).unwrap_or_default();
 
@@ -204,16 +348,39 @@ async fn responses(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(
   }
 
   let stream_requested = body.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
+  let request_body_for_storage = body.clone();
 
   let account_override = account_override_from_headers(&headers);
-  let (adapter, provider_cfg, creds) =
-    match state
-      .providers()
-      .adapter_for_provider(&loaded, route, account_override.as_deref())
-    {
-      Ok(v) => v,
-      Err(err) => return json_error(StatusCode::BAD_REQUEST, &err.to_string()),
-    };
+  let resolved = match state
+    .providers()
+    .adapter_for_provider(&loaded, route, account_override.as_deref())
+  {
+    Ok(v) => v,
+    Err(err) => return json_error(StatusCode::BAD_REQUEST, &err.to_string()),
+  };
+  let adapter = resolved.adapter;
+  let provider_cfg = resolved.provider_cfg;
+  let creds = resolved.creds;
+  let effective_account_id = resolved.effective_account_id;
+
+  persist_request_started(
+    &state,
+    &ctx.request_id,
+    "/v1/responses",
+    route,
+    adapter.name(),
+    effective_account_id.as_deref(),
+    stream_requested,
+    &request_body_for_storage,
+  );
+  persist_chat_history(
+    &state,
+    &ctx.request_id,
+    route,
+    effective_account_id.as_deref(),
+    &request_body_for_storage,
+    "/v1/responses",
+  );
 
   tracing::info!(
     target: "router",
@@ -230,8 +397,21 @@ async fn responses(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(
         .stream_responses(&provider_cfg, creds.as_ref(), route, body)
         .await
       {
-        Ok(provider_stream) => sse_response(provider_stream),
-        Err(err) => provider_error_response(err),
+        Ok(provider_stream) => sse_response(
+          provider_stream,
+          Some(StreamPersistence {
+            state: Arc::clone(&state),
+            request_id: ctx.request_id.clone(),
+            provider: route.provider.clone(),
+            account_id: effective_account_id.clone(),
+            model: route.openai_name.clone(),
+            started_at: ctx.started_at,
+          }),
+        ),
+        Err(err) => {
+          persist_request_failed(&state, &ctx.request_id, None, &err.to_string(), None, ctx.started_at);
+          provider_error_response(err)
+        }
       };
     }
     if caps.stream_chat_completion {
@@ -240,10 +420,34 @@ async fn responses(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(
         .stream_chat_completion(&provider_cfg, creds.as_ref(), route, converted)
         .await
       {
-        Ok(provider_stream) => sse_response(convert_chat_stream_to_response_stream(provider_stream)),
-        Err(err) => provider_error_response(err),
+        Ok(provider_stream) => sse_response(
+          convert_chat_stream_to_response_stream(provider_stream),
+          Some(StreamPersistence {
+            state: Arc::clone(&state),
+            request_id: ctx.request_id.clone(),
+            provider: route.provider.clone(),
+            account_id: effective_account_id.clone(),
+            model: route.openai_name.clone(),
+            started_at: ctx.started_at,
+          }),
+        ),
+        Err(err) => {
+          persist_request_failed(&state, &ctx.request_id, None, &err.to_string(), None, ctx.started_at);
+          provider_error_response(err)
+        }
       };
     }
+    persist_request_failed(
+      &state,
+      &ctx.request_id,
+      Some(StatusCode::NOT_IMPLEMENTED.as_u16()),
+      &format!(
+        "provider '{}' does not support streaming responses or streaming chat completions",
+        adapter.name()
+      ),
+      None,
+      ctx.started_at,
+    );
     return json_error(
       StatusCode::NOT_IMPLEMENTED,
       &format!(
@@ -255,8 +459,30 @@ async fn responses(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(
 
   if caps.responses {
     return match adapter.responses(&provider_cfg, creds.as_ref(), route, body).await {
-      Ok(data) => Json(data).into_response(),
-      Err(err) => provider_error_response(err),
+      Ok(data) => {
+        let usage = extract_usage(&data);
+        persist_request_completed(
+          &state,
+          &ctx.request_id,
+          Some(StatusCode::OK.as_u16()),
+          Some(&data),
+          None,
+          usage.clone(),
+          ctx.started_at,
+        );
+        apply_usage(
+          &state,
+          route.provider.as_str(),
+          effective_account_id.as_deref(),
+          route.openai_name.as_str(),
+          usage,
+        );
+        Json(data).into_response()
+      }
+      Err(err) => {
+        persist_request_failed(&state, &ctx.request_id, None, &err.to_string(), None, ctx.started_at);
+        provider_error_response(err)
+      }
     };
   }
 
@@ -266,11 +492,45 @@ async fn responses(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(
       .chat_completion(&provider_cfg, creds.as_ref(), route, converted)
       .await
     {
-      Ok(data) => Json(chat_completion_to_response(data, route)).into_response(),
-      Err(err) => provider_error_response(err),
+      Ok(data) => {
+        let response = chat_completion_to_response(data.clone(), route);
+        let usage = extract_usage(&data);
+        persist_request_completed(
+          &state,
+          &ctx.request_id,
+          Some(StatusCode::OK.as_u16()),
+          Some(&response),
+          None,
+          usage.clone(),
+          ctx.started_at,
+        );
+        apply_usage(
+          &state,
+          route.provider.as_str(),
+          effective_account_id.as_deref(),
+          route.openai_name.as_str(),
+          usage,
+        );
+        Json(response).into_response()
+      }
+      Err(err) => {
+        persist_request_failed(&state, &ctx.request_id, None, &err.to_string(), None, ctx.started_at);
+        provider_error_response(err)
+      }
     };
   }
 
+  persist_request_failed(
+    &state,
+    &ctx.request_id,
+    Some(StatusCode::NOT_IMPLEMENTED.as_u16()),
+    &format!(
+      "provider '{}' does not support responses or chat completions",
+      adapter.name()
+    ),
+    None,
+    ctx.started_at,
+  );
   json_error(
     StatusCode::NOT_IMPLEMENTED,
     &format!(
@@ -590,19 +850,263 @@ fn content_to_text(content: &Value) -> String {
   String::new()
 }
 
-fn sse_response(provider_stream: ProviderStream) -> Response {
+fn persist_request_started(
+  state: &Arc<AppState>,
+  request_id: &str,
+  endpoint: &str,
+  route: &crate::config::ModelRoute,
+  adapter_name: &str,
+  account_id: Option<&str>,
+  is_stream: bool,
+  request_body: &Value,
+) {
+  let result = state.requests().record_request_started(RequestRecordStart {
+    request_id: request_id.to_string(),
+    created_at: Utc::now(),
+    endpoint: endpoint.to_string(),
+    provider: route.provider.clone(),
+    adapter: adapter_name.to_string(),
+    model: route.openai_name.clone(),
+    account_id: account_id.map(ToString::to_string),
+    is_stream,
+    request_body_json: request_body.to_string(),
+  });
+  if let Err(err) = result {
+    tracing::warn!(target: "persistence", request_id = %request_id, error = %err, "failed to persist request start");
+  }
+}
+
+fn persist_request_completed(
+  state: &Arc<AppState>,
+  request_id: &str,
+  http_status: Option<u16>,
+  response_body: Option<&Value>,
+  response_sse_text: Option<String>,
+  usage: TokenUsage,
+  started_at: Instant,
+) {
+  let result = state.requests().record_request_completed(RequestRecordCompleted {
+    request_id: request_id.to_string(),
+    completed_at: Utc::now(),
+    response_body_json: response_body.map(Value::to_string),
+    response_sse_text,
+    http_status,
+    usage,
+    latency_ms: started_at.elapsed().as_millis() as i64,
+  });
+  if let Err(err) = result {
+    tracing::warn!(
+      target: "persistence",
+      request_id = %request_id,
+      error = %err,
+      "failed to persist request completion"
+    );
+  }
+}
+
+fn persist_request_failed(
+  state: &Arc<AppState>,
+  request_id: &str,
+  http_status: Option<u16>,
+  error_text: &str,
+  response_sse_text: Option<String>,
+  started_at: Instant,
+) {
+  let result = state.requests().record_request_failed(RequestRecordFailed {
+    request_id: request_id.to_string(),
+    completed_at: Utc::now(),
+    http_status,
+    error_text: error_text.to_string(),
+    response_sse_text,
+    latency_ms: started_at.elapsed().as_millis() as i64,
+  });
+  if let Err(err) = result {
+    tracing::warn!(target: "persistence", request_id = %request_id, error = %err, "failed to persist request failure");
+  }
+}
+
+fn persist_chat_history(
+  state: &Arc<AppState>,
+  request_id: &str,
+  route: &crate::config::ModelRoute,
+  account_id: Option<&str>,
+  request_body: &Value,
+  endpoint: &str,
+) {
+  let messages = extract_chat_messages(request_body, endpoint);
+  if messages.is_empty() {
+    return;
+  }
+  let result = state.requests().record_chat_history(ChatHistoryRecord {
+    conversation_id: request_id.to_string(),
+    created_at: Utc::now(),
+    provider: route.provider.clone(),
+    account_id: account_id.map(ToString::to_string),
+    model: route.openai_name.clone(),
+    latest_request_id: request_id.to_string(),
+    messages,
+  });
+  if let Err(err) = result {
+    tracing::warn!(target: "persistence", request_id = %request_id, error = %err, "failed to persist chat history");
+  }
+}
+
+fn extract_chat_messages(request_body: &Value, endpoint: &str) -> Vec<ChatMessageRecord> {
+  if endpoint == "/v1/chat/completions" {
+    return json_messages_to_records(request_body.get("messages"));
+  }
+
+  if let Some(records) = request_body
+    .get("messages")
+    .map(Some)
+    .map(json_messages_to_records)
+    .filter(|v| !v.is_empty())
+  {
+    return records;
+  }
+
+  let text = input_to_text(request_body.get("input"));
+  if text.trim().is_empty() {
+    return Vec::new();
+  }
+  vec![ChatMessageRecord {
+    role: "user".to_string(),
+    content_text: text.clone(),
+    raw_json: json!({"role":"user","content": text}).to_string(),
+  }]
+}
+
+fn json_messages_to_records(messages: Option<&Value>) -> Vec<ChatMessageRecord> {
+  let Some(Value::Array(items)) = messages else {
+    return Vec::new();
+  };
+  let mut out = Vec::with_capacity(items.len());
+  for item in items {
+    let role = item.get("role").and_then(Value::as_str).unwrap_or("user").to_string();
+    let content = item.get("content").map(content_to_text).unwrap_or_default();
+    out.push(ChatMessageRecord {
+      role,
+      content_text: content,
+      raw_json: item.to_string(),
+    });
+  }
+  out
+}
+
+fn apply_usage(state: &Arc<AppState>, provider: &str, account_id: Option<&str>, model: &str, usage: TokenUsage) {
+  let result = state.requests().apply_usage(UsageRecord {
+    used_at: Utc::now(),
+    provider: provider.to_string(),
+    account_id: account_id.map(ToString::to_string),
+    model: model.to_string(),
+    usage,
+  });
+  if let Err(err) = result {
+    tracing::warn!(target: "persistence", provider = provider, model = model, error = %err, "failed to persist usage");
+  }
+}
+
+fn extract_usage(value: &Value) -> TokenUsage {
+  let usage = value.get("usage").unwrap_or(value);
+  let prompt = usage
+    .get("prompt_tokens")
+    .or_else(|| usage.get("input_tokens"))
+    .and_then(Value::as_i64)
+    .unwrap_or(0);
+  let completion = usage
+    .get("completion_tokens")
+    .or_else(|| usage.get("output_tokens"))
+    .and_then(Value::as_i64)
+    .unwrap_or(0);
+  let total = usage
+    .get("total_tokens")
+    .and_then(Value::as_i64)
+    .unwrap_or(prompt + completion);
+  TokenUsage {
+    prompt_tokens: prompt.max(0),
+    completion_tokens: completion.max(0),
+    total_tokens: total.max(0),
+  }
+}
+
+fn extract_usage_from_chunk(chunk: &str) -> Option<TokenUsage> {
+  let parsed: Value = serde_json::from_str(chunk).ok()?;
+  let usage = extract_usage(&parsed);
+  if usage.prompt_tokens == 0 && usage.completion_tokens == 0 && usage.total_tokens == 0 {
+    None
+  } else {
+    Some(usage)
+  }
+}
+
+fn sse_response(provider_stream: ProviderStream, persistence: Option<StreamPersistence>) -> Response {
   let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(32);
   tokio::spawn(async move {
     futures::pin_mut!(provider_stream);
+    let mut sse_capture = String::new();
+    let mut usage = TokenUsage::default();
+    let mut saw_stream_error = None::<String>;
+    let mut client_disconnected = false;
+
     while let Some(item) = provider_stream.next().await {
       let event = match item {
-        Ok(chunk) => Event::default().data(chunk),
-        Err(err) => Event::default()
-          .event("error")
-          .data(json!({"error": err.to_string()}).to_string()),
+        Ok(chunk) => {
+          if let Some(next) = extract_usage_from_chunk(&chunk) {
+            usage = next;
+          }
+          sse_capture.push_str("data: ");
+          sse_capture.push_str(&chunk);
+          sse_capture.push_str("\n\n");
+          Event::default().data(chunk)
+        }
+        Err(err) => {
+          let payload = json!({"error": err.to_string()}).to_string();
+          sse_capture.push_str("event: error\n");
+          sse_capture.push_str("data: ");
+          sse_capture.push_str(&payload);
+          sse_capture.push_str("\n\n");
+          saw_stream_error = Some(err.to_string());
+          Event::default().event("error").data(payload)
+        }
       };
       if tx.send(Ok(event)).await.is_err() {
+        client_disconnected = true;
         break;
+      }
+      if saw_stream_error.is_some() {
+        break;
+      }
+    }
+
+    if let Some(p) = persistence {
+      if let Some(err) = saw_stream_error {
+        persist_request_failed(&p.state, &p.request_id, None, &err, Some(sse_capture), p.started_at);
+      } else if client_disconnected {
+        persist_request_failed(
+          &p.state,
+          &p.request_id,
+          None,
+          "client disconnected before stream completed",
+          Some(sse_capture),
+          p.started_at,
+        );
+      } else {
+        persist_request_completed(
+          &p.state,
+          &p.request_id,
+          Some(StatusCode::OK.as_u16()),
+          None,
+          Some(sse_capture),
+          usage.clone(),
+          p.started_at,
+        );
+        apply_usage(
+          &p.state,
+          p.provider.as_str(),
+          p.account_id.as_deref(),
+          p.model.as_str(),
+          usage,
+        );
       }
     }
   });
@@ -624,6 +1128,12 @@ async fn with_request_span(request: Request<axum::body::Body>, next: Next) -> Re
   let request_id = Uuid::new_v4().to_string();
   let method = request.method().to_string();
   let path = request.uri().path().to_string();
+  let started_at = Instant::now();
+  let mut request = request;
+  request.extensions_mut().insert(RequestContext {
+    request_id: request_id.clone(),
+    started_at,
+  });
 
   let span = tracing::info_span!(
     "http.request",

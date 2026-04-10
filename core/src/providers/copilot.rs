@@ -155,7 +155,7 @@ impl ProviderAdapter for GitHubCopilotAdapter {
     let ctx = UpstreamLogContext {
       provider: route.provider.clone(),
       adapter: self.name().to_string(),
-      upstream_path: "/v1/chat/completions".to_string(),
+      upstream_path: "/chat/completions".to_string(),
       method: "POST",
       model: body.get("model").and_then(|v| v.as_str()).map(str::to_string),
       stream: false,
@@ -163,7 +163,7 @@ impl ProviderAdapter for GitHubCopilotAdapter {
     self
       .post_json(
         ctx,
-        format!("{}/v1/chat/completions", config.base_url),
+        format!("{}/chat/completions", config.base_url),
         self.headers(creds),
         body,
       )
@@ -210,7 +210,7 @@ impl ProviderAdapter for GitHubCopilotAdapter {
     let ctx = UpstreamLogContext {
       provider: route.provider.clone(),
       adapter: self.name().to_string(),
-      upstream_path: "/v1/chat/completions".to_string(),
+      upstream_path: "/chat/completions".to_string(),
       method: "POST",
       model: body.get("model").and_then(|v| v.as_str()).map(str::to_string),
       stream: true,
@@ -218,7 +218,7 @@ impl ProviderAdapter for GitHubCopilotAdapter {
     self
       .post_stream(
         ctx,
-        format!("{}/v1/chat/completions", config.base_url),
+        format!("{}/chat/completions", config.base_url),
         self.headers(creds),
         body,
       )

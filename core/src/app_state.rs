@@ -12,6 +12,7 @@ use tokio::task::JoinHandle;
 use crate::auth::copilot::CopilotAuthManager;
 use crate::config::ConfigManager;
 use crate::logging::{LogCaptureLayer, LogStore};
+use crate::persistence::RequestStore;
 use crate::providers::ProviderRegistry;
 use crate::router;
 
@@ -20,31 +21,38 @@ pub struct AppState {
   config: ConfigManager,
   providers: ProviderRegistry,
   logs: LogStore,
+  requests: RequestStore,
   copilot_auth: CopilotAuthManager,
   router_server: RouterServerManager,
 }
 
 impl AppState {
-  pub async fn new(config_dir: PathBuf, retention_days: i64) -> Result<Self> {
+  pub async fn new(config_dir: PathBuf, log_retention_days: i64, request_retention_days: i64) -> Result<Self> {
     let logs = LogStore::new(&config_dir.join("state.db"), 2_000)?;
-    let retention_days = retention_days.max(1);
-    logs.prune_older_than_days(retention_days)?;
-    logs.start_retention_task(retention_days, Duration::from_secs(60 * 60));
+    let requests = RequestStore::new(&config_dir.join("state.db"))?;
+    let log_retention_days = log_retention_days.max(1);
+    let request_retention_days = request_retention_days.max(1);
+    logs.prune_older_than_days(log_retention_days)?;
+    logs.start_retention_task(log_retention_days, Duration::from_secs(60 * 60));
+    requests.prune_older_than_days(request_retention_days)?;
+    requests.start_retention_task(request_retention_days, Duration::from_secs(60 * 60));
     let config = ConfigManager::new(config_dir.clone())?;
     let providers = ProviderRegistry::new();
-    Self::new_with_registry(config_dir, config, logs, providers).await
+    Self::new_with_registry(config_dir, config, logs, requests, providers).await
   }
 
   pub async fn new_for_tests(config_dir: PathBuf, providers: ProviderRegistry) -> Result<Self> {
     let logs = LogStore::new(&config_dir.join("state.db"), 2_000)?;
+    let requests = RequestStore::new(&config_dir.join("state.db"))?;
     let config = ConfigManager::new(config_dir.clone())?;
-    Self::new_with_registry(config_dir, config, logs, providers).await
+    Self::new_with_registry(config_dir, config, logs, requests, providers).await
   }
 
   async fn new_with_registry(
     config_dir: PathBuf,
     config: ConfigManager,
     logs: LogStore,
+    requests: RequestStore,
     providers: ProviderRegistry,
   ) -> Result<Self> {
     let copilot_auth = CopilotAuthManager::new(config_dir, config.clone());
@@ -53,6 +61,7 @@ impl AppState {
       config,
       providers,
       logs,
+      requests,
       copilot_auth,
       router_server: RouterServerManager::new(),
     })
@@ -68,6 +77,10 @@ impl AppState {
 
   pub fn logs(&self) -> &LogStore {
     &self.logs
+  }
+
+  pub fn requests(&self) -> &RequestStore {
+    &self.requests
   }
 
   pub fn log_layer(&self) -> LogCaptureLayer {

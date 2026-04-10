@@ -4,11 +4,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { AccountsPage } from "./pages/AccountsPage";
 import { AboutPage } from "./pages/AboutPage";
 import { ConfigPage } from "./pages/ConfigPage";
+import { HistoryPage } from "./pages/HistoryPage";
 import { LogsPage } from "./pages/LogsPage";
 import { StatusPage } from "./pages/StatusPage";
 import { StreamPage } from "./pages/StreamPage";
 import {
   type AccountView,
+  type ConversationView,
   type CopilotComplete,
   type CopilotLoginStart,
   type LogEntry,
@@ -56,6 +58,7 @@ export function App() {
   const [models, setModels] = useState<ModelView[]>([]);
   const [config, setConfig] = useState<Record<string, unknown> | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [conversations, setConversations] = useState<ConversationView[]>([]);
   const [logLevelFilter, setLogLevelFilter] = useState("");
   const [logRequestIdFilter, setLogRequestIdFilter] = useState("");
   const [streamInput, setStreamInput] = useState("Write a haiku about Rust async.");
@@ -138,7 +141,7 @@ export function App() {
           .filter(([, value]) => value !== null)
           .map(([key, value]) => [key, String(value)])
       ).toString()}`;
-      const [providerData, accountData, modelData, configData, logsData] = await Promise.all([
+      const [providerData, accountData, modelData, configData, logsData, conversationData] = await Promise.all([
         invokeOrFetch<ProviderStatus[]>("get_provider_status", "/api/providers/status", routerBase).then((v) =>
           Array.isArray(v) ? v : (v as unknown as { providers: ProviderStatus[] }).providers
         ),
@@ -150,6 +153,7 @@ export function App() {
         invokeOrFetch<Record<string, LogEntry[]>>("get_request_logs", logsFallbackPath, routerBase, {
           request: logsReq,
         }),
+        invoke<ConversationView[]>("get_chat_conversations", { request: { limit: 100 } }),
       ]);
 
       setProviders(providerData);
@@ -157,6 +161,7 @@ export function App() {
       setModels(modelData);
       setConfig(configData);
       setLogs(logsData.logs ?? []);
+      setConversations(conversationData ?? []);
 
       const routerState = await invoke<{ running: boolean; addr: string | null }>("get_router_state");
       if (routerState.running && routerState.addr) {
@@ -319,6 +324,16 @@ export function App() {
     oauthAccessToken?: string;
     refreshApiKey?: boolean;
   }) => {
+    if (input.refreshApiKey && !input.oauthAccessToken) {
+      await invoke("copilot_refresh_api_key", {
+        request: {
+          account_id: input.accountId,
+        },
+      });
+      await refresh();
+      return;
+    }
+
     const setSecrets: Record<string, string> = {};
     if (input.apiKey) {
       setSecrets.api_key = input.apiKey;
@@ -427,6 +442,8 @@ export function App() {
             runAction={runAction}
           />
         );
+      case "history":
+        return <HistoryPage conversations={conversations} />;
       case "stream":
         return (
           <StreamPage

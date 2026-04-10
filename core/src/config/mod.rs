@@ -275,6 +275,17 @@ impl CredentialsFile {
   }
 
   pub fn resolve_runtime_credential(&self, provider: &str) -> Result<Option<ProviderCredential>> {
+    Ok(
+      self
+        .resolve_runtime_credential_with_account(provider)?
+        .map(|(_, cred)| cred),
+    )
+  }
+
+  pub fn resolve_runtime_credential_with_account(
+    &self,
+    provider: &str,
+  ) -> Result<Option<(String, ProviderCredential)>> {
     let Some(provider_cfg) = self.providers.get(provider) else {
       return Ok(None);
     };
@@ -290,7 +301,7 @@ impl CredentialsFile {
       return Ok(None);
     };
 
-    Ok(Some(account_to_runtime(provider, account)?))
+    Ok(Some((account.id.clone(), account_to_runtime(provider, account)?)))
   }
 
   pub fn resolve_runtime_credential_for_account(
@@ -298,6 +309,18 @@ impl CredentialsFile {
     provider: &str,
     account_id: &str,
   ) -> Result<Option<ProviderCredential>> {
+    Ok(
+      self
+        .resolve_runtime_credential_for_account_with_account(provider, account_id)?
+        .map(|(_, cred)| cred),
+    )
+  }
+
+  pub fn resolve_runtime_credential_for_account_with_account(
+    &self,
+    provider: &str,
+    account_id: &str,
+  ) -> Result<Option<(String, ProviderCredential)>> {
     let Some(provider_cfg) = self.providers.get(provider) else {
       return Ok(None);
     };
@@ -312,7 +335,7 @@ impl CredentialsFile {
       anyhow::bail!("account '{}' for provider '{}' is disabled", account_id, provider);
     }
 
-    Ok(Some(account_to_runtime(provider, account)?))
+    Ok(Some((account.id.clone(), account_to_runtime(provider, account)?)))
   }
 }
 

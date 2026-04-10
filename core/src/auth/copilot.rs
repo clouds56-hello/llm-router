@@ -8,7 +8,7 @@ use parking_lot::RwLock;
 use reqwest::header::{ACCEPT, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 
-use crate::config::{ConfigManager, ConnectAccountInput};
+use crate::config::{ConfigManager, ConnectAccountInput, UpdateAccountInput};
 
 const GITHUB_CLIENT_ID: &str = "Iv1.b507a08c87ecfe98";
 const DEVICE_FLOW_SCOPE: &str = "read:user copilot";
@@ -74,7 +74,9 @@ struct DeviceCodeResponse {
 #[derive(Debug, Deserialize)]
 struct TokenResponse {
   access_token: Option<String>,
+  refresh_token: Option<String>,
   error: Option<String>,
+  error_description: Option<String>,
 }
 
 #[derive(Clone)]
@@ -175,6 +177,15 @@ impl CopilotAuthManager {
         meta.insert("enterprise_domain".to_string(), domain.clone());
       }
 
+      let mut secrets = HashMap::from_iter(vec![
+        ("api_key".to_string(), token.clone()),
+        ("oauth_access_token".to_string(), token.clone()),
+        ("oauth_auth_base".to_string(), auth_base.clone()),
+      ]);
+      if let Some(refresh_token) = body.refresh_token {
+        secrets.insert("oauth_refresh_token".to_string(), refresh_token);
+      }
+
       self.config.connect_account(ConnectAccountInput {
         provider: COPILOT_PROVIDER_NAME.to_string(),
         account_id: Some(account_id),
@@ -183,10 +194,7 @@ impl CopilotAuthManager {
           CopilotDeployment::Enterprise { domain } => format!("Enterprise ({domain})"),
         }),
         auth_type: Some("bearer".to_string()),
-        secrets: HashMap::from_iter(vec![
-          ("api_key".to_string(), token.clone()),
-          ("oauth_access_token".to_string(), token.clone()),
-        ]),
+        secrets,
         meta,
         set_default: Some(true),
         enabled: Some(true),
@@ -230,6 +238,104 @@ impl CopilotAuthManager {
     }
 
     Ok(Some(state))
+  }
+
+  pub async fn refresh_api_key(&self, account_id: Option<String>) -> Result<CopilotAuthState> {
+    let loaded = self.config.get();
+    let resolved = if let Some(ref account) = account_id {
+      loaded
+        .credentials
+        .resolve_runtime_credential_for_account_with_account(COPILOT_PROVIDER_NAME, account)?
+    } else {
+      loaded
+        .credentials
+        .resolve_runtime_credential_with_account(COPILOT_PROVIDER_NAME)?
+    };
+    let (resolved_account_id, credential) = resolved.ok_or_else(|| {
+      anyhow::anyhow!(
+        "no credential account configured for provider '{}'",
+        COPILOT_PROVIDER_NAME
+      )
+    })?;
+
+    let refresh_token = credential
+      .extra
+      .get("oauth_refresh_token")
+      .cloned()
+      .ok_or_else(|| anyhow::anyhow!("oauth_refresh_token not found for account '{}'", resolved_account_id))?;
+
+    let auth_base = credential
+      .extra
+      .get("oauth_auth_base")
+      .cloned()
+      .or_else(|| auth_base_from_account_meta(&loaded, &resolved_account_id))
+      .or_else(|| {
+        self
+          .read_state()
+          .ok()
+          .flatten()
+          .filter(|state| account_id_for_deployment(&state.deployment) == resolved_account_id)
+          .map(|state| deployment_auth_base(&state.deployment))
+      })
+      .unwrap_or_else(|| "https://github.com".to_string());
+
+    let res = self
+      .client
+      .post(format!("{auth_base}/login/oauth/access_token"))
+      .header(ACCEPT, "application/json")
+      .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+      .form(&[
+        ("client_id", GITHUB_CLIENT_ID),
+        ("grant_type", "refresh_token"),
+        ("refresh_token", refresh_token.as_str()),
+      ])
+      .send()
+      .await
+      .context("failed to refresh OAuth access token")?;
+
+    if !res.status().is_success() {
+      anyhow::bail!("refresh token endpoint failed with status {}", res.status());
+    }
+
+    let body: TokenResponse = res.json().await.context("failed to parse token refresh response")?;
+    let new_access_token = body.access_token.ok_or_else(|| {
+      anyhow::anyhow!(
+        "token refresh returned no access_token: {}",
+        body
+          .error_description
+          .or(body.error)
+          .unwrap_or_else(|| "unknown_error".to_string())
+      )
+    })?;
+
+    let mut set_secrets = HashMap::from_iter(vec![
+      ("api_key".to_string(), new_access_token.clone()),
+      ("oauth_access_token".to_string(), new_access_token.clone()),
+      ("oauth_auth_base".to_string(), auth_base.clone()),
+    ]);
+    if let Some(new_refresh) = body.refresh_token {
+      set_secrets.insert("oauth_refresh_token".to_string(), new_refresh);
+    }
+
+    self.config.update_account(UpdateAccountInput {
+      provider: COPILOT_PROVIDER_NAME.to_string(),
+      account_id: resolved_account_id.clone(),
+      set_secrets: Some(set_secrets),
+      ..Default::default()
+    })?;
+
+    let mut state = self.read_state()?.unwrap_or(CopilotAuthState {
+      logged_in: true,
+      deployment: deployment_from_auth_base(&auth_base),
+      access_token_preview: None,
+      updated_at: Utc::now(),
+    });
+    state.logged_in = true;
+    state.access_token_preview = Some(token_preview(&new_access_token));
+    state.updated_at = Utc::now();
+    self.write_state(&state)?;
+
+    Ok(state)
   }
 
   pub fn logout(&self) -> Result<()> {
@@ -305,6 +411,34 @@ fn parse_deployment(req: DeviceAuthStartRequest) -> Result<CopilotDeployment> {
       Ok(CopilotDeployment::Enterprise { domain })
     }
     _ => anyhow::bail!("unknown deployment_type: {}", req.deployment_type),
+  }
+}
+
+fn auth_base_from_account_meta(loaded: &crate::config::LoadedConfig, account_id: &str) -> Option<String> {
+  let provider_cfg = loaded.credentials.providers.get(COPILOT_PROVIDER_NAME)?;
+  let account = provider_cfg.accounts.iter().find(|a| a.id == account_id)?;
+
+  if let Some(domain) = account.meta.get("enterprise_domain") {
+    return Some(format!("https://{domain}"));
+  }
+
+  match account.meta.get("deployment") {
+    Some(v) if v == "github.com" => Some("https://github.com".to_string()),
+    Some(v) if v.starts_with("enterprise:") => Some(format!("https://{}", v.trim_start_matches("enterprise:"))),
+    _ => None,
+  }
+}
+
+fn deployment_from_auth_base(auth_base: &str) -> CopilotDeployment {
+  let normalized = auth_base.trim_end_matches('/').to_lowercase();
+  if normalized == "https://github.com" {
+    CopilotDeployment::GitHubCom
+  } else {
+    let domain = normalized
+      .strip_prefix("https://")
+      .unwrap_or(normalized.as_str())
+      .to_string();
+    CopilotDeployment::Enterprise { domain }
   }
 }
 

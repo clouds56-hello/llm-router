@@ -37,6 +37,26 @@ export type AccountView = {
   secret_keys: string[];
 };
 
+export type ConversationMessage = {
+  seq: number;
+  role: string;
+  content_text: string;
+  created_at: string;
+};
+
+export type ConversationView = {
+  id: string;
+  created_at: string;
+  updated_at: string;
+  provider: string;
+  account_id?: string | null;
+  model: string;
+  latest_request_id?: string | null;
+  message_count: number;
+  preview: string;
+  messages: ConversationMessage[];
+};
+
 export type CopilotLoginStart = {
   session_id: string;
   verification_uri: string;
@@ -51,7 +71,7 @@ export type CopilotComplete = {
   auth_state: unknown | null;
 };
 
-export type TabId = "accounts" | "stream" | "logs" | "config" | "about" | "status";
+export type TabId = "accounts" | "history" | "stream" | "logs" | "config" | "about" | "status";
 
 export type TabSpec = {
   id: TabId;
@@ -64,6 +84,7 @@ export const DEFAULT_TAB: TabId = "accounts";
 
 export const TABS: TabSpec[] = [
   { id: "accounts", label: "Accounts" },
+  { id: "history", label: "History" },
   { id: "status", label: "Status" },
   { id: "stream", label: "Stream" },
   { id: "logs", label: "Logs" },

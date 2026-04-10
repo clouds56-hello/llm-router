@@ -116,6 +116,13 @@ pub struct ProviderRegistry {
   adapters: Arc<HashMap<String, Arc<dyn ProviderAdapter>>>,
 }
 
+pub struct ResolvedProvider {
+  pub adapter: Arc<dyn ProviderAdapter>,
+  pub provider_cfg: ProviderDefinition,
+  pub creds: Option<ProviderCredential>,
+  pub effective_account_id: Option<String>,
+}
+
 impl ProviderRegistry {
   pub fn new() -> Self {
     let mut adapters: HashMap<String, Arc<dyn ProviderAdapter>> = HashMap::new();
@@ -143,7 +150,7 @@ impl ProviderRegistry {
     loaded: &LoadedConfig,
     route: &ModelRoute,
     account_id: Option<&str>,
-  ) -> Result<(Arc<dyn ProviderAdapter>, ProviderDefinition, Option<ProviderCredential>)> {
+  ) -> Result<ResolvedProvider> {
     let provider_def = loaded
       .providers
       .providers
@@ -161,14 +168,25 @@ impl ProviderRegistry {
       .ok_or_else(|| anyhow::anyhow!("adapter '{}' not registered", provider_def.provider_type))?
       .clone();
 
-    let creds = if let Some(account_id) = account_id {
+    let resolved = if let Some(account_id) = account_id {
       loaded
         .credentials
-        .resolve_runtime_credential_for_account(&route.provider, account_id)?
+        .resolve_runtime_credential_for_account_with_account(&route.provider, account_id)?
     } else {
-      loaded.credentials.resolve_runtime_credential(&route.provider)?
+      loaded
+        .credentials
+        .resolve_runtime_credential_with_account(&route.provider)?
     };
-    Ok((adapter, provider_def, creds))
+    let (effective_account_id, creds) = match resolved {
+      Some((id, cred)) => (Some(id), Some(cred)),
+      None => (None, None),
+    };
+    Ok(ResolvedProvider {
+      adapter,
+      provider_cfg: provider_def,
+      creds,
+      effective_account_id,
+    })
   }
 
   pub fn provider_status(&self, loaded: &LoadedConfig) -> Vec<serde_json::Value> {

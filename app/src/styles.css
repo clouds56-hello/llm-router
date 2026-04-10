@@ -306,3 +306,78 @@ pre {
   line-height: 1.35;
   word-break: break-word;
 }
+
+.history-list {
+  margin-top: 0.5rem;
+  border: 1px solid #c7dce0;
+  background: #f7fcfd;
+  border-radius: 8px;
+  max-height: 520px;
+  overflow: auto;
+}
+
+.history-item {
+  border-bottom: 1px solid #e3eff2;
+}
+
+.history-item:last-child {
+  border-bottom: none;
+}
+
+.history-head {
+  display: block;
+  text-align: left;
+  width: 100%;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0.5rem 0.6rem;
+}
+
+.history-head:hover {
+  background: #edf7fa;
+}
+
+.history-meta {
+  display: block;
+  font-family: "IBM Plex Mono", "JetBrains Mono", monospace;
+  font-size: 0.75rem;
+  color: #35565d;
+}
+
+.history-preview {
+  display: block;
+  margin-top: 0.2rem;
+  font-size: 0.85rem;
+  color: #14282d;
+}
+
+.history-body {
+  padding: 0.45rem 0.7rem 0.7rem;
+  background: #eef7f9;
+  border-top: 1px solid #dcecef;
+}
+
+.history-request-id {
+  font-family: "IBM Plex Mono", "JetBrains Mono", monospace;
+  font-size: 0.74rem;
+  margin-bottom: 0.35rem;
+  color: #385e66;
+}
+
+.history-message {
+  border: 1px solid #d6e8ec;
+  border-radius: 8px;
+  background: #fcfeff;
+  padding: 0.45rem 0.55rem;
+  margin-bottom: 0.4rem;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.history-message:last-child {
+  margin-bottom: 0;
+}
