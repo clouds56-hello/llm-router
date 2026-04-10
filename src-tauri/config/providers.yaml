@@ -1,0 +1,22 @@
+providers:
+  openai:
+    provider_type: openai
+    base_url: https://api.openai.com
+    enabled: true
+    metadata:
+      label: OpenAI
+
+  deepseek:
+    provider_type: deepseek
+    base_url: https://api.deepseek.com
+    enabled: false
+
+  claude:
+    provider_type: claude
+    base_url: https://api.anthropic.com
+    enabled: false
+
+  github_copilot:
+    provider_type: github-copilot
+    base_url: https://api.githubcopilot.com
+    enabled: false

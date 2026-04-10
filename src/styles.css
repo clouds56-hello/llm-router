@@ -1,0 +1,83 @@
+:root {
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  color: #122022;
+  background: radial-gradient(circle at top right, #cdeef6 0%, #f8fafb 40%, #f0f6f2 100%);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+.app {
+  min-height: 100vh;
+  padding: 1rem;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+}
+
+.card {
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid #b8d7dc;
+  border-radius: 12px;
+  padding: 0.75rem;
+}
+
+.card-wide {
+  grid-column: 1 / -1;
+}
+
+label {
+  display: block;
+  margin-bottom: 0.5rem;
+}
+
+input,
+select,
+textarea,
+button {
+  width: 100%;
+  margin-top: 0.25rem;
+  margin-bottom: 0.5rem;
+  border: 1px solid #88a7ad;
+  border-radius: 8px;
+  padding: 0.5rem;
+  font: inherit;
+}
+
+.row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.row button {
+  flex: 1;
+}
+
+pre {
+  max-height: 260px;
+  overflow: auto;
+  background: #0e1a1d;
+  color: #d9fbff;
+  padding: 0.75rem;
+  border-radius: 8px;
+  font-size: 0.78rem;
+}
+
+.error {
+  color: #a01717;
+}

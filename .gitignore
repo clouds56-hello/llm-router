@@ -2,3 +2,9 @@
 Cargo.lock
 .env
 *.db
+node_modules
+dist
+src-tauri/target
+src-tauri/config/copilot_auth_state.json
+src-tauri/gen
+pnpm-lock.yaml
