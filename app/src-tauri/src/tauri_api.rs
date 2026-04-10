@@ -4,8 +4,8 @@ use std::sync::Arc;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::app_state::AppState;
-use crate::auth::copilot::{
+use llm_router_core::app_state::AppState;
+use llm_router_core::auth::copilot::{
   DeviceAuthCompleteRequest, DeviceAuthCompleteResponse, DeviceAuthStartRequest, DeviceAuthStartResponse,
 };
 

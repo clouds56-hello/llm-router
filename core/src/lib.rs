@@ -4,7 +4,6 @@ pub mod config;
 pub mod logging;
 pub mod providers;
 pub mod router;
-pub mod tauri_api;
 
 use std::path::PathBuf;
 use std::sync::Arc;

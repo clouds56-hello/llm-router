@@ -51,14 +51,14 @@ Config system:
 
 ## Project layout
 
-- `src-tauri/src/router`: axum API router and handlers
-- `src-tauri/src/providers`: provider trait + adapters
-- `src-tauri/src/config`: YAML loading/hot-reload/validation
-- `src-tauri/src/auth`: Copilot OAuth device-flow manager
-- `src-tauri/src/logging`: pluggable log sink trait + in-memory viewer sink
-- `src-tauri/src/tauri_api.rs`: Tauri command bridge for frontend
-- `src`: React dashboard
-- `src-tauri/config`: default runtime YAML files
+- `core/src/router`: axum API router and handlers
+- `core/src/providers`: provider trait + adapters
+- `core/src/config`: YAML loading/hot-reload/validation
+- `core/src/auth`: Copilot OAuth device-flow manager
+- `core/src/logging`: pluggable log sink trait + in-memory viewer sink
+- `app/src-tauri/src/tauri_api.rs`: Tauri command bridge for frontend
+- `app/src`: React dashboard
+- `app/src-tauri/config`: default runtime YAML files
 - `examples`: example YAML files
 
 ## Example config files
@@ -114,31 +114,31 @@ Prerequisites:
 Install frontend dependencies:
 
 ```bash
-npm install
+pnpm install
 ```
 
 Run frontend only:
 
 ```bash
-npm run dev
+pnpm --filter ./app run dev
 ```
 
 Run Rust tests:
 
 ```bash
-cargo test --manifest-path src-tauri/Cargo.toml
+cargo test -p llm-router-core
 ```
 
 Launch Tauri app (starts router + dashboard):
 
 ```bash
-npm run tauri dev
+pnpm --filter ./app run tauri dev
 ```
 
 Build desktop app:
 
 ```bash
-npm run tauri build
+pnpm --filter ./app run tauri build
 ```
 
 ## Test coverage

@@ -1,0 +1,23 @@
+[package]
+name = "llm-router-app"
+version = "0.1.0"
+edition = "2021"
+description = "Desktop shell for llm-router"
+license = "MIT"
+
+[[bin]]
+name = "llm-router"
+path = "src/main.rs"
+test = false
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+llm-router-core = { path = "../../core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }

@@ -4,9 +4,11 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use llm_router::tauri_api;
+use llm_router_core as core;
 use tauri::Manager;
 use tracing_subscriber::EnvFilter;
+
+mod tauri_api;
 
 #[tokio::main]
 async fn main() {
@@ -15,7 +17,7 @@ async fn main() {
     .init();
 
   let config_dir = PathBuf::from("config");
-  let state = llm_router::build_state(config_dir)
+  let state = core::build_state(config_dir)
     .await
     .expect("state initialization failed");
 
@@ -51,8 +53,8 @@ async fn main() {
       tauri_api::stop_router_server,
     ])
     .setup(|app| {
-      let state: tauri::State<Arc<llm_router::app_state::AppState>> = app.state();
-      let app_state: Arc<llm_router::app_state::AppState> = Arc::clone(state.inner());
+      let state: tauri::State<Arc<core::app_state::AppState>> = app.state();
+      let app_state: Arc<core::app_state::AppState> = Arc::clone(state.inner());
       tauri::async_runtime::spawn(async move {
         if let Err(err) = app_state.start_config_hot_reload().await {
           tracing::error!("hot reload failed to start: {err}");
