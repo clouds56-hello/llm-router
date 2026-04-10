@@ -116,6 +116,7 @@ impl ProviderRegistry {
     &self,
     loaded: &LoadedConfig,
     route: &ModelRoute,
+    account_id: Option<&str>,
   ) -> Result<(Arc<dyn ProviderAdapter>, ProviderDefinition, Option<ProviderCredential>)> {
     let provider_def = loaded
       .providers
@@ -134,7 +135,13 @@ impl ProviderRegistry {
       .ok_or_else(|| anyhow::anyhow!("adapter '{}' not registered", provider_def.provider_type))?
       .clone();
 
-    let creds = loaded.credentials.resolve_runtime_credential(&route.provider)?;
+    let creds = if let Some(account_id) = account_id {
+      loaded
+        .credentials
+        .resolve_runtime_credential_for_account(&route.provider, account_id)?
+    } else {
+      loaded.credentials.resolve_runtime_credential(&route.provider)?
+    };
     Ok((adapter, provider_def, creds))
   }
 

@@ -11,10 +11,11 @@ import {
   type AccountView,
   type CopilotComplete,
   type CopilotLoginStart,
+  type ModelView,
   type ProviderStatus,
   type RemovedAccountUndo,
   type TabId,
-  ROUTER_BASE,
+  ROUTER_BASE_DEFAULT,
   TABS,
   getCredentialAccountSnapshot,
   groupAccountsByProvider,
@@ -22,11 +23,11 @@ import {
   readStoredTab,
 } from "./lib/state";
 
-async function invokeOrFetch<T>(cmd: string, fallbackPath: string): Promise<T> {
+async function invokeOrFetch<T>(cmd: string, fallbackPath: string, routerBase: string): Promise<T> {
   try {
     return await invoke<T>(cmd);
   } catch {
-    const res = await fetch(`${ROUTER_BASE}${fallbackPath}`);
+    const res = await fetch(`${routerBase}${fallbackPath}`);
     if (!res.ok) {
       throw new Error(`${fallbackPath} failed with ${res.status}`);
     }
@@ -38,11 +39,13 @@ export function App() {
   const [activeTab, setActiveTab] = useState<TabId>(readStoredTab);
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
   const [accounts, setAccounts] = useState<AccountView[]>([]);
-  const [models, setModels] = useState<Array<Record<string, unknown>>>([]);
+  const [models, setModels] = useState<ModelView[]>([]);
   const [config, setConfig] = useState<Record<string, unknown> | null>(null);
   const [logs, setLogs] = useState<Array<Record<string, unknown>>>([]);
   const [streamInput, setStreamInput] = useState("Write a haiku about Rust async.");
   const [streamOutput, setStreamOutput] = useState("");
+  const [routerBase, setRouterBase] = useState(ROUTER_BASE_DEFAULT);
+  const [streamAccountKey, setStreamAccountKey] = useState("");
   const [deploymentType, setDeploymentType] = useState("github.com");
   const [enterpriseUrl, setEnterpriseUrl] = useState("");
   const [deviceFlow, setDeviceFlow] = useState<CopilotLoginStart | null>(null);
@@ -60,6 +63,48 @@ export function App() {
 
   const accountsByProvider = useMemo(() => groupAccountsByProvider(accounts), [accounts]);
 
+  const modelNameByProvider = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const row of models) {
+      const provider = row.provider;
+      const name = row.name;
+      if (!row.enabled) {
+        continue;
+      }
+      if (typeof provider === "string" && typeof name === "string" && !out[provider]) {
+        out[provider] = name;
+      }
+    }
+    return out;
+  }, [models]);
+
+  const streamAccountOptions = useMemo(() => {
+    const out: Array<{ key: string; provider: string; accountId: string; label: string; modelName: string }> = [];
+    for (const providerName of providerNames) {
+      const modelName = modelNameByProvider[providerName];
+      if (!modelName) {
+        continue;
+      }
+      const providerAccounts = accountsByProvider[providerName] ?? [];
+      for (const account of providerAccounts) {
+        out.push({
+          key: `${providerName}::${account.id}`,
+          provider: providerName,
+          accountId: account.id,
+          label: `${providerName} / ${account.label}`,
+          modelName,
+        });
+      }
+    }
+    return out;
+  }, [providerNames, modelNameByProvider, accountsByProvider]);
+
+  useEffect(() => {
+    if (!streamAccountOptions.find((opt) => opt.key === streamAccountKey)) {
+      setStreamAccountKey(streamAccountOptions[0]?.key ?? "");
+    }
+  }, [streamAccountOptions, streamAccountKey]);
+
   useEffect(() => {
     persistTab(activeTab);
   }, [activeTab]);
@@ -68,12 +113,12 @@ export function App() {
     try {
       setError(null);
       const [providerData, accountData, modelData, configData, logsData] = await Promise.all([
-        invokeOrFetch<ProviderStatus[]>("get_provider_status", "/api/providers/status").then((v) =>
+        invokeOrFetch<ProviderStatus[]>("get_provider_status", "/api/providers/status", routerBase).then((v) =>
           Array.isArray(v) ? v : (v as unknown as { providers: ProviderStatus[] }).providers
         ),
         invoke<AccountView[]>("list_accounts"),
-        invokeOrFetch<Array<Record<string, unknown>>>("get_model_list", "/api/models").then((v) =>
-          Array.isArray(v) ? v : (v as unknown as { models: Array<Record<string, unknown>> }).models
+        invokeOrFetch<ModelView[]>("get_model_list", "/api/models", routerBase).then((v) =>
+          Array.isArray(v) ? v : (v as unknown as { models: ModelView[] }).models
         ),
         invoke<Record<string, unknown>>("get_active_config"),
         invoke<Record<string, Array<Record<string, unknown>>>>("get_request_logs"),
@@ -84,6 +129,11 @@ export function App() {
       setModels(modelData);
       setConfig(configData);
       setLogs(logsData.logs ?? []);
+
+      const routerState = await invoke<{ running: boolean; addr: string | null }>("get_router_state");
+      if (routerState.running && routerState.addr) {
+        setRouterBase(`http://${routerState.addr}`);
+      }
     } catch (e) {
       setError((e as Error).message);
     }
@@ -130,16 +180,24 @@ export function App() {
   };
 
   const runStreamingTest = async () => {
+    const selected = streamAccountOptions.find((opt) => opt.key === streamAccountKey);
+    if (!selected) {
+      throw new Error("Select an account with an available model first");
+    }
+
     setStreamOutput("");
     const body = {
-      model: "gpt-4.1-mini",
+      model: selected.modelName,
       stream: true,
       messages: [{ role: "user", content: streamInput }],
     };
 
-    const res = await fetch(`${ROUTER_BASE}/v1/chat/completions`, {
+    const res = await fetch(`${routerBase}/v1/chat/completions`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        "x-llm-router-account-id": selected.accountId,
+      },
       body: JSON.stringify(body),
     });
 
@@ -154,6 +212,31 @@ export function App() {
       const { done, value } = await reader.read();
       if (done) break;
       setStreamOutput((prev) => prev + decoder.decode(value, { stream: true }));
+    }
+  };
+
+  const testAccount = async (provider: string, accountId: string) => {
+    const modelName = modelNameByProvider[provider];
+    if (!modelName) {
+      throw new Error(`No routed model found for provider '${provider}'`);
+    }
+
+    const res = await fetch(`${routerBase}/v1/chat/completions`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-llm-router-account-id": accountId,
+      },
+      body: JSON.stringify({
+        model: modelName,
+        stream: false,
+        messages: [{ role: "user", content: "Reply with: account test ok" }],
+      }),
+    });
+
+    if (!res.ok) {
+      const details = await res.text();
+      throw new Error(`Account test failed (${res.status}): ${details || "unknown error"}`);
     }
   };
 
@@ -263,6 +346,20 @@ export function App() {
     await refresh();
   };
 
+  const setProviderEnabled = async (provider: string, enabled: boolean) => {
+    await invoke("set_provider_enabled", {
+      request: { provider, enabled },
+    });
+    await refresh();
+  };
+
+  const setModelEnabled = async (openaiName: string, enabled: boolean) => {
+    await invoke("set_model_enabled", {
+      request: { openai_name: openaiName, enabled },
+    });
+    await refresh();
+  };
+
   const renderActiveTab = () => {
     switch (activeTab) {
       case "accounts":
@@ -278,6 +375,7 @@ export function App() {
             deviceFlow={deviceFlow}
             onAddApiAccount={addApiAccount}
             onUpdateAccount={modifyAccount}
+            onTestAccount={testAccount}
             onRemoveAccount={removeAccount}
             onUndoRemove={undoRemove}
             onStartOauthForProvider={startOauthForProvider}
@@ -286,13 +384,28 @@ export function App() {
           />
         );
       case "status":
-        return <StatusPage providers={providers} models={models} />;
+        return (
+          <StatusPage
+            providers={providers}
+            models={models}
+            onSetProviderEnabled={setProviderEnabled}
+            onSetModelEnabled={setModelEnabled}
+            runAction={runAction}
+          />
+        );
       case "stream":
         return (
           <StreamPage
             streamInput={streamInput}
             streamOutput={streamOutput}
             setStreamInput={setStreamInput}
+            streamAccountKey={streamAccountKey}
+            setStreamAccountKey={setStreamAccountKey}
+            streamAccountOptions={streamAccountOptions.map((opt) => ({
+              key: opt.key,
+              label: `${opt.label} (${opt.modelName})`,
+              modelName: opt.modelName,
+            }))}
             onRunStreamingTest={runStreamingTest}
             runAction={runAction}
           />
@@ -302,7 +415,7 @@ export function App() {
       case "config":
         return <ConfigPage config={config} />;
       case "about":
-        return <AboutPage routerBase={ROUTER_BASE} />;
+        return <AboutPage routerBase={routerBase} />;
       default:
         return null;
     }

@@ -2,7 +2,7 @@ use std::convert::Infallible;
 use std::sync::Arc;
 
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -51,6 +51,7 @@ async fn model_list(State(state): State<Arc<AppState>>) -> Json<Value> {
           "provider": m.provider,
           "provider_model": m.provider_model,
           "is_default": m.is_default,
+          "enabled": loaded.is_model_enabled(&m.openai_name),
       })
     })
     .collect();
@@ -72,7 +73,11 @@ async fn request_logs(State(state): State<Arc<AppState>>) -> Json<Value> {
   Json(json!({ "logs": state.logs().list(200) }))
 }
 
-async fn chat_completions(State(state): State<Arc<AppState>>, Json(mut body): Json<Value>) -> Response {
+async fn chat_completions(
+  State(state): State<Arc<AppState>>,
+  headers: HeaderMap,
+  Json(mut body): Json<Value>,
+) -> Response {
   let loaded = state.config().get();
   let model_name = body.get("model").and_then(|v| v.as_str()).unwrap_or_default();
 
@@ -86,7 +91,11 @@ async fn chat_completions(State(state): State<Arc<AppState>>, Json(mut body): Js
 
   let stream_requested = body.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
 
-  let (adapter, provider_cfg, creds) = match state.providers().adapter_for_provider(&loaded, route) {
+  let account_override = account_override_from_headers(&headers);
+  let (adapter, provider_cfg, creds) = match state
+    .providers()
+    .adapter_for_provider(&loaded, route, account_override.as_deref())
+  {
     Ok(v) => v,
     Err(err) => return json_error(StatusCode::BAD_REQUEST, &err.to_string()),
   };
@@ -159,7 +168,11 @@ async fn chat_completions(State(state): State<Arc<AppState>>, Json(mut body): Js
   )
 }
 
-async fn responses(State(state): State<Arc<AppState>>, Json(mut body): Json<Value>) -> Response {
+async fn responses(
+  State(state): State<Arc<AppState>>,
+  headers: HeaderMap,
+  Json(mut body): Json<Value>,
+) -> Response {
   let loaded = state.config().get();
   let model_name = body.get("model").and_then(|v| v.as_str()).unwrap_or_default();
 
@@ -173,7 +186,11 @@ async fn responses(State(state): State<Arc<AppState>>, Json(mut body): Json<Valu
 
   let stream_requested = body.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
 
-  let (adapter, provider_cfg, creds) = match state.providers().adapter_for_provider(&loaded, route) {
+  let account_override = account_override_from_headers(&headers);
+  let (adapter, provider_cfg, creds) = match state
+    .providers()
+    .adapter_for_provider(&loaded, route, account_override.as_deref())
+  {
     Ok(v) => v,
     Err(err) => return json_error(StatusCode::BAD_REQUEST, &err.to_string()),
   };
@@ -274,6 +291,14 @@ fn response_request_to_chat_request(body: Value) -> Value {
     }
   }
   out
+}
+
+fn account_override_from_headers(headers: &HeaderMap) -> Option<String> {
+  headers
+    .get("x-llm-router-account-id")
+    .and_then(|v| v.to_str().ok())
+    .map(|s| s.trim().to_string())
+    .filter(|s| !s.is_empty())
 }
 
 fn chat_request_to_response_request(body: Value) -> Value {

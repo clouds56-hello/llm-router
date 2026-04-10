@@ -36,6 +36,8 @@ fn default_true() -> bool {
 pub struct ModelsFile {
   #[serde(default)]
   pub models: Vec<ModelRoute>,
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  pub disabled_models: Vec<String>,
   pub default_provider: Option<String>,
 }
 
@@ -107,14 +109,33 @@ pub struct LoadedConfig {
 
 impl LoadedConfig {
   pub fn resolve_model(&self, model: &str) -> Option<&ModelRoute> {
-    self.models.models.iter().find(|m| m.openai_name == model).or_else(|| {
-      self
+    if !model.is_empty() {
+      if let Some(found) = self
         .models
         .models
         .iter()
-        .find(|m| m.is_default)
-        .or_else(|| self.models.models.first())
-    })
+        .find(|m| m.openai_name == model && self.is_model_enabled(&m.openai_name))
+      {
+        return Some(found);
+      }
+    }
+
+    self
+      .models
+      .models
+      .iter()
+      .find(|m| m.is_default && self.is_model_enabled(&m.openai_name))
+      .or_else(|| {
+        self
+          .models
+          .models
+          .iter()
+          .find(|m| self.is_model_enabled(&m.openai_name))
+      })
+  }
+
+  pub fn is_model_enabled(&self, model_name: &str) -> bool {
+    !self.models.disabled_models.iter().any(|m| m == model_name)
   }
 }
 
@@ -271,36 +292,62 @@ impl CredentialsFile {
       return Ok(None);
     };
 
-    let mut extra = HashMap::new();
-    for (key, raw) in &account.secrets {
-      let decoded = decode_inline_secret(raw).with_context(|| {
-        format!(
-          "failed to decode secret '{key}' for provider='{provider}' account='{}'",
-          account.id
-        )
-      })?;
-      if key == "api_key" {
-        continue;
-      }
-      extra.insert(key.clone(), decoded);
-    }
+    Ok(Some(account_to_runtime(provider, account)?))
+  }
 
-    let api_key = match account.secrets.get("api_key") {
-      Some(v) => Some(decode_inline_secret(v).with_context(|| {
-        format!(
-          "failed to decode api_key for provider='{provider}' account='{}'",
-          account.id
-        )
-      })?),
-      None => None,
+  pub fn resolve_runtime_credential_for_account(
+    &self,
+    provider: &str,
+    account_id: &str,
+  ) -> Result<Option<ProviderCredential>> {
+    let Some(provider_cfg) = self.providers.get(provider) else {
+      return Ok(None);
     };
 
-    Ok(Some(ProviderCredential {
-      api_key,
-      auth_type: account.auth_type.clone(),
-      extra,
-    }))
+    let account = provider_cfg
+      .accounts
+      .iter()
+      .find(|a| a.id == account_id)
+      .ok_or_else(|| anyhow::anyhow!("account '{}' not found for provider '{}'", account_id, provider))?;
+
+    if !account.enabled {
+      anyhow::bail!("account '{}' for provider '{}' is disabled", account_id, provider);
+    }
+
+    Ok(Some(account_to_runtime(provider, account)?))
   }
+}
+
+fn account_to_runtime(provider: &str, account: &CredentialAccount) -> Result<ProviderCredential> {
+  let mut extra = HashMap::new();
+  for (key, raw) in &account.secrets {
+    let decoded = decode_inline_secret(raw).with_context(|| {
+      format!(
+        "failed to decode secret '{key}' for provider='{provider}' account='{}'",
+        account.id
+      )
+    })?;
+    if key == "api_key" {
+      continue;
+    }
+    extra.insert(key.clone(), decoded);
+  }
+
+  let api_key = match account.secrets.get("api_key") {
+    Some(v) => Some(decode_inline_secret(v).with_context(|| {
+      format!(
+        "failed to decode api_key for provider='{provider}' account='{}'",
+        account.id
+      )
+    })?),
+    None => None,
+  };
+
+  Ok(ProviderCredential {
+    api_key,
+    auth_type: account.auth_type.clone(),
+    extra,
+  })
 }
 
 #[derive(Clone)]
@@ -377,6 +424,56 @@ impl ConfigManager {
 
   pub fn list_accounts(&self) -> Vec<AccountView> {
     self.current.read().credentials.list_accounts()
+  }
+
+  pub fn set_provider_enabled(&self, provider: &str, enabled: bool) -> Result<()> {
+    let mut loaded = self.current.read().clone();
+    let provider_cfg = loaded
+      .providers
+      .providers
+      .get_mut(provider)
+      .ok_or_else(|| anyhow::anyhow!("provider '{}' not found", provider))?;
+    provider_cfg.enabled = enabled;
+
+    let path = self.config_dir.join("providers.yaml");
+    write_yaml_atomic(path, &loaded.providers)?;
+
+    *self.current.write() = loaded;
+    *self.last_error.write() = None;
+    self
+      .logger
+      .info("config", format!("updated providers.yaml: provider '{}' enabled={enabled}", provider));
+    Ok(())
+  }
+
+  pub fn set_model_enabled(&self, openai_name: &str, enabled: bool) -> Result<()> {
+    let mut loaded = self.current.read().clone();
+    let exists = loaded
+      .models
+      .models
+      .iter()
+      .any(|m| m.openai_name == openai_name);
+    if !exists {
+      anyhow::bail!("model '{}' not found", openai_name);
+    }
+
+    if enabled {
+      loaded.models.disabled_models.retain(|m| m != openai_name);
+    } else if !loaded.models.disabled_models.iter().any(|m| m == openai_name) {
+      loaded.models.disabled_models.push(openai_name.to_string());
+    }
+    loaded.models.disabled_models.sort();
+    loaded.models.disabled_models.dedup();
+
+    let path = self.config_dir.join("models.yaml");
+    write_yaml_atomic(path, &loaded.models)?;
+
+    *self.current.write() = loaded;
+    *self.last_error.write() = None;
+    self
+      .logger
+      .info("config", format!("updated models.yaml: model '{}' enabled={enabled}", openai_name));
+    Ok(())
   }
 
   pub fn connect_account(&self, input: ConnectAccountInput) -> Result<AccountView> {

@@ -6,6 +6,14 @@ export type ProviderStatus = {
   adapter_registered: boolean;
 };
 
+export type ModelView = {
+  name: string;
+  provider: string;
+  provider_model: string;
+  is_default: boolean;
+  enabled: boolean;
+};
+
 export type AccountView = {
   provider: string;
   id: string;
@@ -38,7 +46,7 @@ export type TabSpec = {
   label: string;
 };
 
-export const ROUTER_BASE = "http://127.0.0.1:11434";
+export const ROUTER_BASE_DEFAULT = "http://127.0.0.1:11434";
 export const TAB_STORAGE_KEY = "llm-router.active-tab";
 export const DEFAULT_TAB: TabId = "accounts";
 

@@ -22,13 +22,14 @@ pub async fn get_model_list(state: tauri::State<'_, Arc<AppState>>) -> Result<Ve
   let models = loaded
     .models
     .models
-    .into_iter()
+    .iter()
     .map(|m| {
       serde_json::json!({
           "name": m.openai_name,
           "provider": m.provider,
           "provider_model": m.provider_model,
           "is_default": m.is_default,
+          "enabled": loaded.is_model_enabled(&m.openai_name),
       })
     })
     .collect();
@@ -99,6 +100,40 @@ pub async fn update_account(
   request: UpdateAccountInput,
 ) -> Result<AccountView, String> {
   state.config().update_account(request).map_err(|e| e.to_string())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SetProviderEnabledRequest {
+  pub provider: String,
+  pub enabled: bool,
+}
+
+#[tauri::command]
+pub async fn set_provider_enabled(
+  state: tauri::State<'_, Arc<AppState>>,
+  request: SetProviderEnabledRequest,
+) -> Result<(), String> {
+  state
+    .config()
+    .set_provider_enabled(&request.provider, request.enabled)
+    .map_err(|e| e.to_string())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SetModelEnabledRequest {
+  pub openai_name: String,
+  pub enabled: bool,
+}
+
+#[tauri::command]
+pub async fn set_model_enabled(
+  state: tauri::State<'_, Arc<AppState>>,
+  request: SetModelEnabledRequest,
+) -> Result<(), String> {
+  state
+    .config()
+    .set_model_enabled(&request.openai_name, request.enabled)
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

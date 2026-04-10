@@ -21,20 +21,8 @@ async fn main() {
     .await
     .expect("state initialization failed");
 
-  if let Err(err) = state
-    .router_server()
-    .start(SocketAddr::from(([127, 0, 0, 1], 11434)), Arc::clone(&state))
-    .await
-  {
-    if let Some(io_err) = err.downcast_ref::<std::io::Error>() {
-      if io_err.kind() == std::io::ErrorKind::AddrInUse {
-        tracing::info!("router port 11434 already in use, reusing existing local router");
-      } else {
-        tracing::error!("failed to start embedded router server: {err}");
-      }
-    } else {
-      tracing::error!("failed to start embedded router server: {err}");
-    }
+  if let Err(err) = start_router_with_fallback(Arc::clone(&state)).await {
+    tracing::error!("failed to start embedded router server: {err}");
   }
 
   tauri::Builder::default()
@@ -48,6 +36,8 @@ async fn main() {
       tauri_api::disconnect_account,
       tauri_api::set_default_account,
       tauri_api::update_account,
+      tauri_api::set_provider_enabled,
+      tauri_api::set_model_enabled,
       tauri_api::get_request_logs,
       tauri_api::get_login_status,
       tauri_api::copilot_login,
@@ -69,4 +59,32 @@ async fn main() {
     })
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
+}
+
+async fn start_router_with_fallback(
+  state: Arc<core::app_state::AppState>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+  let primary = SocketAddr::from(([127, 0, 0, 1], 11434));
+  match state.router_server().start(primary, Arc::clone(&state)).await {
+    Ok(_) => {
+      tracing::info!("embedded router listening on {primary}");
+      return Ok(());
+    }
+    Err(err) => {
+      if let Some(io_err) = err.downcast_ref::<std::io::Error>() {
+        if io_err.kind() == std::io::ErrorKind::AddrInUse {
+          let fallback = SocketAddr::from(([127, 0, 0, 1], 11435));
+          tracing::warn!("router port 11434 already in use, trying fallback port 11435");
+          state
+            .router_server()
+            .start(fallback, Arc::clone(&state))
+            .await
+            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
+          tracing::info!("embedded router listening on {fallback}");
+          return Ok(());
+        }
+      }
+      return Err(err.into());
+    }
+  }
 }

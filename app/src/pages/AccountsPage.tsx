@@ -29,6 +29,7 @@ type AccountsPageProps = {
     oauthAccessToken?: string;
     refreshApiKey?: boolean;
   }) => Promise<void>;
+  onTestAccount: (provider: string, accountId: string) => Promise<void>;
   onRemoveAccount: (provider: string, account: AccountView, originalIndex: number) => Promise<void>;
   onUndoRemove: (undo: RemovedAccountUndo) => Promise<void>;
   onCompleteCopilotLogin: () => Promise<void>;
@@ -242,8 +243,16 @@ export function AccountsPage(props: AccountsPageProps) {
                             {account.is_default ? <span className="badge">default</span> : null}
                           </div>
                           <div className="row row-tight">
-                            <button type="button" onClick={() => openEdit(account)}>
+                          <button type="button" onClick={() => openEdit(account)}>
                               Modify
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                void props.runAction(() => props.onTestAccount(providerName, account.id))
+                              }
+                            >
+                              Test
                             </button>
                             <button
                               type="button"
