@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 import { AccountsPage } from "./pages/AccountsPage";
@@ -11,6 +11,7 @@ import {
   type AccountView,
   type CopilotComplete,
   type CopilotLoginStart,
+  type LogEntry,
   type ModelView,
   type ProviderStatus,
   type RemovedAccountUndo,
@@ -23,9 +24,22 @@ import {
   readStoredTab,
 } from "./lib/state";
 
-async function invokeOrFetch<T>(cmd: string, fallbackPath: string, routerBase: string): Promise<T> {
+const LOG_LEVEL_RANK: Record<string, number> = {
+  TRACE: 10,
+  DEBUG: 20,
+  INFO: 30,
+  WARN: 40,
+  ERROR: 50,
+};
+
+async function invokeOrFetch<T>(
+  cmd: string,
+  fallbackPath: string,
+  routerBase: string,
+  invokeArgs?: Record<string, unknown>
+): Promise<T> {
   try {
-    return await invoke<T>(cmd);
+    return await invoke<T>(cmd, invokeArgs);
   } catch {
     const res = await fetch(`${routerBase}${fallbackPath}`);
     if (!res.ok) {
@@ -41,7 +55,9 @@ export function App() {
   const [accounts, setAccounts] = useState<AccountView[]>([]);
   const [models, setModels] = useState<ModelView[]>([]);
   const [config, setConfig] = useState<Record<string, unknown> | null>(null);
-  const [logs, setLogs] = useState<Array<Record<string, unknown>>>([]);
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [logLevelFilter, setLogLevelFilter] = useState("");
+  const [logRequestIdFilter, setLogRequestIdFilter] = useState("");
   const [streamInput, setStreamInput] = useState("Write a haiku about Rust async.");
   const [streamOutput, setStreamOutput] = useState("");
   const [routerBase, setRouterBase] = useState(ROUTER_BASE_DEFAULT);
@@ -109,9 +125,19 @@ export function App() {
     persistTab(activeTab);
   }, [activeTab]);
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     try {
       setError(null);
+      const logsReq = {
+        limit: 500,
+        level: null,
+        request_id: logRequestIdFilter.trim() || null,
+      };
+      const logsFallbackPath = `/api/logs?${new URLSearchParams(
+        Object.entries(logsReq)
+          .filter(([, value]) => value !== null)
+          .map(([key, value]) => [key, String(value)])
+      ).toString()}`;
       const [providerData, accountData, modelData, configData, logsData] = await Promise.all([
         invokeOrFetch<ProviderStatus[]>("get_provider_status", "/api/providers/status", routerBase).then((v) =>
           Array.isArray(v) ? v : (v as unknown as { providers: ProviderStatus[] }).providers
@@ -121,7 +147,9 @@ export function App() {
           Array.isArray(v) ? v : (v as unknown as { models: ModelView[] }).models
         ),
         invoke<Record<string, unknown>>("get_active_config"),
-        invoke<Record<string, Array<Record<string, unknown>>>>("get_request_logs"),
+        invokeOrFetch<Record<string, LogEntry[]>>("get_request_logs", logsFallbackPath, routerBase, {
+          request: logsReq,
+        }),
       ]);
 
       setProviders(providerData);
@@ -137,7 +165,13 @@ export function App() {
     } catch (e) {
       setError((e as Error).message);
     }
-  };
+  }, [logRequestIdFilter, routerBase]);
+
+  const visibleLogs = useMemo(() => {
+    const minRank = LOG_LEVEL_RANK[logLevelFilter] ?? 0;
+    if (!minRank) return logs;
+    return logs.filter((log) => (LOG_LEVEL_RANK[String(log.level).toUpperCase()] ?? 0) >= minRank);
+  }, [logs, logLevelFilter]);
 
   useEffect(() => {
     void refresh();
@@ -145,7 +179,7 @@ export function App() {
       void refresh();
     }, 5000);
     return () => clearInterval(timer);
-  }, []);
+  }, [refresh]);
 
   const startCopilotLogin = async () => {
     const req = {
@@ -411,7 +445,15 @@ export function App() {
           />
         );
       case "logs":
-        return <LogsPage logs={logs} />;
+        return (
+          <LogsPage
+            logs={visibleLogs}
+            levelFilter={logLevelFilter}
+            requestIdFilter={logRequestIdFilter}
+            setLevelFilter={setLogLevelFilter}
+            setRequestIdFilter={setLogRequestIdFilter}
+          />
+        );
       case "config":
         return <ConfigPage config={config} />;
       case "about":

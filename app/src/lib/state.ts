@@ -14,6 +14,18 @@ export type ModelView = {
   enabled: boolean;
 };
 
+export type LogLevel = "TRACE" | "DEBUG" | "INFO" | "WARN" | "ERROR";
+
+export type LogEntry = {
+  id: string;
+  ts: string;
+  level: LogLevel | string;
+  target: string;
+  message: string;
+  request_id?: string | null;
+  metadata?: Record<string, string>;
+};
+
 export type AccountView = {
   provider: string;
   id: string;

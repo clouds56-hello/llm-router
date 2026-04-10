@@ -225,3 +225,84 @@ pre {
 .error {
   color: #a01717;
 }
+
+.logs-controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.5rem;
+}
+
+.logs-level-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.25rem;
+}
+
+.logs-level-btn {
+  width: auto;
+  margin: 0;
+  padding: 0.3rem 0.5rem;
+  border-radius: 6px;
+}
+
+.logs-level-btn-active {
+  background: #1d6774;
+  border-color: #1d6774;
+  color: #f3fcff;
+}
+
+.logs-clear-btn {
+  width: auto;
+  margin: 0 0 0.35rem 0;
+}
+
+.logs-lines {
+  margin-top: 0.5rem;
+  border: 1px solid #c7dce0;
+  background: #f7fcfd;
+  border-radius: 8px;
+  max-height: 420px;
+  overflow: auto;
+}
+
+.logs-line {
+  width: 100%;
+  cursor: pointer;
+  font-family: "IBM Plex Mono", "JetBrains Mono", monospace;
+  font-size: 0.78rem;
+  padding: 0.3rem 0.5rem;
+  border-bottom: 1px solid #e3eff2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.logs-line:last-child {
+  border-bottom: none;
+}
+
+.logs-meta {
+  padding: 0.35rem 0.7rem 0.55rem;
+  border-bottom: 1px solid #e3eff2;
+  background: #eef7f9;
+  font-family: "IBM Plex Mono", "JetBrains Mono", monospace;
+  font-size: 0.76rem;
+}
+
+.logs-request-link {
+  width: auto;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #1d6774;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.logs-meta-row {
+  line-height: 1.35;
+  word-break: break-word;
+}

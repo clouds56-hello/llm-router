@@ -1,6 +1,7 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use parking_lot::Mutex;
@@ -10,7 +11,7 @@ use tokio::task::JoinHandle;
 
 use crate::auth::copilot::CopilotAuthManager;
 use crate::config::ConfigManager;
-use crate::logging::{InMemoryLogSink, LogSink};
+use crate::logging::{LogCaptureLayer, LogStore};
 use crate::providers::ProviderRegistry;
 use crate::router;
 
@@ -18,29 +19,32 @@ use crate::router;
 pub struct AppState {
   config: ConfigManager,
   providers: ProviderRegistry,
-  logs: InMemoryLogSink,
+  logs: LogStore,
   copilot_auth: CopilotAuthManager,
   router_server: RouterServerManager,
 }
 
 impl AppState {
-  pub async fn new(config_dir: PathBuf) -> Result<Self> {
-    let logs = InMemoryLogSink::new(2_000);
-    let config = ConfigManager::new(config_dir.clone(), logs.clone())?;
+  pub async fn new(config_dir: PathBuf, retention_days: i64) -> Result<Self> {
+    let logs = LogStore::new(&config_dir.join("state.db"), 2_000)?;
+    let retention_days = retention_days.max(1);
+    logs.prune_older_than_days(retention_days)?;
+    logs.start_retention_task(retention_days, Duration::from_secs(60 * 60));
+    let config = ConfigManager::new(config_dir.clone())?;
     let providers = ProviderRegistry::new();
     Self::new_with_registry(config_dir, config, logs, providers).await
   }
 
   pub async fn new_for_tests(config_dir: PathBuf, providers: ProviderRegistry) -> Result<Self> {
-    let logs = InMemoryLogSink::new(2_000);
-    let config = ConfigManager::new(config_dir.clone(), logs.clone())?;
+    let logs = LogStore::new(&config_dir.join("state.db"), 2_000)?;
+    let config = ConfigManager::new(config_dir.clone())?;
     Self::new_with_registry(config_dir, config, logs, providers).await
   }
 
   async fn new_with_registry(
     config_dir: PathBuf,
     config: ConfigManager,
-    logs: InMemoryLogSink,
+    logs: LogStore,
     providers: ProviderRegistry,
   ) -> Result<Self> {
     let copilot_auth = CopilotAuthManager::new(config_dir, config.clone());
@@ -62,12 +66,12 @@ impl AppState {
     &self.providers
   }
 
-  pub fn logs(&self) -> &dyn LogSink {
+  pub fn logs(&self) -> &LogStore {
     &self.logs
   }
 
-  pub fn log_sink(&self) -> &InMemoryLogSink {
-    &self.logs
+  pub fn log_layer(&self) -> LogCaptureLayer {
+    LogCaptureLayer::new(self.logs.clone())
   }
 
   pub fn copilot_auth(&self) -> &CopilotAuthManager {

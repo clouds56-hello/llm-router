@@ -9,6 +9,7 @@ use llm_router_core::auth::copilot::{
   DeviceAuthCompleteRequest, DeviceAuthCompleteResponse, DeviceAuthStartRequest, DeviceAuthStartResponse,
 };
 use llm_router_core::config::{AccountView, ConnectAccountInput, UpdateAccountInput};
+use llm_router_core::logging::LogQuery;
 
 #[tauri::command]
 pub async fn get_provider_status(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec<Value>, String> {
@@ -137,8 +138,27 @@ pub async fn set_model_enabled(
 }
 
 #[tauri::command]
-pub async fn get_request_logs(state: tauri::State<'_, Arc<AppState>>) -> Result<Value, String> {
-  Ok(serde_json::json!({"logs": state.logs().list(500)}))
+pub async fn get_request_logs(
+  state: tauri::State<'_, Arc<AppState>>,
+  request: Option<LogQueryRequest>,
+) -> Result<Value, String> {
+  let request = request.unwrap_or_default();
+  let logs = state
+    .logs()
+    .query(LogQuery {
+      limit: request.limit,
+      level: request.level,
+      request_id: request.request_id,
+    })
+    .map_err(|e| e.to_string())?;
+  Ok(serde_json::json!({ "logs": logs }))
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct LogQueryRequest {
+  pub limit: Option<usize>,
+  pub level: Option<String>,
+  pub request_id: Option<String>,
 }
 
 #[tauri::command]

@@ -24,6 +24,10 @@ Streaming:
 
 Desktop behavior:
 - Tauri process starts and manages the embedded local router (`127.0.0.1:11434` by default).
+- App runtime options are read from `config/config.yaml` (optional):
+  - `default_port`
+  - `log_level_filter`
+  - `retention_days`
 
 Dashboard includes:
 - provider status
@@ -55,6 +59,7 @@ Config system:
   - self-contained obfuscation only (not cryptographic security)
 - hot reload watcher (no restart required)
 - validation + reload errors exposed to API/UI logs
+- request logs are captured via `tracing`, persisted to `state.db`, and queryable by `level` + `request_id`
 
 ## Project layout
 
@@ -62,7 +67,7 @@ Config system:
 - `core/src/providers`: provider trait + adapters
 - `core/src/config`: YAML loading/hot-reload/validation
 - `core/src/auth`: Copilot OAuth device-flow manager
-- `core/src/logging`: pluggable log sink trait + in-memory viewer sink
+- `core/src/logging`: tracing capture layer + SQLite-backed log store (`state.db`)
 - `app/src-tauri/src/tauri_api.rs`: Tauri command bridge for frontend
 - `app/src`: React dashboard
 - `app/src-tauri/config`: default runtime YAML files
@@ -74,6 +79,7 @@ See:
 - `examples/providers.yaml`
 - `examples/models.yaml`
 - `examples/credentials.yaml`
+- `examples/config.yaml`
 
 ## Curl examples
 

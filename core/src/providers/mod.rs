@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -13,6 +14,7 @@ pub mod claude;
 pub mod copilot;
 pub mod deepseek;
 pub mod openai;
+mod upstream_logging;
 
 pub type ProviderStream = Pin<Box<dyn Stream<Item = Result<String, ProviderError>> + Send + 'static>>;
 
@@ -45,6 +47,30 @@ pub enum ProviderError {
   Unsupported(String),
   #[error("internal provider error: {0}")]
   Internal(String),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct UpstreamLogContext {
+  pub provider: String,
+  pub adapter: String,
+  pub upstream_path: String,
+  pub method: &'static str,
+  pub model: Option<String>,
+  pub stream: bool,
+}
+
+impl UpstreamLogContext {
+  pub(crate) fn started(&self, body: &Value) -> Instant {
+    upstream_logging::log_started(self, body)
+  }
+
+  pub(crate) fn completed(&self, started: Instant, status: u16) {
+    upstream_logging::log_completed(self, started, status)
+  }
+
+  pub(crate) fn failed(&self, started: Instant, status: Option<u16>, snippet: Option<&str>) {
+    upstream_logging::log_failed(self, started, status, snippet)
+  }
 }
 
 #[async_trait]

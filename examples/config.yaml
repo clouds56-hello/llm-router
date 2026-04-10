@@ -1,0 +1,3 @@
+default_port: 11434
+log_level_filter: info
+retention_days: 7

@@ -7,8 +7,6 @@ use notify::{Config as NotifyConfig, EventKind, RecommendedWatcher, RecursiveMod
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
-use crate::logging::InMemoryLogSink;
-
 const ENC2_PREFIX: &str = "enc2:";
 const ENC2_VERSION: &str = "v1";
 const ENC2_ALGO: &str = "xor";
@@ -356,18 +354,16 @@ pub struct ConfigManager {
   current: Arc<RwLock<LoadedConfig>>,
   last_error: Arc<RwLock<Option<String>>>,
   watcher: Arc<RwLock<Option<RecommendedWatcher>>>,
-  logger: InMemoryLogSink,
 }
 
 impl ConfigManager {
-  pub fn new(config_dir: PathBuf, logger: InMemoryLogSink) -> Result<Self> {
+  pub fn new(config_dir: PathBuf) -> Result<Self> {
     let loaded = Self::load_from_dir(&config_dir)?;
     Ok(Self {
       config_dir,
       current: Arc::new(RwLock::new(loaded)),
       last_error: Arc::new(RwLock::new(None)),
       watcher: Arc::new(RwLock::new(None)),
-      logger,
     })
   }
 
@@ -384,13 +380,13 @@ impl ConfigManager {
       Ok(cfg) => {
         *self.current.write() = cfg;
         *self.last_error.write() = None;
-        self.logger.info("config", "reloaded YAML config");
+        tracing::info!(target: "config", "reloaded YAML config");
         Ok(())
       }
       Err(err) => {
         let msg = err.to_string();
         *self.last_error.write() = Some(msg.clone());
-        self.logger.error("config", format!("reload failed: {msg}"));
+        tracing::error!(target: "config", error = %msg, "reload failed");
         Err(err)
       }
     }
@@ -398,14 +394,21 @@ impl ConfigManager {
 
   pub fn start_hot_reload(&self) -> Result<()> {
     let this = self.clone();
-    let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-      if let Ok(event) = res {
+    let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| match res {
+      Ok(event) => {
+        let touches_config_yaml = event.paths.iter().any(|path| is_tracked_config_path(path));
+        if !touches_config_yaml {
+          return;
+        }
         match event.kind {
           EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => {
             let _ = this.reload();
           }
           _ => {}
         }
+      }
+      Err(err) => {
+        tracing::warn!(target: "config", error = %err, "watch event error");
       }
     })
     .context("failed to create config watcher")?;
@@ -440,19 +443,18 @@ impl ConfigManager {
 
     *self.current.write() = loaded;
     *self.last_error.write() = None;
-    self
-      .logger
-      .info("config", format!("updated providers.yaml: provider '{}' enabled={enabled}", provider));
+    tracing::info!(
+      target: "config",
+      provider = provider,
+      enabled = enabled,
+      "updated providers.yaml"
+    );
     Ok(())
   }
 
   pub fn set_model_enabled(&self, openai_name: &str, enabled: bool) -> Result<()> {
     let mut loaded = self.current.read().clone();
-    let exists = loaded
-      .models
-      .models
-      .iter()
-      .any(|m| m.openai_name == openai_name);
+    let exists = loaded.models.models.iter().any(|m| m.openai_name == openai_name);
     if !exists {
       anyhow::bail!("model '{}' not found", openai_name);
     }
@@ -470,9 +472,12 @@ impl ConfigManager {
 
     *self.current.write() = loaded;
     *self.last_error.write() = None;
-    self
-      .logger
-      .info("config", format!("updated models.yaml: model '{}' enabled={enabled}", openai_name));
+    tracing::info!(
+      target: "config",
+      model = openai_name,
+      enabled = enabled,
+      "updated models.yaml"
+    );
     Ok(())
   }
 
@@ -684,9 +689,16 @@ impl ConfigManager {
 
     *self.current.write() = loaded;
     *self.last_error.write() = None;
-    self.logger.info("config", "updated credentials.yaml");
+    tracing::info!(target: "config", "updated credentials.yaml");
     Ok(())
   }
+}
+
+fn is_tracked_config_path(path: &Path) -> bool {
+  let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+    return false;
+  };
+  matches!(name, "providers.yaml" | "models.yaml" | "credentials.yaml")
 }
 
 fn write_yaml_atomic<T: Serialize>(path: PathBuf, value: &T) -> Result<()> {
@@ -863,8 +875,7 @@ mod tests {
     )
     .unwrap();
 
-    let logger = InMemoryLogSink::new(100);
-    let manager = ConfigManager::new(tmp.path().to_path_buf(), logger).unwrap();
+    let manager = ConfigManager::new(tmp.path().to_path_buf()).unwrap();
     let loaded = manager.get();
     let account = &loaded.credentials.providers["openai"].accounts[0];
     assert_eq!(account.auth_type.as_deref(), Some("bearer"));
@@ -896,8 +907,7 @@ mod tests {
     )
     .unwrap();
 
-    let logger = InMemoryLogSink::new(100);
-    let err = match ConfigManager::new(tmp.path().to_path_buf(), logger) {
+    let err = match ConfigManager::new(tmp.path().to_path_buf()) {
       Ok(_) => panic!("expected invalid enc2 to fail"),
       Err(err) => err,
     };
@@ -919,8 +929,7 @@ mod tests {
     .unwrap();
     std::fs::write(tmp.path().join("credentials.yaml"), "providers: {}\n").unwrap();
 
-    let logger = InMemoryLogSink::new(100);
-    let manager = ConfigManager::new(tmp.path().to_path_buf(), logger).unwrap();
+    let manager = ConfigManager::new(tmp.path().to_path_buf()).unwrap();
 
     manager
       .connect_account(ConnectAccountInput {

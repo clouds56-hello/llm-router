@@ -1,19 +1,24 @@
 use std::convert::Infallible;
 use std::sync::Arc;
 
-use axum::extract::State;
-use axum::http::{HeaderMap, StatusCode};
+use axum::extract::{Query, State};
+use axum::http::{HeaderMap, Request, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
+use axum::{middleware, middleware::Next};
 use axum::{Json, Router};
 use futures::StreamExt;
+use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio_stream::wrappers::ReceiverStream;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
+use tracing::Instrument;
+use uuid::Uuid;
 
 use crate::app_state::AppState;
+use crate::logging::LogQuery;
 use crate::providers::{ProviderError, ProviderStream};
 
 pub fn build_router(state: Arc<AppState>) -> Router {
@@ -26,6 +31,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
     .route("/api/config", get(active_config))
     .route("/api/logs", get(request_logs))
     .with_state(state)
+    .layer(middleware::from_fn(with_request_span))
     .layer(CorsLayer::permissive())
     .layer(TraceLayer::new_for_http())
 }
@@ -69,8 +75,26 @@ async fn active_config(State(state): State<Arc<AppState>>) -> Json<Value> {
   }))
 }
 
-async fn request_logs(State(state): State<Arc<AppState>>) -> Json<Value> {
-  Json(json!({ "logs": state.logs().list(200) }))
+#[derive(Debug, Deserialize)]
+struct RequestLogsQuery {
+  limit: Option<usize>,
+  level: Option<String>,
+  request_id: Option<String>,
+}
+
+async fn request_logs(State(state): State<Arc<AppState>>, Query(query): Query<RequestLogsQuery>) -> Response {
+  let filter = LogQuery {
+    limit: query.limit,
+    level: query.level,
+    request_id: query.request_id,
+  };
+  match state.logs().query(filter) {
+    Ok(logs) => Json(json!({ "logs": logs })).into_response(),
+    Err(err) => json_error(
+      StatusCode::INTERNAL_SERVER_ERROR,
+      &format!("failed to query logs: {err}"),
+    ),
+  }
 }
 
 async fn chat_completions(
@@ -92,22 +116,21 @@ async fn chat_completions(
   let stream_requested = body.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
 
   let account_override = account_override_from_headers(&headers);
-  let (adapter, provider_cfg, creds) = match state
-    .providers()
-    .adapter_for_provider(&loaded, route, account_override.as_deref())
-  {
-    Ok(v) => v,
-    Err(err) => return json_error(StatusCode::BAD_REQUEST, &err.to_string()),
-  };
+  let (adapter, provider_cfg, creds) =
+    match state
+      .providers()
+      .adapter_for_provider(&loaded, route, account_override.as_deref())
+    {
+      Ok(v) => v,
+      Err(err) => return json_error(StatusCode::BAD_REQUEST, &err.to_string()),
+    };
 
-  state.log_sink().info(
-    "router",
-    format!(
-      "chat request model={} provider={} adapter={}",
-      route.openai_name,
-      route.provider,
-      adapter.name(),
-    ),
+  tracing::info!(
+    target: "router",
+    model = route.openai_name,
+    provider = route.provider,
+    adapter = adapter.name(),
+    "chat request"
   );
 
   let caps = adapter.capabilities(route);
@@ -168,11 +191,7 @@ async fn chat_completions(
   )
 }
 
-async fn responses(
-  State(state): State<Arc<AppState>>,
-  headers: HeaderMap,
-  Json(mut body): Json<Value>,
-) -> Response {
+async fn responses(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(mut body): Json<Value>) -> Response {
   let loaded = state.config().get();
   let model_name = body.get("model").and_then(|v| v.as_str()).unwrap_or_default();
 
@@ -187,22 +206,21 @@ async fn responses(
   let stream_requested = body.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
 
   let account_override = account_override_from_headers(&headers);
-  let (adapter, provider_cfg, creds) = match state
-    .providers()
-    .adapter_for_provider(&loaded, route, account_override.as_deref())
-  {
-    Ok(v) => v,
-    Err(err) => return json_error(StatusCode::BAD_REQUEST, &err.to_string()),
-  };
+  let (adapter, provider_cfg, creds) =
+    match state
+      .providers()
+      .adapter_for_provider(&loaded, route, account_override.as_deref())
+    {
+      Ok(v) => v,
+      Err(err) => return json_error(StatusCode::BAD_REQUEST, &err.to_string()),
+    };
 
-  state.log_sink().info(
-    "router",
-    format!(
-      "responses request model={} provider={} adapter={}",
-      route.openai_name,
-      route.provider,
-      adapter.name(),
-    ),
+  tracing::info!(
+    target: "router",
+    model = route.openai_name,
+    provider = route.provider,
+    adapter = adapter.name(),
+    "responses request"
   );
 
   let caps = adapter.capabilities(route);
@@ -600,6 +618,28 @@ fn provider_error_response(err: ProviderError) -> Response {
     ProviderError::Unsupported(msg) => json_error(StatusCode::NOT_IMPLEMENTED, &msg),
     ProviderError::Http(msg) | ProviderError::Internal(msg) => json_error(StatusCode::BAD_GATEWAY, &msg),
   }
+}
+
+async fn with_request_span(request: Request<axum::body::Body>, next: Next) -> Response {
+  let request_id = Uuid::new_v4().to_string();
+  let method = request.method().to_string();
+  let path = request.uri().path().to_string();
+
+  let span = tracing::info_span!(
+    "http.request",
+    request_id = %request_id,
+    method = %method,
+    path = %path
+  );
+
+  async move {
+    tracing::info!(target: "router", "request started");
+    let response = next.run(request).await;
+    tracing::info!(target: "router", status = response.status().as_u16(), "request completed");
+    response
+  }
+  .instrument(span)
+  .await
 }
 
 fn json_error(status: StatusCode, message: &str) -> Response {
