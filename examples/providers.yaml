@@ -20,3 +20,7 @@ providers:
     provider_type: github-copilot
     base_url: https://api.githubcopilot.com
     enabled: false
+    headers:
+      Editor-Version: vscode/1.85.1
+      Editor-Plugin-Version: copilot/1.155.0
+      User-Agent: GithubCopilot/1.155.0

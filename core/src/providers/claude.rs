@@ -7,6 +7,7 @@ use serde_json::{json, Map, Value};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
+use super::openai_compatible;
 use super::{ProviderAdapter, ProviderCapabilities, ProviderError, ProviderStream, UpstreamLogContext};
 use crate::config::{ModelRoute, ProviderCredential, ProviderDefinition};
 
@@ -23,7 +24,7 @@ impl ClaudeAdapter {
     }
   }
 
-  fn headers(&self, creds: Option<&ProviderCredential>) -> Result<HeaderMap, ProviderError> {
+  fn headers(&self, config: &ProviderDefinition, creds: Option<&ProviderCredential>) -> Result<HeaderMap, ProviderError> {
     let mut headers = HeaderMap::new();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     headers.insert(
@@ -34,6 +35,7 @@ impl ClaudeAdapter {
       let value = HeaderValue::from_str(&token).map_err(|e| ProviderError::Internal(e.to_string()))?;
       headers.insert(HeaderName::from_static("x-api-key"), value);
     }
+    openai_compatible::apply_config_headers(&mut headers, &config.headers);
     Ok(headers)
   }
 
@@ -107,7 +109,7 @@ impl ClaudeAdapter {
     let res = self
       .client
       .post(format!("{}/v1/messages", config.base_url))
-      .headers(self.headers(creds)?)
+      .headers(self.headers(config, creds)?)
       .json(&body)
       .send()
       .await
@@ -150,7 +152,7 @@ impl ClaudeAdapter {
     let res = self
       .client
       .post(format!("{}/v1/messages", config.base_url))
-      .headers(self.headers(creds)?)
+      .headers(self.headers(config, creds)?)
       .json(&body)
       .send()
       .await
@@ -592,6 +594,7 @@ mod tests {
       provider_type: "claude".to_string(),
       base_url: base_url.to_string(),
       enabled: true,
+      headers: HashMap::new(),
       metadata: HashMap::new(),
     }
   }

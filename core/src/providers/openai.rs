@@ -1,11 +1,9 @@
 use async_trait::async_trait;
-use futures::StreamExt;
-use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
-use serde_json::{json, Value};
-use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
+use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
+use serde_json::Value;
 
 use super::{ProviderAdapter, ProviderCapabilities, ProviderError, ProviderStream, UpstreamLogContext};
+use super::openai_compatible::{self, HttpErrorFormat};
 use crate::config::{ModelRoute, ProviderCredential, ProviderDefinition};
 
 #[derive(Default)]
@@ -20,96 +18,16 @@ impl OpenAiAdapter {
     }
   }
 
-  fn build_auth(&self, req: reqwest::RequestBuilder, creds: Option<&ProviderCredential>) -> reqwest::RequestBuilder {
+  fn headers(&self, config: &ProviderDefinition, creds: Option<&ProviderCredential>) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     if let Some(token) = creds.and_then(|c| c.api_key.clone()) {
-      req.header(AUTHORIZATION, format!("Bearer {token}"))
-    } else {
-      req
+      if let Ok(header_val) = HeaderValue::from_str(&format!("Bearer {token}")) {
+        headers.insert(AUTHORIZATION, header_val);
+      }
     }
-  }
-
-  fn with_model(route: &ModelRoute, mut body: Value) -> Value {
-    if let Some(obj) = body.as_object_mut() {
-      obj.insert("model".to_string(), Value::String(route.provider_model.clone()));
-      return body;
-    }
-
-    json!({
-        "model": route.provider_model,
-        "input": body
-    })
-  }
-
-  async fn post_json(
-    &self,
-    log_ctx: UpstreamLogContext,
-    url: String,
-    creds: Option<&ProviderCredential>,
-    body: Value,
-  ) -> Result<Value, ProviderError> {
-    let started = log_ctx.started(&body);
-    let req = self
-      .client
-      .post(url)
-      .header(CONTENT_TYPE, "application/json")
-      .json(&body);
-
-    let res = self.build_auth(req, creds).send().await.map_err(|e| {
-      log_ctx.failed(started, None, Some(&e.to_string()));
-      ProviderError::Http(e.to_string())
-    })?;
-
-    let status = res.status();
-    if status.as_u16() == 401 {
-      log_ctx.failed(started, Some(401), Some("unauthorized"));
-      return Err(ProviderError::Unauthorized);
-    }
-
-    if !status.is_success() {
-      let details = res.text().await.unwrap_or_default();
-      log_ctx.failed(started, Some(status.as_u16()), Some(&details));
-      return Err(ProviderError::Http(format!("upstream returned status {status}")));
-    }
-
-    let parsed = res.json::<Value>().await.map_err(|e| {
-      log_ctx.failed(started, Some(status.as_u16()), Some(&e.to_string()));
-      ProviderError::Http(e.to_string())
-    })?;
-    log_ctx.completed(started, status.as_u16());
-    Ok(parsed)
-  }
-
-  async fn post_stream(
-    &self,
-    log_ctx: UpstreamLogContext,
-    url: String,
-    creds: Option<&ProviderCredential>,
-    body: Value,
-  ) -> Result<ProviderStream, ProviderError> {
-    let started = log_ctx.started(&body);
-    let req = self
-      .client
-      .post(url)
-      .header(CONTENT_TYPE, "application/json")
-      .json(&body);
-    let res = self.build_auth(req, creds).send().await.map_err(|e| {
-      log_ctx.failed(started, None, Some(&e.to_string()));
-      ProviderError::Http(e.to_string())
-    })?;
-
-    let status = res.status();
-    if status.as_u16() == 401 {
-      log_ctx.failed(started, Some(401), Some("unauthorized"));
-      return Err(ProviderError::Unauthorized);
-    }
-    if !status.is_success() {
-      let details = res.text().await.unwrap_or_default();
-      log_ctx.failed(started, Some(status.as_u16()), Some(&details));
-      return Err(ProviderError::Http(format!("upstream returned status {status}")));
-    }
-
-    log_ctx.completed(started, status.as_u16());
-    Ok(normalize_sse_stream(res))
+    openai_compatible::apply_config_headers(&mut headers, &config.headers);
+    headers
   }
 }
 
@@ -130,7 +48,7 @@ impl ProviderAdapter for OpenAiAdapter {
     route: &ModelRoute,
     request_body: Value,
   ) -> Result<Value, ProviderError> {
-    let body = Self::with_model(route, request_body);
+    let body = openai_compatible::with_model(route, request_body);
     let ctx = UpstreamLogContext {
       provider: route.provider.clone(),
       adapter: self.name().to_string(),
@@ -139,9 +57,15 @@ impl ProviderAdapter for OpenAiAdapter {
       model: body.get("model").and_then(|v| v.as_str()).map(str::to_string),
       stream: false,
     };
-    self
-      .post_json(ctx, format!("{}/v1/chat/completions", config.base_url), creds, body)
-      .await
+    openai_compatible::post_json(
+      &self.client,
+      ctx,
+      format!("{}/v1/chat/completions", config.base_url),
+      self.headers(config, creds),
+      body,
+      HttpErrorFormat::StatusOnly,
+    )
+    .await
   }
 
   async fn responses(
@@ -151,7 +75,7 @@ impl ProviderAdapter for OpenAiAdapter {
     route: &ModelRoute,
     request_body: Value,
   ) -> Result<Value, ProviderError> {
-    let body = Self::with_model(route, request_body);
+    let body = openai_compatible::with_model(route, request_body);
     let ctx = UpstreamLogContext {
       provider: route.provider.clone(),
       adapter: self.name().to_string(),
@@ -160,9 +84,15 @@ impl ProviderAdapter for OpenAiAdapter {
       model: body.get("model").and_then(|v| v.as_str()).map(str::to_string),
       stream: false,
     };
-    self
-      .post_json(ctx, format!("{}/v1/responses", config.base_url), creds, body)
-      .await
+    openai_compatible::post_json(
+      &self.client,
+      ctx,
+      format!("{}/v1/responses", config.base_url),
+      self.headers(config, creds),
+      body,
+      HttpErrorFormat::StatusOnly,
+    )
+    .await
   }
 
   async fn stream_chat_completion(
@@ -172,10 +102,7 @@ impl ProviderAdapter for OpenAiAdapter {
     route: &ModelRoute,
     request_body: Value,
   ) -> Result<ProviderStream, ProviderError> {
-    let mut body = Self::with_model(route, request_body);
-    if let Some(obj) = body.as_object_mut() {
-      obj.insert("stream".to_string(), Value::Bool(true));
-    }
+    let body = openai_compatible::with_stream(openai_compatible::with_model(route, request_body));
     let ctx = UpstreamLogContext {
       provider: route.provider.clone(),
       adapter: self.name().to_string(),
@@ -184,10 +111,14 @@ impl ProviderAdapter for OpenAiAdapter {
       model: body.get("model").and_then(|v| v.as_str()).map(str::to_string),
       stream: true,
     };
-
-    self
-      .post_stream(ctx, format!("{}/v1/chat/completions", config.base_url), creds, body)
-      .await
+    openai_compatible::post_stream(
+      &self.client,
+      ctx,
+      format!("{}/v1/chat/completions", config.base_url),
+      self.headers(config, creds),
+      body,
+    )
+    .await
   }
 
   async fn stream_responses(
@@ -197,10 +128,7 @@ impl ProviderAdapter for OpenAiAdapter {
     route: &ModelRoute,
     request_body: Value,
   ) -> Result<ProviderStream, ProviderError> {
-    let mut body = Self::with_model(route, request_body);
-    if let Some(obj) = body.as_object_mut() {
-      obj.insert("stream".to_string(), Value::Bool(true));
-    }
+    let body = openai_compatible::with_stream(openai_compatible::with_model(route, request_body));
     let ctx = UpstreamLogContext {
       provider: route.provider.clone(),
       adapter: self.name().to_string(),
@@ -209,70 +137,14 @@ impl ProviderAdapter for OpenAiAdapter {
       model: body.get("model").and_then(|v| v.as_str()).map(str::to_string),
       stream: true,
     };
-    self
-      .post_stream(ctx, format!("{}/v1/responses", config.base_url), creds, body)
-      .await
-  }
-}
-
-fn normalize_sse_stream(res: reqwest::Response) -> ProviderStream {
-  let (tx, rx) = mpsc::channel::<Result<String, ProviderError>>(32);
-  tokio::spawn(async move {
-    let mut upstream = res.bytes_stream();
-    let mut buffer = String::new();
-    while let Some(chunk) = upstream.next().await {
-      let bytes = match chunk {
-        Ok(bytes) => bytes,
-        Err(err) => {
-          let _ = tx.send(Err(ProviderError::Http(err.to_string()))).await;
-          break;
-        }
-      };
-      let chunk_str = match String::from_utf8(bytes.to_vec()) {
-        Ok(v) => v,
-        Err(err) => {
-          let _ = tx.send(Err(ProviderError::Internal(err.to_string()))).await;
-          break;
-        }
-      };
-      buffer.push_str(&chunk_str);
-      while let Some(idx) = buffer.find("\n\n") {
-        let frame = buffer[..idx].to_string();
-        buffer = buffer[idx + 2..].to_string();
-        for payload in parse_sse_frame_payloads(&frame) {
-          if tx.send(Ok(payload)).await.is_err() {
-            return;
-          }
-        }
-      }
-    }
-    if !buffer.trim().is_empty() {
-      for payload in parse_sse_frame_payloads(&buffer) {
-        if tx.send(Ok(payload)).await.is_err() {
-          return;
-        }
-      }
-    }
-  });
-  Box::pin(ReceiverStream::new(rx))
-}
-
-fn parse_sse_frame_payloads(frame: &str) -> Vec<String> {
-  let mut data_lines: Vec<String> = Vec::new();
-  for raw in frame.lines() {
-    let line = raw.trim_end_matches('\r');
-    if let Some(data) = line.strip_prefix("data:") {
-      data_lines.push(data.trim_start().to_string());
-    }
-  }
-  if data_lines.is_empty() {
-    return Vec::new();
-  }
-  let payload = data_lines.join("\n").trim().to_string();
-  if payload.is_empty() {
-    Vec::new()
-  } else {
-    vec![payload]
+    openai_compatible::post_stream(
+      &self.client,
+      ctx,
+      format!("{}/v1/responses", config.base_url),
+      self.headers(config, creds),
+      body,
+    )
+    .await
   }
 }
 
@@ -288,6 +160,7 @@ mod tests {
   use axum::routing::post;
   use axum::Router;
   use futures::StreamExt;
+  use reqwest::header::HeaderName;
   use tokio::sync::oneshot;
   use tracing::Instrument;
   use tracing_subscriber::layer::SubscriberExt;
@@ -341,8 +214,28 @@ mod tests {
       provider_type: "openai".to_string(),
       base_url: base_url.to_string(),
       enabled: true,
+      headers: HashMap::new(),
       metadata: HashMap::new(),
     }
+  }
+
+  #[test]
+  fn config_headers_can_override_and_remove() {
+    let adapter = OpenAiAdapter::new();
+    let mut config = provider_def("http://unused");
+    config
+      .headers
+      .insert("Authorization".to_string(), Some("Bearer override".to_string()));
+    config.headers.insert("Content-Type".to_string(), None);
+
+    let headers = adapter.headers(&config, None);
+    assert_eq!(
+      headers
+        .get(HeaderName::from_static("authorization"))
+        .and_then(|v| v.to_str().ok()),
+      Some("Bearer override")
+    );
+    assert!(headers.get(HeaderName::from_static("content-type")).is_none());
   }
 
   #[tokio::test]

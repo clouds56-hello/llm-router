@@ -5,11 +5,15 @@ use super::openai::OpenAiAdapter;
 use super::{ProviderAdapter, ProviderCapabilities, ProviderError, ProviderStream};
 use crate::config::{ModelRoute, ProviderCredential, ProviderDefinition};
 
-pub struct DeepSeekAdapter;
+pub struct DeepSeekAdapter {
+  inner: OpenAiAdapter,
+}
 
 impl DeepSeekAdapter {
   pub fn new() -> Self {
-    Self
+    Self {
+      inner: OpenAiAdapter::new(),
+    }
   }
 }
 
@@ -35,7 +39,8 @@ impl ProviderAdapter for DeepSeekAdapter {
     route: &ModelRoute,
     request_body: Value,
   ) -> Result<Value, ProviderError> {
-    OpenAiAdapter::new()
+    self
+      .inner
       .chat_completion(config, creds, route, request_body)
       .await
   }
@@ -60,7 +65,8 @@ impl ProviderAdapter for DeepSeekAdapter {
     route: &ModelRoute,
     request_body: Value,
   ) -> Result<ProviderStream, ProviderError> {
-    OpenAiAdapter::new()
+    self
+      .inner
       .stream_chat_completion(config, creds, route, request_body)
       .await
   }

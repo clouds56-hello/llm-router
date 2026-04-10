@@ -23,6 +23,8 @@ pub struct ProviderDefinition {
   #[serde(default = "default_true")]
   pub enabled: bool,
   #[serde(default)]
+  pub headers: HashMap<String, Option<String>>,
+  #[serde(default)]
   pub metadata: HashMap<String, String>,
 }
 

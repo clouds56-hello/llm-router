@@ -13,6 +13,7 @@ use crate::config::{LoadedConfig, ModelRoute, ProviderCredential, ProviderDefini
 pub mod claude;
 pub mod copilot;
 pub mod deepseek;
+mod openai_compatible;
 pub mod openai;
 mod upstream_logging;
 
