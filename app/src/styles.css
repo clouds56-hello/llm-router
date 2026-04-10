@@ -24,6 +24,33 @@ body {
   margin-bottom: 1rem;
 }
 
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.tab {
+  width: auto;
+  margin: 0;
+  padding: 0.45rem 0.8rem;
+  background: #eef7f9;
+  border: 1px solid #a8c8ce;
+  color: #123034;
+  cursor: pointer;
+}
+
+.tab:hover {
+  background: #e3f2f5;
+}
+
+.tab-active {
+  background: #1d6774;
+  border-color: #1d6774;
+  color: #f3fcff;
+}
+
 .grid {
   display: grid;
   gap: 1rem;
@@ -107,6 +134,64 @@ button {
   padding: 0.75rem;
   margin-bottom: 0.75rem;
   background: #f8fcfd;
+}
+
+.accounts-head {
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+}
+
+.provider-head {
+  justify-content: space-between;
+}
+
+.provider-head h3 {
+  margin: 0;
+}
+
+.add-account-btn {
+  width: auto;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 22, 26, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 1rem;
+}
+
+.modal-card {
+  width: min(560px, 100%);
+  max-height: 90vh;
+  overflow: auto;
+  background: #fafdfe;
+  border: 1px solid #9bbcc2;
+  border-radius: 12px;
+  padding: 0.85rem;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+}
+
+.modal-header h3 {
+  margin: 0;
+}
+
+.modal-close {
+  width: auto;
+  margin: 0;
+}
+
+.undo-row {
+  border-style: dashed;
 }
 
 .badge {

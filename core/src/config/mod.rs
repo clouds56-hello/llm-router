@@ -233,7 +233,10 @@ impl CredentialsFile {
 
   pub fn list_accounts(&self) -> Vec<AccountView> {
     let mut out = Vec::new();
-    for (provider, provider_cfg) in &self.providers {
+    let mut providers = self.providers.iter().collect::<Vec<_>>();
+    providers.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+    for (provider, provider_cfg) in providers {
       for account in &provider_cfg.accounts {
         let mut secret_keys = account.secrets.keys().cloned().collect::<Vec<_>>();
         secret_keys.sort();
@@ -392,7 +395,7 @@ impl ConfigManager {
 
     let mut secrets = HashMap::new();
     for (k, v) in input.secrets {
-      secrets.insert(k, encode_inline_secret(&v));
+      secrets.insert(k, maybe_encode_secret(&v));
     }
 
     let mut updated_existing = false;
@@ -514,7 +517,7 @@ impl ConfigManager {
 
     if let Some(secrets) = input.set_secrets {
       for (k, v) in secrets {
-        account.secrets.insert(k, encode_inline_secret(&v));
+        account.secrets.insert(k, maybe_encode_secret(&v));
       }
     }
 
@@ -595,6 +598,14 @@ fn write_yaml_atomic<T: Serialize>(path: PathBuf, value: &T) -> Result<()> {
   std::fs::write(&tmp, bytes).with_context(|| format!("failed writing {}", tmp.display()))?;
   std::fs::rename(&tmp, &path).with_context(|| format!("failed replacing {}", path.display()))?;
   Ok(())
+}
+
+fn maybe_encode_secret(value: &str) -> String {
+  if value.starts_with(ENC2_PREFIX) {
+    value.to_string()
+  } else {
+    encode_inline_secret(value)
+  }
 }
 
 fn read_yaml<T: for<'de> Deserialize<'de>>(path: PathBuf) -> Result<T> {

@@ -139,10 +139,11 @@ impl ProviderRegistry {
   }
 
   pub fn provider_status(&self, loaded: &LoadedConfig) -> Vec<serde_json::Value> {
-    loaded
-      .providers
-      .providers
-      .iter()
+    let mut items = loaded.providers.providers.iter().collect::<Vec<_>>();
+    items.sort_by(|(name_a, _), (name_b, _)| name_a.cmp(name_b));
+
+    items
+      .into_iter()
       .map(|(name, provider)| {
         serde_json::json!({
             "name": name,
