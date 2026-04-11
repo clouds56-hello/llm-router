@@ -19,6 +19,17 @@ mod upstream_logging;
 
 pub type ProviderStream = Pin<Box<dyn Stream<Item = Result<String, ProviderError>> + Send + 'static>>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderOperation {
+  ChatCompletions,
+  Responses,
+}
+
+pub struct ProviderStreamResponse {
+  pub stream: ProviderStream,
+  pub upstream_status: u16,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct ProviderCapabilities {
   pub chat_completion: bool,
@@ -40,14 +51,51 @@ impl ProviderCapabilities {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProviderError {
-  #[error("http error: {0}")]
-  Http(String),
+  #[error("http error: {message}")]
+  Http { message: String, status_code: Option<u16> },
   #[error("unauthorized")]
-  Unauthorized,
+  Unauthorized { status_code: u16 },
   #[error("unsupported provider behavior: {0}")]
   Unsupported(String),
-  #[error("internal provider error: {0}")]
-  Internal(String),
+  #[error("internal provider error: {message}")]
+  Internal { message: String, status_code: Option<u16> },
+}
+
+impl ProviderError {
+  pub fn http(message: impl Into<String>) -> Self {
+    Self::Http {
+      message: message.into(),
+      status_code: None,
+    }
+  }
+
+  pub fn http_with_status(message: impl Into<String>, status_code: u16) -> Self {
+    Self::Http {
+      message: message.into(),
+      status_code: Some(status_code),
+    }
+  }
+
+  pub fn internal(message: impl Into<String>) -> Self {
+    Self::Internal {
+      message: message.into(),
+      status_code: None,
+    }
+  }
+
+  pub fn status_code(&self) -> Option<u16> {
+    match self {
+      ProviderError::Http { status_code, .. } | ProviderError::Internal { status_code, .. } => *status_code,
+      ProviderError::Unauthorized { status_code } => Some(*status_code),
+      ProviderError::Unsupported(_) => None,
+    }
+  }
+}
+
+pub(crate) fn join_upstream_url(base: &str, path: &str) -> String {
+  let left = base.trim_end_matches('/');
+  let right = path.trim_start_matches('/');
+  format!("{left}/{right}")
 }
 
 #[derive(Debug, Clone)]
@@ -78,6 +126,7 @@ impl UpstreamLogContext {
 pub trait ProviderAdapter: Send + Sync {
   fn name(&self) -> &'static str;
   fn capabilities(&self, route: &ModelRoute) -> ProviderCapabilities;
+  fn upstream_path(&self, operation: ProviderOperation, stream: bool) -> &'static str;
 
   async fn chat_completion(
     &self,
@@ -101,7 +150,7 @@ pub trait ProviderAdapter: Send + Sync {
     creds: Option<&ProviderCredential>,
     route: &ModelRoute,
     request_body: Value,
-  ) -> Result<ProviderStream, ProviderError>;
+  ) -> Result<ProviderStreamResponse, ProviderError>;
 
   async fn stream_responses(
     &self,
@@ -109,7 +158,7 @@ pub trait ProviderAdapter: Send + Sync {
     creds: Option<&ProviderCredential>,
     route: &ModelRoute,
     request_body: Value,
-  ) -> Result<ProviderStream, ProviderError>;
+  ) -> Result<ProviderStreamResponse, ProviderError>;
 }
 
 #[derive(Clone)]

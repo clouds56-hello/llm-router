@@ -3,7 +3,10 @@ use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use serde_json::Value;
 
 use super::openai_compatible::{self, HttpErrorFormat};
-use super::{ProviderAdapter, ProviderCapabilities, ProviderError, ProviderStream, UpstreamLogContext};
+use super::{
+  join_upstream_url, ProviderAdapter, ProviderCapabilities, ProviderError, ProviderOperation, ProviderStreamResponse,
+  UpstreamLogContext,
+};
 use crate::config::{ModelRoute, ProviderCredential, ProviderDefinition};
 
 #[derive(Default)]
@@ -41,6 +44,13 @@ impl ProviderAdapter for OpenAiAdapter {
     ProviderCapabilities::all()
   }
 
+  fn upstream_path(&self, operation: ProviderOperation, _stream: bool) -> &'static str {
+    match operation {
+      ProviderOperation::ChatCompletions => "/v1/chat/completions",
+      ProviderOperation::Responses => "/v1/responses",
+    }
+  }
+
   async fn chat_completion(
     &self,
     config: &ProviderDefinition,
@@ -49,10 +59,11 @@ impl ProviderAdapter for OpenAiAdapter {
     request_body: Value,
   ) -> Result<Value, ProviderError> {
     let body = openai_compatible::with_model(route, request_body);
+    let upstream_path = self.upstream_path(ProviderOperation::ChatCompletions, false);
     let ctx = UpstreamLogContext {
       provider: route.provider.clone(),
       adapter: self.name().to_string(),
-      upstream_path: "/v1/chat/completions".to_string(),
+      upstream_path: upstream_path.to_string(),
       method: "POST",
       model: body.get("model").and_then(|v| v.as_str()).map(str::to_string),
       stream: false,
@@ -60,7 +71,7 @@ impl ProviderAdapter for OpenAiAdapter {
     openai_compatible::post_json(
       &self.client,
       ctx,
-      format!("{}/v1/chat/completions", config.base_url),
+      join_upstream_url(&config.base_url, upstream_path),
       self.headers(config, creds),
       body,
       HttpErrorFormat::StatusOnly,
@@ -76,10 +87,11 @@ impl ProviderAdapter for OpenAiAdapter {
     request_body: Value,
   ) -> Result<Value, ProviderError> {
     let body = openai_compatible::with_model(route, request_body);
+    let upstream_path = self.upstream_path(ProviderOperation::Responses, false);
     let ctx = UpstreamLogContext {
       provider: route.provider.clone(),
       adapter: self.name().to_string(),
-      upstream_path: "/v1/responses".to_string(),
+      upstream_path: upstream_path.to_string(),
       method: "POST",
       model: body.get("model").and_then(|v| v.as_str()).map(str::to_string),
       stream: false,
@@ -87,7 +99,7 @@ impl ProviderAdapter for OpenAiAdapter {
     openai_compatible::post_json(
       &self.client,
       ctx,
-      format!("{}/v1/responses", config.base_url),
+      join_upstream_url(&config.base_url, upstream_path),
       self.headers(config, creds),
       body,
       HttpErrorFormat::StatusOnly,
@@ -101,12 +113,13 @@ impl ProviderAdapter for OpenAiAdapter {
     creds: Option<&ProviderCredential>,
     route: &ModelRoute,
     request_body: Value,
-  ) -> Result<ProviderStream, ProviderError> {
+  ) -> Result<ProviderStreamResponse, ProviderError> {
     let body = openai_compatible::with_stream(openai_compatible::with_model(route, request_body));
+    let upstream_path = self.upstream_path(ProviderOperation::ChatCompletions, true);
     let ctx = UpstreamLogContext {
       provider: route.provider.clone(),
       adapter: self.name().to_string(),
-      upstream_path: "/v1/chat/completions".to_string(),
+      upstream_path: upstream_path.to_string(),
       method: "POST",
       model: body.get("model").and_then(|v| v.as_str()).map(str::to_string),
       stream: true,
@@ -114,7 +127,7 @@ impl ProviderAdapter for OpenAiAdapter {
     openai_compatible::post_stream(
       &self.client,
       ctx,
-      format!("{}/v1/chat/completions", config.base_url),
+      join_upstream_url(&config.base_url, upstream_path),
       self.headers(config, creds),
       body,
     )
@@ -127,12 +140,13 @@ impl ProviderAdapter for OpenAiAdapter {
     creds: Option<&ProviderCredential>,
     route: &ModelRoute,
     request_body: Value,
-  ) -> Result<ProviderStream, ProviderError> {
+  ) -> Result<ProviderStreamResponse, ProviderError> {
     let body = openai_compatible::with_stream(openai_compatible::with_model(route, request_body));
+    let upstream_path = self.upstream_path(ProviderOperation::Responses, true);
     let ctx = UpstreamLogContext {
       provider: route.provider.clone(),
       adapter: self.name().to_string(),
-      upstream_path: "/v1/responses".to_string(),
+      upstream_path: upstream_path.to_string(),
       method: "POST",
       model: body.get("model").and_then(|v| v.as_str()).map(str::to_string),
       stream: true,
@@ -140,7 +154,7 @@ impl ProviderAdapter for OpenAiAdapter {
     openai_compatible::post_stream(
       &self.client,
       ctx,
-      format!("{}/v1/responses", config.base_url),
+      join_upstream_url(&config.base_url, upstream_path),
       self.headers(config, creds),
       body,
     )
@@ -361,7 +375,7 @@ mod tests {
         )
         .await
         .expect("stream ok");
-      let _ = stream.next().await;
+      let _ = stream.stream.next().await;
     }
     .instrument(span)
     .await;

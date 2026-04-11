@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
-use super::{ProviderError, ProviderStream, UpstreamLogContext};
+use super::{ProviderError, ProviderStream, ProviderStreamResponse, UpstreamLogContext};
 use crate::config::ModelRoute;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,27 +74,31 @@ pub(crate) async fn post_json(
     .await
     .map_err(|e| {
       log_ctx.failed(started, None, Some(&e.to_string()));
-      ProviderError::Http(e.to_string())
+      ProviderError::http(e.to_string())
     })?;
 
   let status = res.status();
   if status.as_u16() == 401 {
-    log_ctx.failed(started, Some(401), Some("unauthorized"));
-    return Err(ProviderError::Unauthorized);
+    let details = res.text().await.unwrap_or_else(|_| "unauthorized".to_string());
+    log_ctx.failed(started, Some(401), Some(&details));
+    return Err(ProviderError::Unauthorized { status_code: 401 });
   }
 
   if !status.is_success() {
     let details = res.text().await.unwrap_or_default();
     log_ctx.failed(started, Some(status.as_u16()), Some(&details));
-    return Err(ProviderError::Http(match error_format {
-      HttpErrorFormat::StatusOnly => format!("upstream returned status {status}"),
-      HttpErrorFormat::StatusAndBody => format!("upstream returned status {status}: {details}"),
-    }));
+    return Err(ProviderError::http_with_status(
+      match error_format {
+        HttpErrorFormat::StatusOnly => format!("upstream returned status {status}"),
+        HttpErrorFormat::StatusAndBody => format!("upstream returned status {status}: {details}"),
+      },
+      status.as_u16(),
+    ));
   }
 
   let parsed = res.json::<Value>().await.map_err(|e| {
     log_ctx.failed(started, Some(status.as_u16()), Some(&e.to_string()));
-    ProviderError::Http(e.to_string())
+    ProviderError::http_with_status(e.to_string(), status.as_u16())
   })?;
   log_ctx.completed(started, status.as_u16());
   Ok(parsed)
@@ -106,7 +110,7 @@ pub(crate) async fn post_stream(
   url: String,
   headers: HeaderMap,
   body: Value,
-) -> Result<ProviderStream, ProviderError> {
+) -> Result<ProviderStreamResponse, ProviderError> {
   let started = log_ctx.started(&body);
   let res = client
     .post(url)
@@ -116,22 +120,28 @@ pub(crate) async fn post_stream(
     .await
     .map_err(|e| {
       log_ctx.failed(started, None, Some(&e.to_string()));
-      ProviderError::Http(e.to_string())
+      ProviderError::http(e.to_string())
     })?;
 
   let status = res.status();
   if status.as_u16() == 401 {
     log_ctx.failed(started, Some(401), Some("unauthorized"));
-    return Err(ProviderError::Unauthorized);
+    return Err(ProviderError::Unauthorized { status_code: 401 });
   }
   if !status.is_success() {
     let details = res.text().await.unwrap_or_default();
     log_ctx.failed(started, Some(status.as_u16()), Some(&details));
-    return Err(ProviderError::Http(format!("upstream returned status {status}")));
+    return Err(ProviderError::http_with_status(
+      format!("upstream returned status {status}"),
+      status.as_u16(),
+    ));
   }
 
   log_ctx.completed(started, status.as_u16());
-  Ok(normalize_openai_sse(res))
+  Ok(ProviderStreamResponse {
+    stream: normalize_openai_sse(res),
+    upstream_status: status.as_u16(),
+  })
 }
 
 pub(crate) fn normalize_openai_sse(res: reqwest::Response) -> ProviderStream {
@@ -143,14 +153,14 @@ pub(crate) fn normalize_openai_sse(res: reqwest::Response) -> ProviderStream {
       let bytes = match chunk {
         Ok(bytes) => bytes,
         Err(err) => {
-          let _ = tx.send(Err(ProviderError::Http(err.to_string()))).await;
+          let _ = tx.send(Err(ProviderError::http(err.to_string()))).await;
           break;
         }
       };
       let chunk_str = match String::from_utf8(bytes.to_vec()) {
         Ok(v) => v,
         Err(err) => {
-          let _ = tx.send(Err(ProviderError::Internal(err.to_string()))).await;
+          let _ = tx.send(Err(ProviderError::internal(err.to_string()))).await;
           break;
         }
       };
@@ -299,7 +309,7 @@ mod tests {
     )
     .await
     .expect_err("expected unauthorized");
-    assert!(matches!(err, ProviderError::Unauthorized));
+    assert!(matches!(err, ProviderError::Unauthorized { .. }));
     let _ = shutdown.send(());
   }
 }

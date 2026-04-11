@@ -18,7 +18,7 @@ use crate::db::{
 };
 use crate::providers::{ProviderError, ProviderStream};
 
-use super::StreamPersistence;
+use super::{StreamPersistence, StreamResponseKind};
 
 pub(super) fn account_override_from_headers(headers: &HeaderMap) -> Option<String> {
   headers
@@ -222,6 +222,7 @@ pub(super) fn sse_response(provider_stream: ProviderStream, persistence: Option<
     futures::pin_mut!(provider_stream);
     let mut sse_capture = String::new();
     let mut assistant_text = String::new();
+    let mut stream_id = None::<String>;
     let mut usage = TokenUsage::default();
     let mut saw_stream_error = None::<String>;
     let mut client_disconnected = false;
@@ -229,6 +230,9 @@ pub(super) fn sse_response(provider_stream: ProviderStream, persistence: Option<
     while let Some(item) = provider_stream.next().await {
       let event = match item {
         Ok(chunk) => {
+          if let Some(id) = extract_stream_id(&chunk) {
+            stream_id = Some(id);
+          }
           if let Some(next) = extract_usage_from_chunk(&chunk) {
             usage = next;
           }
@@ -264,7 +268,7 @@ pub(super) fn sse_response(provider_stream: ProviderStream, persistence: Option<
         persist_request_failed(
           &p.state,
           &p.request_id,
-          infer_status_from_text(&err),
+          p.upstream_status,
           &err,
           Some(sse_capture),
           p.started_at,
@@ -279,11 +283,18 @@ pub(super) fn sse_response(provider_stream: ProviderStream, persistence: Option<
           p.started_at,
         );
       } else {
+        let final_payload = synthesize_stream_result(
+          p.response_kind,
+          p.model.as_str(),
+          stream_id.as_deref(),
+          assistant_text.as_str(),
+          &usage,
+        );
         persist_request_completed(
           &p.state,
           &p.request_id,
-          Some(StatusCode::OK.as_u16()),
-          None,
+          p.upstream_status.or(Some(StatusCode::OK.as_u16())),
+          Some(&final_payload),
           Some(sse_capture),
           usage.clone(),
           p.started_at,
@@ -310,9 +321,11 @@ pub(super) fn sse_response(provider_stream: ProviderStream, persistence: Option<
 
 pub(super) fn provider_error_response(err: ProviderError) -> Response {
   match err {
-    ProviderError::Unauthorized => json_error(StatusCode::UNAUTHORIZED, "unauthorized"),
+    ProviderError::Unauthorized { .. } => json_error(StatusCode::UNAUTHORIZED, "unauthorized"),
     ProviderError::Unsupported(msg) => json_error(StatusCode::NOT_IMPLEMENTED, &msg),
-    ProviderError::Http(msg) | ProviderError::Internal(msg) => json_error(StatusCode::BAD_GATEWAY, &msg),
+    ProviderError::Http { message, .. } | ProviderError::Internal { message, .. } => {
+      json_error(StatusCode::BAD_GATEWAY, &message)
+    }
   }
 }
 
@@ -446,23 +459,63 @@ fn assistant_message_from_response_payload(payload: &Value) -> Option<(String, S
 
 fn provider_error_status(err: &ProviderError) -> Option<u16> {
   match err {
-    ProviderError::Unauthorized => Some(StatusCode::UNAUTHORIZED.as_u16()),
     ProviderError::Unsupported(_) => Some(StatusCode::NOT_IMPLEMENTED.as_u16()),
-    ProviderError::Http(msg) | ProviderError::Internal(msg) => infer_status_from_text(msg),
+    _ => err.status_code(),
   }
 }
 
-fn infer_status_from_text(text: &str) -> Option<u16> {
-  for token in text.split(|c: char| !c.is_ascii_digit()) {
-    if token.len() == 3 {
-      if let Ok(code) = token.parse::<u16>() {
-        if (100..=599).contains(&code) {
-          return Some(code);
-        }
+fn extract_stream_id(chunk: &str) -> Option<String> {
+  let parsed: Value = serde_json::from_str(chunk).ok()?;
+  parsed
+    .get("id")
+    .or_else(|| parsed.get("response").and_then(|v| v.get("id")))
+    .and_then(Value::as_str)
+    .map(ToString::to_string)
+}
+
+fn synthesize_stream_result(
+  response_kind: StreamResponseKind,
+  model: &str,
+  stream_id: Option<&str>,
+  assistant_text: &str,
+  usage: &TokenUsage,
+) -> Value {
+  let usage_chat = json!({
+    "prompt_tokens": usage.prompt_tokens,
+    "completion_tokens": usage.completion_tokens,
+    "total_tokens": usage.total_tokens
+  });
+  match response_kind {
+    StreamResponseKind::ChatCompletions => json!({
+      "id": stream_id.unwrap_or("chatcmpl-stream"),
+      "object": "chat.completion",
+      "created": 0,
+      "model": model,
+      "choices": [{
+        "index": 0,
+        "message": {"role":"assistant","content": assistant_text},
+        "finish_reason": "stop"
+      }],
+      "usage": usage_chat
+    }),
+    StreamResponseKind::Responses => json!({
+      "id": stream_id.unwrap_or("resp-stream"),
+      "object": "response",
+      "status": "completed",
+      "model": model,
+      "output": [{
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type":"output_text","text": assistant_text}]
+      }],
+      "output_text": assistant_text,
+      "usage": {
+        "input_tokens": usage.prompt_tokens,
+        "output_tokens": usage.completion_tokens,
+        "total_tokens": usage.total_tokens
       }
-    }
+    }),
   }
-  None
 }
 
 fn response_to_text(response: &Value) -> String {

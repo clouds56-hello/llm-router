@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use super::openai::OpenAiAdapter;
-use super::{ProviderAdapter, ProviderCapabilities, ProviderError, ProviderStream};
+use super::{ProviderAdapter, ProviderCapabilities, ProviderError, ProviderOperation, ProviderStreamResponse};
 use crate::config::{ModelRoute, ProviderCredential, ProviderDefinition};
 
 pub struct DeepSeekAdapter {
@@ -29,6 +29,13 @@ impl ProviderAdapter for DeepSeekAdapter {
       responses: false,
       stream_chat_completion: true,
       stream_responses: false,
+    }
+  }
+
+  fn upstream_path(&self, operation: ProviderOperation, _stream: bool) -> &'static str {
+    match operation {
+      ProviderOperation::ChatCompletions => "/v1/chat/completions",
+      ProviderOperation::Responses => "/v1/responses",
     }
   }
 
@@ -61,7 +68,7 @@ impl ProviderAdapter for DeepSeekAdapter {
     creds: Option<&ProviderCredential>,
     route: &ModelRoute,
     request_body: Value,
-  ) -> Result<ProviderStream, ProviderError> {
+  ) -> Result<ProviderStreamResponse, ProviderError> {
     self
       .inner
       .stream_chat_completion(config, creds, route, request_body)
@@ -74,7 +81,7 @@ impl ProviderAdapter for DeepSeekAdapter {
     creds: Option<&ProviderCredential>,
     route: &ModelRoute,
     request_body: Value,
-  ) -> Result<ProviderStream, ProviderError> {
+  ) -> Result<ProviderStreamResponse, ProviderError> {
     let _ = (config, creds, route, request_body);
     Err(ProviderError::Unsupported(
       "deepseek upstream does not support responses streaming".to_string(),

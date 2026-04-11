@@ -9,14 +9,14 @@ use serde_json::{json, Value};
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::app_state::AppState;
-use crate::providers::{ProviderError, ProviderStream};
+use crate::providers::{ProviderError, ProviderOperation, ProviderStream};
 
 use super::helpers::{
   account_override_from_headers, apply_usage, extract_usage, join_url, json_error,
   persist_assistant_message_from_response_payload, persist_chat_history, persist_provider_error,
   persist_request_completed, persist_request_failed, persist_request_started, provider_error_response, sse_response,
 };
-use super::{RequestContext, StreamPersistence};
+use super::{RequestContext, StreamPersistence, StreamResponseKind};
 
 pub(super) async fn handle(
   State(state): State<Arc<AppState>>,
@@ -60,21 +60,22 @@ pub(super) async fn handle(
   );
 
   let caps = adapter.capabilities(route);
-  let upstream_path = if stream_requested {
+  let upstream_operation = if stream_requested {
     if caps.stream_responses {
-      "/v1/responses"
+      ProviderOperation::Responses
     } else if caps.stream_chat_completion {
-      "/v1/chat/completions"
+      ProviderOperation::ChatCompletions
     } else {
-      "/v1/responses"
+      ProviderOperation::Responses
     }
   } else if caps.responses {
-    "/v1/responses"
+    ProviderOperation::Responses
   } else if caps.chat_completion {
-    "/v1/chat/completions"
+    ProviderOperation::ChatCompletions
   } else {
-    "/v1/responses"
+    ProviderOperation::Responses
   };
+  let upstream_path = adapter.upstream_path(upstream_operation, stream_requested);
   let upstream_endpoint = join_url(&provider_cfg.base_url, upstream_path);
   persist_request_started(
     &state,
@@ -102,13 +103,15 @@ pub(super) async fn handle(
         .await
       {
         Ok(provider_stream) => sse_response(
-          provider_stream,
+          provider_stream.stream,
           Some(StreamPersistence {
             state: Arc::clone(&state),
             request_id: ctx.request_id.clone(),
             provider: route.provider.clone(),
             account_id: effective_account_id.clone(),
             model: route.openai_name.clone(),
+            upstream_status: Some(provider_stream.upstream_status),
+            response_kind: StreamResponseKind::Responses,
             started_at: ctx.started_at,
           }),
         ),
@@ -125,13 +128,15 @@ pub(super) async fn handle(
         .await
       {
         Ok(provider_stream) => sse_response(
-          convert_chat_stream_to_response_stream(provider_stream),
+          convert_chat_stream_to_response_stream(provider_stream.stream),
           Some(StreamPersistence {
             state: Arc::clone(&state),
             request_id: ctx.request_id.clone(),
             provider: route.provider.clone(),
             account_id: effective_account_id.clone(),
             model: route.openai_name.clone(),
+            upstream_status: Some(provider_stream.upstream_status),
+            response_kind: StreamResponseKind::Responses,
             started_at: ctx.started_at,
           }),
         ),

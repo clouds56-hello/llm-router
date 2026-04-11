@@ -8,7 +8,10 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
 use super::openai_compatible;
-use super::{ProviderAdapter, ProviderCapabilities, ProviderError, ProviderStream, UpstreamLogContext};
+use super::{
+  join_upstream_url, ProviderAdapter, ProviderCapabilities, ProviderError, ProviderOperation, ProviderStream,
+  ProviderStreamResponse, UpstreamLogContext,
+};
 use crate::config::{ModelRoute, ProviderCredential, ProviderDefinition};
 
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -36,7 +39,7 @@ impl ClaudeAdapter {
       HeaderValue::from_static(ANTHROPIC_VERSION),
     );
     if let Some(token) = creds.and_then(|c| c.api_key.clone()) {
-      let value = HeaderValue::from_str(&token).map_err(|e| ProviderError::Internal(e.to_string()))?;
+      let value = HeaderValue::from_str(&token).map_err(|e| ProviderError::internal(e.to_string()))?;
       headers.insert(HeaderName::from_static("x-api-key"), value);
     }
     openai_compatible::apply_config_headers(&mut headers, &config.headers);
@@ -110,34 +113,36 @@ impl ClaudeAdapter {
     body: Value,
   ) -> Result<Value, ProviderError> {
     let started = log_ctx.started(&body);
+    let path = self.upstream_path(ProviderOperation::Responses, false);
     let res = self
       .client
-      .post(format!("{}/v1/messages", config.base_url))
+      .post(join_upstream_url(&config.base_url, path))
       .headers(self.headers(config, creds)?)
       .json(&body)
       .send()
       .await
       .map_err(|e| {
         log_ctx.failed(started, None, Some(&e.to_string()));
-        ProviderError::Http(e.to_string())
+        ProviderError::http(e.to_string())
       })?;
 
     let status = res.status();
     if status.as_u16() == 401 {
       log_ctx.failed(started, Some(401), Some("unauthorized"));
-      return Err(ProviderError::Unauthorized);
+      return Err(ProviderError::Unauthorized { status_code: 401 });
     }
     if !status.is_success() {
       let details = res.text().await.unwrap_or_default();
       log_ctx.failed(started, Some(status.as_u16()), Some(&details));
-      return Err(ProviderError::Http(format!(
-        "upstream returned status {status}: {details}"
-      )));
+      return Err(ProviderError::http_with_status(
+        format!("upstream returned status {status}: {details}"),
+        status.as_u16(),
+      ));
     }
 
     let parsed = res.json::<Value>().await.map_err(|e| {
       log_ctx.failed(started, Some(status.as_u16()), Some(&e.to_string()));
-      ProviderError::Http(e.to_string())
+      ProviderError::http_with_status(e.to_string(), status.as_u16())
     })?;
     log_ctx.completed(started, status.as_u16());
     Ok(parsed)
@@ -151,33 +156,40 @@ impl ClaudeAdapter {
     body: Value,
     mode: StreamMode,
     route: ModelRoute,
-  ) -> Result<ProviderStream, ProviderError> {
+  ) -> Result<ProviderStreamResponse, ProviderError> {
     let started = log_ctx.started(&body);
+    let path = self.upstream_path(ProviderOperation::Responses, true);
     let res = self
       .client
-      .post(format!("{}/v1/messages", config.base_url))
+      .post(join_upstream_url(&config.base_url, path))
       .headers(self.headers(config, creds)?)
       .json(&body)
       .send()
       .await
       .map_err(|e| {
         log_ctx.failed(started, None, Some(&e.to_string()));
-        ProviderError::Http(e.to_string())
+        ProviderError::http(e.to_string())
       })?;
 
     let status = res.status();
     if status.as_u16() == 401 {
       log_ctx.failed(started, Some(401), Some("unauthorized"));
-      return Err(ProviderError::Unauthorized);
+      return Err(ProviderError::Unauthorized { status_code: 401 });
     }
     if !status.is_success() {
       let details = res.text().await.unwrap_or_default();
       log_ctx.failed(started, Some(status.as_u16()), Some(&details));
-      return Err(ProviderError::Http(format!("upstream returned status {status}")));
+      return Err(ProviderError::http_with_status(
+        format!("upstream returned status {status}"),
+        status.as_u16(),
+      ));
     }
 
     log_ctx.completed(started, status.as_u16());
-    Ok(normalize_anthropic_sse(res, mode, route))
+    Ok(ProviderStreamResponse {
+      stream: normalize_anthropic_sse(res, mode, route),
+      upstream_status: status.as_u16(),
+    })
   }
 }
 
@@ -189,6 +201,10 @@ impl ProviderAdapter for ClaudeAdapter {
 
   fn capabilities(&self, _route: &ModelRoute) -> ProviderCapabilities {
     ProviderCapabilities::all()
+  }
+
+  fn upstream_path(&self, _operation: ProviderOperation, _stream: bool) -> &'static str {
+    "/v1/messages"
   }
 
   async fn chat_completion(
@@ -237,7 +253,7 @@ impl ProviderAdapter for ClaudeAdapter {
     creds: Option<&ProviderCredential>,
     route: &ModelRoute,
     request_body: Value,
-  ) -> Result<ProviderStream, ProviderError> {
+  ) -> Result<ProviderStreamResponse, ProviderError> {
     let anthropic_req = Self::to_anthropic_request(route, request_body, true);
     let ctx = UpstreamLogContext {
       provider: route.provider.clone(),
@@ -258,7 +274,7 @@ impl ProviderAdapter for ClaudeAdapter {
     creds: Option<&ProviderCredential>,
     route: &ModelRoute,
     request_body: Value,
-  ) -> Result<ProviderStream, ProviderError> {
+  ) -> Result<ProviderStreamResponse, ProviderError> {
     let anthropic_req = Self::to_anthropic_request(route, request_body, true);
     let ctx = UpstreamLogContext {
       provider: route.provider.clone(),
@@ -391,14 +407,14 @@ fn normalize_anthropic_sse(res: reqwest::Response, mode: StreamMode, route: Mode
       let bytes = match chunk {
         Ok(v) => v,
         Err(err) => {
-          let _ = tx.send(Err(ProviderError::Http(err.to_string()))).await;
+          let _ = tx.send(Err(ProviderError::http(err.to_string()))).await;
           break;
         }
       };
       let part = match String::from_utf8(bytes.to_vec()) {
         Ok(v) => v,
         Err(err) => {
-          let _ = tx.send(Err(ProviderError::Internal(err.to_string()))).await;
+          let _ = tx.send(Err(ProviderError::internal(err.to_string()))).await;
           break;
         }
       };
@@ -442,7 +458,7 @@ fn convert_anthropic_frame(frame: &str, mode: StreamMode, route: &ModelRoute) ->
   if payload == "[DONE]" {
     return Ok(vec!["[DONE]".to_string()]);
   }
-  let value: Value = serde_json::from_str(&payload).map_err(|e| ProviderError::Internal(e.to_string()))?;
+  let value: Value = serde_json::from_str(&payload).map_err(|e| ProviderError::internal(e.to_string()))?;
   let event = event_name
     .or_else(|| value.get("type").and_then(|v| v.as_str()).map(|s| s.to_string()))
     .unwrap_or_default();

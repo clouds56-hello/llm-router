@@ -24,6 +24,12 @@ pub(super) struct RequestContext {
   started_at: Instant,
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum StreamResponseKind {
+  ChatCompletions,
+  Responses,
+}
+
 #[derive(Clone)]
 pub(super) struct StreamPersistence {
   state: Arc<AppState>,
@@ -31,6 +37,8 @@ pub(super) struct StreamPersistence {
   provider: String,
   account_id: Option<String>,
   model: String,
+  upstream_status: Option<u16>,
+  response_kind: StreamResponseKind,
   started_at: Instant,
 }
 
@@ -83,20 +91,34 @@ mod tests {
 
   use std::collections::HashMap;
   use std::path::Path;
+  use std::path::PathBuf;
   use std::sync::Arc;
 
   use async_trait::async_trait;
   use axum::http::StatusCode;
   use futures::stream;
   use http_body_util::BodyExt;
+  use rusqlite::Connection;
   use serde_json::{json, Value};
   use tower::ServiceExt;
 
   use crate::config::{ModelRoute, ProviderCredential, ProviderDefinition};
-  use crate::providers::{ProviderAdapter, ProviderCapabilities, ProviderRegistry, ProviderStream};
+  use crate::providers::{
+    ProviderAdapter, ProviderCapabilities, ProviderOperation, ProviderRegistry, ProviderStreamResponse,
+  };
 
   struct MockAdapter;
   struct ChatOnlyAdapter;
+  struct CopilotPathAdapter;
+  struct StreamSuccessAdapter;
+  struct StreamFailStatusAdapter;
+  struct StreamUnauthorizedAdapter;
+
+  struct TestHarness {
+    _dir: tempfile::TempDir,
+    db_path: PathBuf,
+    app: Router,
+  }
 
   #[async_trait]
   impl ProviderAdapter for MockAdapter {
@@ -106,6 +128,13 @@ mod tests {
 
     fn capabilities(&self, _route: &ModelRoute) -> ProviderCapabilities {
       ProviderCapabilities::all()
+    }
+
+    fn upstream_path(&self, operation: ProviderOperation, _stream: bool) -> &'static str {
+      match operation {
+        ProviderOperation::ChatCompletions => "/v1/chat/completions",
+        ProviderOperation::Responses => "/v1/responses",
+      }
     }
 
     async fn chat_completion(
@@ -134,9 +163,12 @@ mod tests {
       _creds: Option<&ProviderCredential>,
       _route: &ModelRoute,
       _request_body: Value,
-    ) -> Result<ProviderStream, crate::providers::ProviderError> {
+    ) -> Result<ProviderStreamResponse, crate::providers::ProviderError> {
       let s = stream::iter(vec![Ok("data: {\"id\":\"chunk-1\"}\n\n".to_string())]);
-      Ok(Box::pin(s))
+      Ok(ProviderStreamResponse {
+        stream: Box::pin(s),
+        upstream_status: 200,
+      })
     }
 
     async fn stream_responses(
@@ -145,12 +177,15 @@ mod tests {
       _creds: Option<&ProviderCredential>,
       _route: &ModelRoute,
       _request_body: Value,
-    ) -> Result<ProviderStream, crate::providers::ProviderError> {
+    ) -> Result<ProviderStreamResponse, crate::providers::ProviderError> {
       let s = stream::iter(vec![
         Ok("{\"id\":\"resp-chunk-1\"}".to_string()),
         Ok("[DONE]".to_string()),
       ]);
-      Ok(Box::pin(s))
+      Ok(ProviderStreamResponse {
+        stream: Box::pin(s),
+        upstream_status: 200,
+      })
     }
   }
 
@@ -166,6 +201,13 @@ mod tests {
         responses: false,
         stream_chat_completion: true,
         stream_responses: false,
+      }
+    }
+
+    fn upstream_path(&self, operation: ProviderOperation, _stream: bool) -> &'static str {
+      match operation {
+        ProviderOperation::ChatCompletions => "/v1/chat/completions",
+        ProviderOperation::Responses => "/v1/responses",
       }
     }
 
@@ -201,7 +243,7 @@ mod tests {
       _creds: Option<&ProviderCredential>,
       _route: &ModelRoute,
       _request_body: Value,
-    ) -> Result<ProviderStream, crate::providers::ProviderError> {
+    ) -> Result<ProviderStreamResponse, crate::providers::ProviderError> {
       let s = stream::iter(vec![
         Ok(
           json!({
@@ -213,7 +255,10 @@ mod tests {
         ),
         Ok("[DONE]".to_string()),
       ]);
-      Ok(Box::pin(s))
+      Ok(ProviderStreamResponse {
+        stream: Box::pin(s),
+        upstream_status: 200,
+      })
     }
 
     async fn stream_responses(
@@ -222,7 +267,301 @@ mod tests {
       _creds: Option<&ProviderCredential>,
       _route: &ModelRoute,
       _request_body: Value,
-    ) -> Result<ProviderStream, crate::providers::ProviderError> {
+    ) -> Result<ProviderStreamResponse, crate::providers::ProviderError> {
+      Err(crate::providers::ProviderError::Unsupported(
+        "streaming responses unsupported".to_string(),
+      ))
+    }
+  }
+
+  #[async_trait]
+  impl ProviderAdapter for CopilotPathAdapter {
+    fn name(&self) -> &'static str {
+      "copilot-path"
+    }
+
+    fn capabilities(&self, _route: &ModelRoute) -> ProviderCapabilities {
+      ProviderCapabilities {
+        chat_completion: true,
+        responses: false,
+        stream_chat_completion: false,
+        stream_responses: false,
+      }
+    }
+
+    fn upstream_path(&self, operation: ProviderOperation, _stream: bool) -> &'static str {
+      match operation {
+        ProviderOperation::ChatCompletions => "/chat/completions",
+        ProviderOperation::Responses => "/v1/responses",
+      }
+    }
+
+    async fn chat_completion(
+      &self,
+      _config: &ProviderDefinition,
+      _creds: Option<&ProviderCredential>,
+      _route: &ModelRoute,
+      _request_body: Value,
+    ) -> Result<Value, crate::providers::ProviderError> {
+      Ok(json!({"id":"chat_123","object":"chat.completion"}))
+    }
+
+    async fn responses(
+      &self,
+      _config: &ProviderDefinition,
+      _creds: Option<&ProviderCredential>,
+      _route: &ModelRoute,
+      _request_body: Value,
+    ) -> Result<Value, crate::providers::ProviderError> {
+      Err(crate::providers::ProviderError::Unsupported(
+        "responses unsupported".to_string(),
+      ))
+    }
+
+    async fn stream_chat_completion(
+      &self,
+      _config: &ProviderDefinition,
+      _creds: Option<&ProviderCredential>,
+      _route: &ModelRoute,
+      _request_body: Value,
+    ) -> Result<ProviderStreamResponse, crate::providers::ProviderError> {
+      Err(crate::providers::ProviderError::Unsupported(
+        "streaming unsupported".to_string(),
+      ))
+    }
+
+    async fn stream_responses(
+      &self,
+      _config: &ProviderDefinition,
+      _creds: Option<&ProviderCredential>,
+      _route: &ModelRoute,
+      _request_body: Value,
+    ) -> Result<ProviderStreamResponse, crate::providers::ProviderError> {
+      Err(crate::providers::ProviderError::Unsupported(
+        "streaming unsupported".to_string(),
+      ))
+    }
+  }
+
+  #[async_trait]
+  impl ProviderAdapter for StreamSuccessAdapter {
+    fn name(&self) -> &'static str {
+      "stream-success"
+    }
+
+    fn capabilities(&self, _route: &ModelRoute) -> ProviderCapabilities {
+      ProviderCapabilities {
+        chat_completion: false,
+        responses: false,
+        stream_chat_completion: true,
+        stream_responses: false,
+      }
+    }
+
+    fn upstream_path(&self, operation: ProviderOperation, _stream: bool) -> &'static str {
+      match operation {
+        ProviderOperation::ChatCompletions => "/v1/chat/completions",
+        ProviderOperation::Responses => "/v1/responses",
+      }
+    }
+
+    async fn chat_completion(
+      &self,
+      _config: &ProviderDefinition,
+      _creds: Option<&ProviderCredential>,
+      _route: &ModelRoute,
+      _request_body: Value,
+    ) -> Result<Value, crate::providers::ProviderError> {
+      Err(crate::providers::ProviderError::Unsupported(
+        "chat unsupported".to_string(),
+      ))
+    }
+
+    async fn responses(
+      &self,
+      _config: &ProviderDefinition,
+      _creds: Option<&ProviderCredential>,
+      _route: &ModelRoute,
+      _request_body: Value,
+    ) -> Result<Value, crate::providers::ProviderError> {
+      Err(crate::providers::ProviderError::Unsupported(
+        "responses unsupported".to_string(),
+      ))
+    }
+
+    async fn stream_chat_completion(
+      &self,
+      _config: &ProviderDefinition,
+      _creds: Option<&ProviderCredential>,
+      _route: &ModelRoute,
+      _request_body: Value,
+    ) -> Result<ProviderStreamResponse, crate::providers::ProviderError> {
+      let s = stream::iter(vec![
+        Ok(
+          json!({
+            "id":"chatcmpl_stream",
+            "object":"chat.completion.chunk",
+            "choices":[{"index":0,"delta":{"content":"hello"},"finish_reason":Value::Null}]
+          })
+          .to_string(),
+        ),
+        Ok(json!({"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}).to_string()),
+        Ok("[DONE]".to_string()),
+      ]);
+      Ok(ProviderStreamResponse {
+        stream: Box::pin(s),
+        upstream_status: 207,
+      })
+    }
+
+    async fn stream_responses(
+      &self,
+      _config: &ProviderDefinition,
+      _creds: Option<&ProviderCredential>,
+      _route: &ModelRoute,
+      _request_body: Value,
+    ) -> Result<ProviderStreamResponse, crate::providers::ProviderError> {
+      Err(crate::providers::ProviderError::Unsupported(
+        "streaming responses unsupported".to_string(),
+      ))
+    }
+  }
+
+  #[async_trait]
+  impl ProviderAdapter for StreamFailStatusAdapter {
+    fn name(&self) -> &'static str {
+      "stream-fail-status"
+    }
+
+    fn capabilities(&self, _route: &ModelRoute) -> ProviderCapabilities {
+      ProviderCapabilities {
+        chat_completion: false,
+        responses: false,
+        stream_chat_completion: true,
+        stream_responses: false,
+      }
+    }
+
+    fn upstream_path(&self, operation: ProviderOperation, _stream: bool) -> &'static str {
+      match operation {
+        ProviderOperation::ChatCompletions => "/v1/chat/completions",
+        ProviderOperation::Responses => "/v1/responses",
+      }
+    }
+
+    async fn chat_completion(
+      &self,
+      _config: &ProviderDefinition,
+      _creds: Option<&ProviderCredential>,
+      _route: &ModelRoute,
+      _request_body: Value,
+    ) -> Result<Value, crate::providers::ProviderError> {
+      Err(crate::providers::ProviderError::Unsupported(
+        "chat unsupported".to_string(),
+      ))
+    }
+
+    async fn responses(
+      &self,
+      _config: &ProviderDefinition,
+      _creds: Option<&ProviderCredential>,
+      _route: &ModelRoute,
+      _request_body: Value,
+    ) -> Result<Value, crate::providers::ProviderError> {
+      Err(crate::providers::ProviderError::Unsupported(
+        "responses unsupported".to_string(),
+      ))
+    }
+
+    async fn stream_chat_completion(
+      &self,
+      _config: &ProviderDefinition,
+      _creds: Option<&ProviderCredential>,
+      _route: &ModelRoute,
+      _request_body: Value,
+    ) -> Result<ProviderStreamResponse, crate::providers::ProviderError> {
+      Err(crate::providers::ProviderError::http_with_status(
+        "upstream returned status 429",
+        429,
+      ))
+    }
+
+    async fn stream_responses(
+      &self,
+      _config: &ProviderDefinition,
+      _creds: Option<&ProviderCredential>,
+      _route: &ModelRoute,
+      _request_body: Value,
+    ) -> Result<ProviderStreamResponse, crate::providers::ProviderError> {
+      Err(crate::providers::ProviderError::Unsupported(
+        "streaming responses unsupported".to_string(),
+      ))
+    }
+  }
+
+  #[async_trait]
+  impl ProviderAdapter for StreamUnauthorizedAdapter {
+    fn name(&self) -> &'static str {
+      "stream-unauthorized"
+    }
+
+    fn capabilities(&self, _route: &ModelRoute) -> ProviderCapabilities {
+      ProviderCapabilities {
+        chat_completion: false,
+        responses: false,
+        stream_chat_completion: true,
+        stream_responses: false,
+      }
+    }
+
+    fn upstream_path(&self, operation: ProviderOperation, _stream: bool) -> &'static str {
+      match operation {
+        ProviderOperation::ChatCompletions => "/v1/chat/completions",
+        ProviderOperation::Responses => "/v1/responses",
+      }
+    }
+
+    async fn chat_completion(
+      &self,
+      _config: &ProviderDefinition,
+      _creds: Option<&ProviderCredential>,
+      _route: &ModelRoute,
+      _request_body: Value,
+    ) -> Result<Value, crate::providers::ProviderError> {
+      Err(crate::providers::ProviderError::Unsupported(
+        "chat unsupported".to_string(),
+      ))
+    }
+
+    async fn responses(
+      &self,
+      _config: &ProviderDefinition,
+      _creds: Option<&ProviderCredential>,
+      _route: &ModelRoute,
+      _request_body: Value,
+    ) -> Result<Value, crate::providers::ProviderError> {
+      Err(crate::providers::ProviderError::Unsupported(
+        "responses unsupported".to_string(),
+      ))
+    }
+
+    async fn stream_chat_completion(
+      &self,
+      _config: &ProviderDefinition,
+      _creds: Option<&ProviderCredential>,
+      _route: &ModelRoute,
+      _request_body: Value,
+    ) -> Result<ProviderStreamResponse, crate::providers::ProviderError> {
+      Err(crate::providers::ProviderError::Unauthorized { status_code: 401 })
+    }
+
+    async fn stream_responses(
+      &self,
+      _config: &ProviderDefinition,
+      _creds: Option<&ProviderCredential>,
+      _route: &ModelRoute,
+      _request_body: Value,
+    ) -> Result<ProviderStreamResponse, crate::providers::ProviderError> {
       Err(crate::providers::ProviderError::Unsupported(
         "streaming responses unsupported".to_string(),
       ))
@@ -230,9 +569,15 @@ mod tests {
   }
 
   fn write_config(dir: &Path, base_url: &str) {
+    write_config_with_provider_type(dir, base_url, "openai");
+  }
+
+  fn write_config_with_provider_type(dir: &Path, base_url: &str, provider_type: &str) {
     std::fs::write(
       dir.join("providers.yaml"),
-      format!("providers:\n  openai:\n    provider_type: openai\n    base_url: {base_url}\n    enabled: true\n"),
+      format!(
+        "providers:\n  openai:\n    provider_type: {provider_type}\n    base_url: {base_url}\n    enabled: true\n"
+      ),
     )
     .unwrap();
 
@@ -264,17 +609,56 @@ mod tests {
   }
 
   async fn test_app_with_adapter(adapter: Arc<dyn ProviderAdapter>) -> Router {
+    test_harness_with_adapter(adapter).await.app
+  }
+
+  async fn test_harness_with_adapter(adapter: Arc<dyn ProviderAdapter>) -> TestHarness {
+    test_harness_with_adapter_and_provider_type(adapter, "openai").await
+  }
+
+  async fn test_harness_with_adapter_and_provider_type(
+    adapter: Arc<dyn ProviderAdapter>,
+    provider_type: &str,
+  ) -> TestHarness {
     let dir = tempfile::tempdir_in("/tmp").unwrap();
-    write_config(dir.path(), "http://unused.local");
+    write_config_with_provider_type(dir.path(), "http://unused.local", provider_type);
     let mut adapters: HashMap<String, Arc<dyn ProviderAdapter>> = HashMap::new();
-    adapters.insert("openai".to_string(), adapter);
+    adapters.insert(provider_type.to_string(), adapter);
     let registry = ProviderRegistry::from_adapters(adapters);
     let state = Arc::new(
       crate::app_state::AppState::new_for_tests(dir.path().to_path_buf(), registry)
         .await
         .unwrap(),
     );
-    build_router(state)
+    TestHarness {
+      db_path: dir.path().join("state.db"),
+      app: build_router(state),
+      _dir: dir,
+    }
+  }
+
+  fn latest_request_row(
+    db_path: &Path,
+  ) -> Option<(String, Option<i64>, Option<String>, Option<String>, Option<String>)> {
+    let conn = Connection::open(db_path).ok()?;
+    conn
+      .query_row(
+        "SELECT endpoint, http_status, response_sse_text, response_body_json, error_text
+         FROM llm_requests
+         ORDER BY created_at DESC
+         LIMIT 1",
+        [],
+        |row| {
+          Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, Option<i64>>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, Option<String>>(3)?,
+            row.get::<_, Option<String>>(4)?,
+          ))
+        },
+      )
+      .ok()
   }
 
   #[tokio::test]
@@ -434,5 +818,110 @@ mod tests {
     let body_text = String::from_utf8_lossy(&body);
     assert!(body_text.contains("response.output_text.delta"));
     assert!(body_text.contains("[DONE]"));
+  }
+
+  #[tokio::test]
+  async fn persists_endpoint_using_adapter_upstream_path() {
+    let harness = test_harness_with_adapter_and_provider_type(Arc::new(CopilotPathAdapter), "github-copilot").await;
+    let req = axum::http::Request::builder()
+      .method("POST")
+      .uri("/v1/chat/completions")
+      .header("content-type", "application/json")
+      .body(axum::body::Body::from(
+        json!({
+            "model": "gpt-test",
+            "messages": [{"role":"user","content":"hi"}]
+        })
+        .to_string(),
+      ))
+      .unwrap();
+    let res = harness.app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let _ = res.into_body().collect().await.unwrap();
+
+    let row = latest_request_row(&harness.db_path).expect("request row");
+    assert_eq!(row.0, "http://unused.local/chat/completions");
+  }
+
+  #[tokio::test]
+  async fn persists_stream_upstream_status_and_final_response_body() {
+    let harness = test_harness_with_adapter(Arc::new(StreamSuccessAdapter)).await;
+    let req = axum::http::Request::builder()
+      .method("POST")
+      .uri("/v1/chat/completions")
+      .header("content-type", "application/json")
+      .body(axum::body::Body::from(
+        json!({
+            "model": "gpt-test",
+            "stream": true,
+            "messages": [{"role":"user","content":"hi"}]
+        })
+        .to_string(),
+      ))
+      .unwrap();
+    let res = harness.app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let _ = res.into_body().collect().await.unwrap();
+
+    let row = latest_request_row(&harness.db_path).expect("request row");
+    assert_eq!(row.1, Some(207));
+    assert!(row.2.as_deref().unwrap_or_default().contains("[DONE]"));
+    let response_body = row.3.expect("response body");
+    assert!(response_body.contains("\"object\":\"chat.completion\""));
+    assert!(response_body.contains("\"content\":\"hello\""));
+    assert!(response_body.contains("\"total_tokens\":5"));
+  }
+
+  #[tokio::test]
+  async fn persists_stream_failure_status_from_provider_error() {
+    let harness = test_harness_with_adapter(Arc::new(StreamFailStatusAdapter)).await;
+    let req = axum::http::Request::builder()
+      .method("POST")
+      .uri("/v1/chat/completions")
+      .header("content-type", "application/json")
+      .body(axum::body::Body::from(
+        json!({
+            "model": "gpt-test",
+            "stream": true,
+            "messages": [{"role":"user","content":"hi"}]
+        })
+        .to_string(),
+      ))
+      .unwrap();
+    let res = harness.app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_GATEWAY);
+    let _ = res.into_body().collect().await.unwrap();
+
+    let row = latest_request_row(&harness.db_path).expect("request row");
+    assert_eq!(row.1, Some(429));
+    assert!(row
+      .4
+      .as_deref()
+      .unwrap_or_default()
+      .contains("upstream returned status 429"));
+  }
+
+  #[tokio::test]
+  async fn persists_stream_unauthorized_status_from_provider_error() {
+    let harness = test_harness_with_adapter(Arc::new(StreamUnauthorizedAdapter)).await;
+    let req = axum::http::Request::builder()
+      .method("POST")
+      .uri("/v1/chat/completions")
+      .header("content-type", "application/json")
+      .body(axum::body::Body::from(
+        json!({
+            "model": "gpt-test",
+            "stream": true,
+            "messages": [{"role":"user","content":"hi"}]
+        })
+        .to_string(),
+      ))
+      .unwrap();
+    let res = harness.app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    let _ = res.into_body().collect().await.unwrap();
+
+    let row = latest_request_row(&harness.db_path).expect("request row");
+    assert_eq!(row.1, Some(401));
   }
 }
