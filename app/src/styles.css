@@ -102,15 +102,64 @@ button {
 
 .accounts-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 0.9rem;
+}
+
+.accounts-dashboard {
+  border: 1px solid #a9cfd8;
+  background:
+    linear-gradient(170deg, rgba(238, 248, 251, 0.9) 0%, rgba(246, 250, 252, 0.95) 38%, rgba(255, 255, 255, 0.96) 100%),
+    radial-gradient(circle at 92% -12%, rgba(95, 169, 190, 0.24) 0%, rgba(95, 169, 190, 0) 62%);
+  box-shadow: 0 16px 34px -26px rgba(13, 55, 66, 0.55);
+}
+
+.accounts-dashboard-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.9rem;
+  align-items: flex-start;
+}
+
+.accounts-dashboard-head h2 {
+  margin: 0;
+}
+
+.accounts-kpis {
+  display: grid;
+  margin-top: 0.7rem;
+  margin-bottom: 0.95rem;
+  gap: 0.6rem;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+}
+
+.accounts-kpi-card {
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid #d0e5ea;
+  border-radius: 12px;
+  padding: 0.6rem 0.7rem;
+}
+
+.accounts-kpi-card span {
+  display: block;
+  color: #49676d;
+  font-size: 0.8rem;
+}
+
+.accounts-kpi-card strong {
+  font-size: 1.25rem;
+}
+
+.accounts-footnote {
+  margin-top: 0.8rem;
 }
 
 .account-provider {
-  border: 1px solid #c8dce0;
-  border-radius: 10px;
-  padding: 0.6rem;
-  background: #f8fcfd;
+  border: 1px solid #c5dde3;
+  border-radius: 14px;
+  padding: 0.75rem;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 10px 22px -23px rgba(10, 49, 58, 0.8);
 }
 
 .account-provider ul {
@@ -119,38 +168,228 @@ button {
   margin: 0;
 }
 
-.account-provider li {
-  border: 1px solid #d7e6ea;
-  border-radius: 8px;
-  padding: 0.5rem;
-  margin-bottom: 0.5rem;
-  background: #ffffff;
-}
-
-.account-connect,
-.account-rename {
-  border: 1px solid #c8dce0;
-  border-radius: 10px;
-  padding: 0.75rem;
-  margin-bottom: 0.75rem;
-  background: #f8fcfd;
-}
-
-.accounts-head {
-  justify-content: space-between;
-  margin-bottom: 0.5rem;
-}
-
 .provider-head {
+  display: flex;
   justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.6rem;
+  margin-bottom: 0.55rem;
 }
 
 .provider-head h3 {
   margin: 0;
 }
 
+.account-empty {
+  border: 1px dashed #bad2d8;
+  border-radius: 10px;
+  padding: 0.65rem;
+  background: #f7fcfd;
+}
+
+.account-list {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.account-item {
+  border: 1px solid #d9e9ed;
+  border-radius: 10px;
+  padding: 0.6rem;
+  background: #ffffff;
+  position: relative;
+}
+
+.account-item-clickable {
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.account-item-clickable:hover,
+.account-item-clickable:focus-visible {
+  border-color: #89b8c3;
+  box-shadow: 0 10px 22px -20px rgba(19, 70, 82, 0.9);
+  transform: translateY(-1px);
+  outline: none;
+}
+
+.account-item-head {
+  display: block;
+  padding-right: 2.4rem;
+}
+
+.account-tags {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 0.3rem;
+  margin-top: 0.35rem;
+}
+
+.status-dot {
+  border: 1px solid #b9cdd2;
+  color: #2e5359;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  line-height: 1;
+  padding: 0.24rem 0.46rem;
+}
+
+.status-ok {
+  border-color: #2c8e57;
+  color: #1b6c3e;
+}
+
+.status-off {
+  border-color: #c98e45;
+  color: #955721;
+}
+
+.account-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  margin-top: 0;
+  position: absolute;
+  top: 0.55rem;
+  right: 0.6rem;
+}
+
+.account-actions button {
+  margin: 0;
+}
+
+.account-icon-btn {
+  width: auto;
+  height: auto;
+  margin: 0;
+  padding: 0 0.15rem;
+  border: none;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1;
+  background: transparent;
+}
+
+.account-icon-debug {
+  color: #8b9da2;
+}
+
+.account-icon-debug:hover {
+  color: #245e6b;
+}
+
+.account-icon-remove {
+  color: #8b9da2;
+}
+
+.account-icon-remove:hover {
+  color: #8a2f2f;
+}
+
+.account-meta-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  font-size: 0.84rem;
+  color: #35585e;
+}
+
+.quota-panel {
+  margin-top: 0.5rem;
+  border: 1px solid #d5e6eb;
+  border-radius: 8px;
+  padding: 0.45rem 0.55rem;
+  background: #f9fcfd;
+}
+
+.quota-panel small {
+  font-size: 0.75rem;
+  color: #4a686d;
+  text-transform: uppercase;
+}
+
+.quota-panel ul {
+  margin-top: 0.35rem;
+}
+
+.quota-panel li + li {
+  margin-top: 0.35rem;
+}
+
+.quota-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.77rem;
+  color: #315359;
+}
+
+.quota-bar {
+  margin-top: 0.2rem;
+  width: 100%;
+  height: 6px;
+  border-radius: 999px;
+  background: #dcecf0;
+  overflow: hidden;
+}
+
+.quota-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #2f8d9f 0%, #4fb6a7 100%);
+}
+
+.account-item-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.btn-ghost {
+  width: auto;
+  margin: 0;
+  padding: 0.3rem 0.6rem;
+  border-color: #99bbc2;
+  background: #f5fbfc;
+}
+
 .add-account-btn {
   width: auto;
+  margin: 0;
+  padding: 0.5rem 0.9rem;
+  border-color: #2f7f8d;
+  background: #2f7f8d;
+  color: #f3fdff;
+}
+
+.add-account-btn:hover {
+  background: #266b78;
+}
+
+@media (max-width: 720px) {
+  .accounts-dashboard-head {
+    flex-direction: column;
+  }
+
+  .account-item-head {
+    flex-direction: column;
+  }
+
+  .account-tags {
+    justify-content: flex-start;
+  }
+
+  .account-actions {
+    justify-content: flex-start;
+  }
 }
 
 .modal-backdrop {
@@ -174,6 +413,43 @@ button {
   padding: 0.85rem;
 }
 
+.detail-form label,
+.detail-oauth-block label {
+  margin-bottom: 0.55rem;
+}
+
+.detail-oauth-block {
+  margin-top: 0.2rem;
+}
+
+.detail-btn {
+  margin-top: 0.5rem;
+  margin-bottom: 0;
+  border-radius: 10px;
+  padding: 0.56rem 0.75rem;
+  font-weight: 600;
+}
+
+.detail-btn-primary {
+  border-color: #1f7b8a;
+  background: linear-gradient(180deg, #2f8e9f 0%, #247887 100%);
+  color: #f4fdff;
+}
+
+.detail-btn-primary:hover {
+  background: linear-gradient(180deg, #2a8393 0%, #1f6977 100%);
+}
+
+.detail-btn-secondary {
+  border-color: #8fb9c1;
+  background: #eff8fb;
+  color: #1d5964;
+}
+
+.detail-btn-secondary:hover {
+  background: #e2f1f6;
+}
+
 .modal-header {
   display: flex;
   align-items: center;
@@ -191,7 +467,8 @@ button {
 }
 
 .undo-row {
-  border-style: dashed;
+  border: 1px dashed #b3cfd6;
+  background: #f8fdfe;
 }
 
 .badge {

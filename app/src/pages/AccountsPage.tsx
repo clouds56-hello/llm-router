@@ -91,6 +91,21 @@ export function AccountsPage(props: AccountsPageProps) {
     return out;
   }, [props.accountInformation]);
 
+  const dashboardStats = useMemo(() => {
+    const allAccounts = Object.values(props.accountsByProvider).flat();
+    const enabled = allAccounts.filter((row) => row.enabled).length;
+    const oauth = allAccounts.filter(
+      (row) => row.meta?.oauth === "true" || row.secret_keys.includes("oauth_access_token")
+    ).length;
+    return {
+      total: allAccounts.length,
+      enabled,
+      disabled: allAccounts.length - enabled,
+      oauth,
+      providers: props.providerNames.length,
+    };
+  }, [props.accountsByProvider, props.providerNames]);
+
   const openAdd = () => {
     const provider = props.providerNames[0] ?? "openai";
     const oauthDefault = provider.toLowerCase().includes("github");
@@ -178,12 +193,34 @@ export function AccountsPage(props: AccountsPageProps) {
 
   return (
     <section className="grid">
-      <article className="card card-wide">
-        <div className="row row-tight accounts-head">
-          <h2>Accounts</h2>
+      <article className="card card-wide accounts-dashboard">
+        <div className="accounts-dashboard-head">
+          <div>
+            <h2>Account Dashboard</h2>
+            <p className="muted">Manage API keys, OAuth sessions, and provider readiness in one place.</p>
+          </div>
           <button type="button" className="add-account-btn" onClick={openAdd}>
             Add Account
           </button>
+        </div>
+
+        <div className="accounts-kpis">
+          <div className="accounts-kpi-card">
+            <span>Total Accounts</span>
+            <strong>{dashboardStats.total}</strong>
+          </div>
+          <div className="accounts-kpi-card">
+            <span>Active</span>
+            <strong>{dashboardStats.enabled}</strong>
+          </div>
+          <div className="accounts-kpi-card">
+            <span>OAuth Linked</span>
+            <strong>{dashboardStats.oauth}</strong>
+          </div>
+          <div className="accounts-kpi-card">
+            <span>Providers</span>
+            <strong>{dashboardStats.providers}</strong>
+          </div>
         </div>
 
         <div className="accounts-grid">
@@ -210,24 +247,33 @@ export function AccountsPage(props: AccountsPageProps) {
 
             return (
               <section key={providerName} className="account-provider">
-                <div className="row row-tight provider-head">
-                  <h3>{providerName}</h3>
+                <div className="provider-head">
+                  <div>
+                    <h3>{providerName}</h3>
+                    <p className="muted">
+                      {items.length} account{items.length === 1 ? "" : "s"} configured
+                    </p>
+                  </div>
                   <button type="button" className="add-account-btn" onClick={() => openAddForProvider(providerName)}>
-                    Add Account
+                    Add
                   </button>
                 </div>
+
                 {rows.length === 0 ? (
-                  <p className="muted">No accounts</p>
+                  <div className="account-empty">
+                    <p className="muted">No accounts for this provider yet.</p>
+                  </div>
                 ) : (
-                  <ul>
+                  <ul className="account-list">
                     {rows.map((row, index) => {
                       if (row.kind === "undo") {
                         return (
                           <li key={row.undo.key} className="undo-row">
-                            <div className="row row-tight">
+                            <div className="account-item-row">
                               <span>Account removed</span>
                               <button
                                 type="button"
+                                className="btn-ghost"
                                 onClick={() => void props.runAction(() => props.onUndoRemove(row.undo))}
                               >
                                 Undo
@@ -241,62 +287,103 @@ export function AccountsPage(props: AccountsPageProps) {
                       const originalIndex = index;
                       const info = accountInfoByKey[`${providerName}::${account.id}`];
                       const quotaItems: AccountQuotaItem[] = parseQuotaItems(info?.quota);
+
                       return (
-                        <li key={account.id}>
-                          <div className="row row-tight">
-                            <strong>{account.label}</strong>
-                            <span>id: {account.id}</span>
-                            <span>{account.auth_type ?? "auth_type: unset"}</span>
-                            <span>{account.enabled ? "enabled" : "disabled"}</span>
-                            {account.is_default ? <span className="badge">default</span> : null}
+                        <li
+                          key={account.id}
+                          className="account-item account-item-clickable"
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => openEdit(account)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" || event.key === " ") {
+                              event.preventDefault();
+                              openEdit(account);
+                            }
+                          }}
+                          aria-label={`Open details for ${account.label}`}
+                        >
+                          <div className="account-item-head">
+                            <div>
+                              <strong>{info?.name ?? account.label}</strong>
+                              <p className="muted">{account.id}</p>
+                            </div>
+                            <div className="account-tags">
+                              <span className={`status-dot ${account.enabled ? "status-ok" : "status-off"}`}>
+                                {account.enabled ? "enabled" : "disabled"}
+                              </span>
+                              <span className="status-dot">{account.auth_type ?? "unset auth"}</span>
+                              {account.is_default ? <span className="badge">default</span> : null}
+                            </div>
                           </div>
-                          <div className="row row-tight">
-                          <button type="button" onClick={() => openEdit(account)}>
-                              Modify
-                            </button>
+
+                          <div className="account-actions">
                             <button
                               type="button"
-                              onClick={() =>
-                                void props.runAction(() => props.onTestAccount(providerName, account.id))
-                              }
+                              className="account-icon-btn account-icon-debug"
+                              title="Test account"
+                              aria-label="Test account"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void props.runAction(() => props.onTestAccount(providerName, account.id));
+                              }}
                             >
-                              Test
+                              ▶
                             </button>
                             <button
                               type="button"
-                              onClick={() =>
+                              className="account-icon-btn account-icon-remove"
+                              title="Remove account"
+                              aria-label="Remove account"
+                              onClick={(event) => {
+                                event.stopPropagation();
                                 void props.runAction(() =>
                                   props.onRemoveAccount(providerName, account, Math.max(0, originalIndex))
-                                )
-                              }
+                                );
+                              }}
                             >
-                              Remove
+                              ×
                             </button>
                           </div>
+
                           {info ? (
-                            <div className="row row-tight">
+                            <div className="account-meta-grid">
                               <span>status: {info.status}</span>
                               {info.plan ? <span>plan: {info.plan}</span> : null}
                               {info.email ? <span>email: {info.email}</span> : null}
                             </div>
                           ) : null}
+
                           {quotaItems.length > 0 ? (
-                            <div>
-                              <small>quota:</small>
+                            <div className="quota-panel">
+                              <small>Quota</small>
                               <ul>
-                                {quotaItems.map((q) => (
-                                  <li key={q.name}>
-                                    <small>
-                                      {q.name} | total: {formatQuotaNumber(q.total)} | remaining: {formatQuotaNumber(q.remaining)}
-                                      {" | "}percent: {formatQuotaNumber(q.percent)}
-                                      {q.expires ? ` | expires: ${q.expires}` : ""}
-                                    </small>
-                                  </li>
-                                ))}
+                                {quotaItems.map((q) => {
+                                  const remainingPercent = computeQuotaRemainingPercent(q);
+                                  return (
+                                    <li key={q.name}>
+                                      <div className="quota-line">
+                                        <span>{q.name}</span>
+                                        <span>
+                                          remaining: {formatQuotaNumber(q.remaining)} / {formatQuotaNumber(q.total)}
+                                        </span>
+                                      </div>
+                                      {typeof remainingPercent === "number" ? (
+                                        <div
+                                          className="quota-bar"
+                                          role="img"
+                                          aria-label={`${q.name} remaining ${remainingPercent}%`}
+                                        >
+                                          <span style={{ width: `${remainingPercent}%` }} />
+                                        </div>
+                                      ) : null}
+                                    </li>
+                                  );
+                                })}
                               </ul>
                             </div>
                           ) : null}
-                          <small>secrets: {account.secret_keys.join(", ") || "none"}</small>
+
                         </li>
                       );
                     })}
@@ -306,6 +393,11 @@ export function AccountsPage(props: AccountsPageProps) {
             );
           })}
         </div>
+
+        <p className="muted accounts-footnote">
+          Disabled accounts stay configured and can be re-enabled from account details.
+          {dashboardStats.disabled > 0 ? ` Currently disabled: ${dashboardStats.disabled}.` : ""}
+        </p>
       </article>
 
       {addOpen ? (
@@ -413,41 +505,46 @@ Session: ${props.deviceFlow.session_id}`}
       ) : null}
 
       {editTarget ? (
-        <Modal title="Modify Account" onClose={() => setEditTarget(null)}>
-          <label>
-            Provider
-            <input value={editTarget.provider} readOnly />
-          </label>
-          <label>
-            Account ID
-            <input value={editTarget.id} readOnly />
-          </label>
-          <label>
-            Label
-            <input value={editLabel} onChange={(e) => setEditLabel(e.target.value)} />
-          </label>
-          <label>
-            Auth Type
-            <input value={editAuthType} onChange={(e) => setEditAuthType(e.target.value)} />
-          </label>
-          <label>
-            Enabled
-            <select value={editEnabled ? "enabled" : "disabled"} onChange={(e) => setEditEnabled(e.target.value === "enabled")}>
-              <option value="enabled">Enabled</option>
-              <option value="disabled">Disabled</option>
-            </select>
-          </label>
-          <label>
-            New API Key (optional)
-            <input
-              type="password"
-              value={editApiKey}
-              onChange={(e) => setEditApiKey(e.target.value)}
-              placeholder="Leave empty to keep current"
-            />
-          </label>
+        <Modal title="Account Details" onClose={() => setEditTarget(null)}>
+          <div className="detail-form">
+            <label>
+              Provider
+              <input value={editTarget.provider} readOnly />
+            </label>
+            <label>
+              Account ID
+              <input value={editTarget.id} readOnly />
+            </label>
+            <label>
+              Label
+              <input value={editLabel} onChange={(e) => setEditLabel(e.target.value)} />
+            </label>
+            <label>
+              Auth Type
+              <input value={editAuthType} onChange={(e) => setEditAuthType(e.target.value)} />
+            </label>
+            <label>
+              Enabled
+              <select
+                value={editEnabled ? "enabled" : "disabled"}
+                onChange={(e) => setEditEnabled(e.target.value === "enabled")}
+              >
+                <option value="enabled">Enabled</option>
+                <option value="disabled">Disabled</option>
+              </select>
+            </label>
+            <label>
+              New API Key (optional)
+              <input
+                type="password"
+                value={editApiKey}
+                onChange={(e) => setEditApiKey(e.target.value)}
+                placeholder="Leave empty to keep current"
+              />
+            </label>
+          </div>
           {isEditOauthAccount ? (
-            <>
+            <div className="detail-oauth-block">
               <label>
                 New oauth access token
                 <input
@@ -457,12 +554,16 @@ Session: ${props.deviceFlow.session_id}`}
                   placeholder="Paste new oauth access token"
                 />
               </label>
-              <button type="button" onClick={() => void props.runAction(refreshApiKeyFromOauthToken)}>
+              <button
+                type="button"
+                className="detail-btn detail-btn-secondary"
+                onClick={() => void props.runAction(refreshApiKeyFromOauthToken)}
+              >
                 Refresh API Key
               </button>
-            </>
+            </div>
           ) : null}
-          <button type="button" onClick={() => void props.runAction(submitEdit)}>
+          <button type="button" className="detail-btn detail-btn-primary" onClick={() => void props.runAction(submitEdit)}>
             Save Changes
           </button>
         </Modal>
@@ -499,4 +600,18 @@ function formatQuotaNumber(value: number | null | undefined): string {
   if (typeof value !== "number" || Number.isNaN(value)) return "n/a";
   if (Number.isInteger(value)) return String(value);
   return value.toFixed(2);
+}
+
+function computeQuotaRemainingPercent(item: AccountQuotaItem): number | null {
+  if (typeof item.total === "number" && typeof item.remaining === "number" && item.total > 0) {
+    const remaining = (item.remaining / item.total) * 100;
+    return Math.max(0, Math.min(100, Number(remaining.toFixed(1))));
+  }
+
+  if (typeof item.percent === "number") {
+    const remaining = item.percent <= 1 ? item.percent * 100 : item.percent;
+    return Math.max(0, Math.min(100, Number(remaining.toFixed(1))));
+  }
+
+  return null;
 }
