@@ -32,6 +32,24 @@ impl ProviderAdapter for DeepSeekAdapter {
     }
   }
 
+  fn upstream_request_body(
+    &self,
+    _operation: ProviderOperation,
+    stream: bool,
+    route: &ModelRoute,
+    _provider: &ProviderDefinition,
+    request_body: &Value,
+  ) -> Value {
+    let mut body = request_body.clone();
+    if let Some(obj) = body.as_object_mut() {
+      obj.insert("model".to_string(), Value::String(route.provider_model.clone()));
+      if stream {
+        obj.insert("stream".to_string(), Value::Bool(true));
+      }
+    }
+    body
+  }
+
   fn upstream_path(
     &self,
     operation: ProviderOperation,

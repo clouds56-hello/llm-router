@@ -31,6 +31,12 @@ pub(super) async fn handle(
   let Some(route) = loaded.resolve_model(model_name) else {
     return json_error(StatusCode::BAD_REQUEST, "model routing config is empty");
   };
+  if route.provider == "codex" {
+    return json_error(
+      StatusCode::NOT_IMPLEMENTED,
+      "codex provider does not support chat completions; use /v1/responses",
+    );
+  }
 
   if let Some(obj) = body.as_object_mut() {
     obj.insert("model".to_string(), Value::String(route.openai_name.clone()));
@@ -91,6 +97,13 @@ pub(super) async fn handle(
     ProviderOperation::ChatCompletions
   };
   let upstream_path = adapter.upstream_path(upstream_operation, stream_requested, route, &provider_cfg);
+  let upstream_payload = adapter.upstream_request_body(
+    upstream_operation,
+    stream_requested,
+    route,
+    &provider_cfg,
+    &request_body_for_storage,
+  );
   let upstream_endpoint = join_url(&provider_cfg.base_url, &upstream_path);
   persist_request_started(
     &state,
@@ -101,6 +114,7 @@ pub(super) async fn handle(
     effective_account_id.as_deref(),
     stream_requested,
     &request_body_for_storage,
+    &upstream_payload,
   );
   persist_chat_history(
     &state,

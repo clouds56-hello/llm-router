@@ -306,7 +306,7 @@ export function AccountsPage(props: AccountsPageProps) {
                         >
                           <div className="account-item-head">
                             <div>
-                              <strong>{info?.name ?? account.label}</strong>
+                              <strong>{info?.name || info?.email || account.label}</strong>
                               <p className="muted">{account.id}</p>
                             </div>
                             <div className="account-tags">

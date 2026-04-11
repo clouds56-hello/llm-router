@@ -74,6 +74,21 @@ impl ProviderAdapter for GitHubCopilotAdapter {
     ProviderCapabilities::all()
   }
 
+  fn upstream_request_body(
+    &self,
+    _operation: ProviderOperation,
+    stream: bool,
+    route: &ModelRoute,
+    _provider: &ProviderDefinition,
+    request_body: &Value,
+  ) -> Value {
+    let mut body = openai_compatible::with_model(route, request_body.clone());
+    if stream {
+      body = openai_compatible::with_stream(body);
+    }
+    body
+  }
+
   fn upstream_path(
     &self,
     operation: ProviderOperation,

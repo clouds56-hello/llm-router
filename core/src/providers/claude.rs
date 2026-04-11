@@ -201,6 +201,17 @@ impl ProviderAdapter for ClaudeAdapter {
     ProviderCapabilities::all()
   }
 
+  fn upstream_request_body(
+    &self,
+    _operation: ProviderOperation,
+    stream: bool,
+    route: &ModelRoute,
+    _provider: &ProviderDefinition,
+    request_body: &Value,
+  ) -> Value {
+    Self::to_anthropic_request(route, request_body.clone(), stream)
+  }
+
   fn upstream_path(
     &self,
     _operation: ProviderOperation,

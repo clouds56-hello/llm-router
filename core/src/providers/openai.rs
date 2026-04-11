@@ -50,6 +50,42 @@ impl OpenAiAdapter {
     openai_compatible::apply_config_headers(&mut headers, &config.headers);
     headers
   }
+
+  fn is_codex_mode(config: &ProviderDefinition) -> bool {
+    config
+      .metadata
+      .get(CODEX_MODE_METADATA_KEY)
+      .map(|v| v.eq_ignore_ascii_case(CODEX_MODE_RESPONSES))
+      .unwrap_or(false)
+  }
+
+  fn ensure_codex_instructions(config: &ProviderDefinition, mut body: Value) -> Value {
+    if !Self::is_codex_mode(config) {
+      return body;
+    }
+    if let Some(obj) = body.as_object_mut() {
+      if !obj.contains_key("instructions") {
+        obj.insert("instructions".to_string(), Value::String(String::new()));
+      }
+      obj.insert("store".to_string(), Value::Bool(false));
+      match obj.get("input") {
+        Some(Value::Array(_)) => {}
+        Some(Value::String(value)) => {
+          obj.insert("input".to_string(), serde_json::json!([{
+            "role": "user",
+            "content": value,
+          }]));
+        }
+        Some(value) => {
+          obj.insert("input".to_string(), Value::Array(vec![value.clone()]));
+        }
+        None => {
+          obj.insert("input".to_string(), Value::Array(vec![]));
+        }
+      }
+    }
+    body
+  }
 }
 
 #[async_trait]
@@ -58,8 +94,34 @@ impl ProviderAdapter for OpenAiAdapter {
     "openai"
   }
 
-  fn capabilities(&self, _route: &ModelRoute) -> ProviderCapabilities {
+  fn capabilities(&self, route: &ModelRoute) -> ProviderCapabilities {
+    if route.provider == "codex" {
+      return ProviderCapabilities {
+        chat_completion: false,
+        responses: true,
+        stream_chat_completion: false,
+        stream_responses: true,
+      };
+    }
     ProviderCapabilities::all()
+  }
+
+  fn upstream_request_body(
+    &self,
+    operation: ProviderOperation,
+    stream: bool,
+    route: &ModelRoute,
+    provider: &ProviderDefinition,
+    request_body: &Value,
+  ) -> Value {
+    let mut body = openai_compatible::with_model(route, request_body.clone());
+    if stream {
+      body = openai_compatible::with_stream(body);
+    }
+    if operation == ProviderOperation::Responses {
+      body = Self::ensure_codex_instructions(provider, body);
+    }
+    body
   }
 
   fn upstream_path(
@@ -69,11 +131,7 @@ impl ProviderAdapter for OpenAiAdapter {
     _route: &ModelRoute,
     provider: &ProviderDefinition,
   ) -> String {
-    let codex_mode = provider
-      .metadata
-      .get(CODEX_MODE_METADATA_KEY)
-      .map(|v| v.eq_ignore_ascii_case(CODEX_MODE_RESPONSES))
-      .unwrap_or(false);
+    let codex_mode = Self::is_codex_mode(provider);
     if codex_mode {
       return match operation {
         ProviderOperation::ChatCompletions => "/chat/completions".to_string(),
@@ -93,6 +151,11 @@ impl ProviderAdapter for OpenAiAdapter {
     route: &ModelRoute,
     request_body: Value,
   ) -> Result<Value, ProviderError> {
+    if route.provider == "codex" {
+      return Err(ProviderError::Unsupported(
+        "codex provider does not support chat completions".to_string(),
+      ));
+    }
     let body = openai_compatible::with_model(route, request_body);
     let upstream_path = self.upstream_path(ProviderOperation::ChatCompletions, false, route, config);
     let ctx = UpstreamLogContext {
@@ -121,7 +184,7 @@ impl ProviderAdapter for OpenAiAdapter {
     route: &ModelRoute,
     request_body: Value,
   ) -> Result<Value, ProviderError> {
-    let body = openai_compatible::with_model(route, request_body);
+    let body = Self::ensure_codex_instructions(config, openai_compatible::with_model(route, request_body));
     let upstream_path = self.upstream_path(ProviderOperation::Responses, false, route, config);
     let ctx = UpstreamLogContext {
       provider: route.provider.clone(),
@@ -149,6 +212,11 @@ impl ProviderAdapter for OpenAiAdapter {
     route: &ModelRoute,
     request_body: Value,
   ) -> Result<ProviderStreamResponse, ProviderError> {
+    if route.provider == "codex" {
+      return Err(ProviderError::Unsupported(
+        "codex provider does not support streaming chat completions".to_string(),
+      ));
+    }
     let body = openai_compatible::with_stream(openai_compatible::with_model(route, request_body));
     let upstream_path = self.upstream_path(ProviderOperation::ChatCompletions, true, route, config);
     let ctx = UpstreamLogContext {
@@ -176,7 +244,10 @@ impl ProviderAdapter for OpenAiAdapter {
     route: &ModelRoute,
     request_body: Value,
   ) -> Result<ProviderStreamResponse, ProviderError> {
-    let body = openai_compatible::with_stream(openai_compatible::with_model(route, request_body));
+    let body = Self::ensure_codex_instructions(
+      config,
+      openai_compatible::with_stream(openai_compatible::with_model(route, request_body)),
+    );
     let upstream_path = self.upstream_path(ProviderOperation::Responses, true, route, config);
     let ctx = UpstreamLogContext {
       provider: route.provider.clone(),
@@ -341,6 +412,27 @@ mod tests {
     assert!(normal_headers
       .get(HeaderName::from_static(CHATGPT_ACCOUNT_ID_HEADER))
       .is_none());
+  }
+
+  #[test]
+  fn codex_mode_adds_empty_instructions_for_responses() {
+    let mut codex = provider_def("http://unused");
+    codex
+      .metadata
+      .insert(CODEX_MODE_METADATA_KEY.to_string(), CODEX_MODE_RESPONSES.to_string());
+    let normal = provider_def("http://unused");
+
+    let codex_body = OpenAiAdapter::ensure_codex_instructions(&codex, serde_json::json!({"model":"m","input":"hi"}));
+    assert_eq!(codex_body.get("instructions").and_then(|v| v.as_str()), Some(""));
+    assert!(codex_body.get("input").map(Value::is_array).unwrap_or(false));
+    assert_eq!(codex_body.get("store").and_then(|v| v.as_bool()), Some(false));
+
+    let codex_body_no_input = OpenAiAdapter::ensure_codex_instructions(&codex, serde_json::json!({"model":"m"}));
+    assert!(codex_body_no_input.get("input").map(Value::is_array).unwrap_or(false));
+
+    let normal_body = OpenAiAdapter::ensure_codex_instructions(&normal, serde_json::json!({"model":"m","input":"hi"}));
+    assert!(normal_body.get("instructions").is_none());
+    assert!(normal_body.get("input").and_then(|v| v.as_str()).is_some());
   }
 
   #[tokio::test]

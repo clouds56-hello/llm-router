@@ -252,8 +252,8 @@ impl CopilotAuthManager {
       let secrets = HashMap::from_iter(vec![
         ("api_key".to_string(), copilot_token.clone()),
         ("oauth_access_token".to_string(), github_access_token.clone()),
-        ("oauth_auth_base".to_string(), auth_base.clone()),
       ]);
+      meta.insert("oauth_auth_base".to_string(), auth_base.clone());
 
       self.config.connect_account(ConnectAccountInput {
         provider: COPILOT_PROVIDER_NAME.to_string(),
@@ -267,6 +267,12 @@ impl CopilotAuthManager {
         meta,
         set_default: Some(true),
         enabled: Some(true),
+      })?;
+      self.config.update_account(UpdateAccountInput {
+        provider: COPILOT_PROVIDER_NAME.to_string(),
+        account_id: account_id.clone(),
+        clear_secret_keys: Some(vec!["oauth_auth_base".to_string()]),
+        ..Default::default()
       })?;
       tracing::info!(
         target: "auth",
@@ -381,18 +387,28 @@ impl CopilotAuthManager {
       .ok_or_else(|| anyhow::anyhow!("oauth_access_token not found for account '{}'", resolved_account_id))?;
     let copilot_token = self.fetch_copilot_token(&github_access_token).await?;
 
-    let mut set_secrets = HashMap::from_iter(vec![
+    let set_secrets = HashMap::from_iter(vec![
       ("api_key".to_string(), copilot_token.clone()),
       ("oauth_access_token".to_string(), github_access_token.clone()),
     ]);
-    if let Some(auth_base) = credential.extra.get("oauth_auth_base").cloned() {
-      set_secrets.insert("oauth_auth_base".to_string(), auth_base);
+    let auth_base = loaded
+      .credentials
+      .providers
+      .get(COPILOT_PROVIDER_NAME)
+      .and_then(|cfg| cfg.accounts.iter().find(|a| a.id == resolved_account_id))
+      .and_then(|account| account.meta.get("oauth_auth_base").cloned())
+      .or_else(|| credential.extra.get("oauth_auth_base").cloned());
+    let mut set_meta = HashMap::new();
+    if let Some(ref auth_base_value) = auth_base {
+      set_meta.insert("oauth_auth_base".to_string(), auth_base_value.clone());
     }
 
     self.config.update_account(UpdateAccountInput {
       provider: COPILOT_PROVIDER_NAME.to_string(),
       account_id: resolved_account_id.clone(),
       set_secrets: Some(set_secrets),
+      set_meta: Some(set_meta),
+      clear_secret_keys: Some(vec!["oauth_auth_base".to_string()]),
       ..Default::default()
     })?;
     tracing::info!(
@@ -425,13 +441,7 @@ impl CopilotAuthManager {
 
     let mut state = self.read_state()?.unwrap_or(CopilotAuthState {
       logged_in: true,
-      deployment: deployment_from_auth_base(
-        credential
-          .extra
-          .get("oauth_auth_base")
-          .map(String::as_str)
-          .unwrap_or("https://github.com"),
-      ),
+      deployment: deployment_from_auth_base(auth_base.as_deref().unwrap_or("https://github.com")),
       access_token_preview: None,
       updated_at: Utc::now(),
     });

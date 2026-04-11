@@ -126,6 +126,16 @@ impl UpstreamLogContext {
 pub trait ProviderAdapter: Send + Sync {
   fn name(&self) -> &'static str;
   fn capabilities(&self, route: &ModelRoute) -> ProviderCapabilities;
+  fn upstream_request_body(
+    &self,
+    _operation: ProviderOperation,
+    _stream: bool,
+    _route: &ModelRoute,
+    _provider: &ProviderDefinition,
+    request_body: &Value,
+  ) -> Value {
+    request_body.clone()
+  }
   fn upstream_path(
     &self,
     operation: ProviderOperation,

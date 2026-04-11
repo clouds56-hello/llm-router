@@ -746,6 +746,21 @@ mod tests {
       .ok()
   }
 
+  fn latest_upstream_request_payload(db_path: &Path) -> Option<String> {
+    let conn = Connection::open(db_path).ok()?;
+    conn
+      .query_row(
+        "SELECT upstream_request_body_json
+         FROM llm_requests
+         ORDER BY created_at DESC
+         LIMIT 1",
+        [],
+        |row| row.get::<_, Option<String>>(0),
+      )
+      .ok()
+      .flatten()
+  }
+
   #[tokio::test]
   async fn routes_chat_endpoint() {
     let app = test_app().await;
@@ -926,6 +941,54 @@ mod tests {
 
     let row = latest_request_row(&harness.db_path).expect("request row");
     assert_eq!(row.0, "http://unused.local/chat/completions");
+    let upstream = latest_upstream_request_payload(&harness.db_path).expect("upstream payload");
+    let upstream_json: Value = serde_json::from_str(&upstream).expect("json");
+    assert_eq!(upstream_json.get("model").and_then(Value::as_str), Some("gpt-test"));
+  }
+
+  #[tokio::test]
+  async fn codex_chat_endpoint_is_unsupported() {
+    let dir = tempfile::tempdir_in("/tmp").unwrap();
+    std::fs::write(
+      dir.path().join("providers.yaml"),
+      "providers:\n  codex:\n    provider_type: openai\n    base_url: http://unused.local\n    enabled: true\n    metadata:\n      codex_api_mode: responses\n",
+    )
+    .unwrap();
+    std::fs::write(
+      dir.path().join("models.yaml"),
+      "models:\n  - openai_name: gpt-test\n    provider: codex\n    provider_model: gpt-upstream\n    is_default: true\n",
+    )
+    .unwrap();
+    std::fs::write(
+      dir.path().join("credentials.yaml"),
+      "providers:\n  codex:\n    api_key: test-key\n",
+    )
+    .unwrap();
+
+    let mut adapters: HashMap<String, Arc<dyn ProviderAdapter>> = HashMap::new();
+    adapters.insert("openai".to_string(), Arc::new(MockAdapter));
+    let registry = ProviderRegistry::from_adapters(adapters);
+    let state = Arc::new(
+      crate::app_state::AppState::new_for_tests(dir.path().to_path_buf(), registry)
+        .await
+        .unwrap(),
+    );
+    let app = build_router(state);
+
+    let req = axum::http::Request::builder()
+      .method("POST")
+      .uri("/v1/chat/completions")
+      .header("content-type", "application/json")
+      .body(axum::body::Body::from(
+        json!({
+            "model": "gpt-test",
+            "messages": [{"role":"user","content":"hi"}]
+        })
+        .to_string(),
+      ))
+      .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_IMPLEMENTED);
   }
 
   #[tokio::test]

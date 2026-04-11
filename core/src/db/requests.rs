@@ -16,6 +16,7 @@ pub struct RequestRecordStart {
   pub account_id: Option<String>,
   pub is_stream: bool,
   pub request_body_json: String,
+  pub upstream_request_body_json: String,
 }
 
 #[derive(Debug, Clone)]
@@ -65,6 +66,7 @@ impl RequestsTable {
         account_id TEXT,
         is_stream INTEGER NOT NULL,
         request_body_json TEXT NOT NULL,
+        upstream_request_body_json TEXT,
         response_body_json TEXT,
         response_sse_text TEXT,
         http_status INTEGER,
@@ -81,6 +83,7 @@ impl RequestsTable {
     )?;
 
     ensure_column(&conn, "llm_requests", "response_sse_text", "TEXT")?;
+    ensure_column(&conn, "llm_requests", "upstream_request_body_json", "TEXT")?;
     ensure_column(&conn, "llm_requests", "prompt_tokens", "INTEGER")?;
     ensure_column(&conn, "llm_requests", "completion_tokens", "INTEGER")?;
     ensure_column(&conn, "llm_requests", "total_tokens", "INTEGER")?;
@@ -92,8 +95,8 @@ impl RequestsTable {
     let conn = self.conn.lock();
     conn.execute(
       "INSERT OR REPLACE INTO llm_requests(
-        request_id, created_at, endpoint, provider, adapter, model, account_id, is_stream, request_body_json
-      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        request_id, created_at, endpoint, provider, adapter, model, account_id, is_stream, request_body_json, upstream_request_body_json
+      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
       params![
         input.request_id,
         input.created_at.to_rfc3339(),
@@ -103,7 +106,8 @@ impl RequestsTable {
         input.model,
         input.account_id,
         bool_to_int(input.is_stream),
-        input.request_body_json
+        input.request_body_json,
+        input.upstream_request_body_json
       ],
     )?;
     Ok(())
@@ -225,6 +229,7 @@ mod tests {
         account_id: Some("a1".to_string()),
         is_stream: false,
         request_body_json: "{}".to_string(),
+        upstream_request_body_json: "{}".to_string(),
       })
       .expect("start");
 

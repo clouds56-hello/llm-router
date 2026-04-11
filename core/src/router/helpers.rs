@@ -43,6 +43,7 @@ pub(super) fn persist_request_started(
   account_id: Option<&str>,
   is_stream: bool,
   request_body: &Value,
+  upstream_request_body: &Value,
 ) {
   let result = state.requests().record_request_started(RequestRecordStart {
     request_id: request_id.to_string(),
@@ -54,6 +55,7 @@ pub(super) fn persist_request_started(
     account_id: account_id.map(ToString::to_string),
     is_stream,
     request_body_json: request_body.to_string(),
+    upstream_request_body_json: upstream_request_body.to_string(),
   });
   if let Err(err) = result {
     tracing::warn!(target: "persistence", request_id = %request_id, error = %err, "failed to persist request start");
