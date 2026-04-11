@@ -126,7 +126,13 @@ impl UpstreamLogContext {
 pub trait ProviderAdapter: Send + Sync {
   fn name(&self) -> &'static str;
   fn capabilities(&self, route: &ModelRoute) -> ProviderCapabilities;
-  fn upstream_path(&self, operation: ProviderOperation, stream: bool) -> &'static str;
+  fn upstream_path(
+    &self,
+    operation: ProviderOperation,
+    stream: bool,
+    route: &ModelRoute,
+    provider: &ProviderDefinition,
+  ) -> String;
 
   async fn chat_completion(
     &self,

@@ -9,6 +9,7 @@ use serde::Serialize;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
+use crate::auth::codex::CodexAuthManager;
 use crate::auth::copilot::CopilotAuthManager;
 use crate::config::ConfigManager;
 use crate::db::logging::{LogCaptureLayer, LogStore};
@@ -23,6 +24,7 @@ pub struct AppState {
   logs: LogStore,
   requests: RequestStore,
   copilot_auth: CopilotAuthManager,
+  codex_auth: CodexAuthManager,
   router_server: RouterServerManager,
 }
 
@@ -55,7 +57,8 @@ impl AppState {
     requests: RequestStore,
     providers: ProviderRegistry,
   ) -> Result<Self> {
-    let copilot_auth = CopilotAuthManager::new(config_dir, config.clone(), requests.clone());
+    let copilot_auth = CopilotAuthManager::new(config_dir.clone(), config.clone(), requests.clone());
+    let codex_auth = CodexAuthManager::new(config_dir, config.clone(), requests.clone());
 
     Ok(Self {
       config,
@@ -63,6 +66,7 @@ impl AppState {
       logs,
       requests,
       copilot_auth,
+      codex_auth,
       router_server: RouterServerManager::new(),
     })
   }
@@ -89,6 +93,10 @@ impl AppState {
 
   pub fn copilot_auth(&self) -> &CopilotAuthManager {
     &self.copilot_auth
+  }
+
+  pub fn codex_auth(&self) -> &CodexAuthManager {
+    &self.codex_auth
   }
 
   pub fn router_server(&self) -> &RouterServerManager {

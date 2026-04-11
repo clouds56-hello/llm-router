@@ -130,10 +130,16 @@ mod tests {
       ProviderCapabilities::all()
     }
 
-    fn upstream_path(&self, operation: ProviderOperation, _stream: bool) -> &'static str {
+    fn upstream_path(
+      &self,
+      operation: ProviderOperation,
+      _stream: bool,
+      _route: &ModelRoute,
+      _provider: &ProviderDefinition,
+    ) -> String {
       match operation {
-        ProviderOperation::ChatCompletions => "/v1/chat/completions",
-        ProviderOperation::Responses => "/v1/responses",
+        ProviderOperation::ChatCompletions => "/v1/chat/completions".to_string(),
+        ProviderOperation::Responses => "/v1/responses".to_string(),
       }
     }
 
@@ -204,10 +210,16 @@ mod tests {
       }
     }
 
-    fn upstream_path(&self, operation: ProviderOperation, _stream: bool) -> &'static str {
+    fn upstream_path(
+      &self,
+      operation: ProviderOperation,
+      _stream: bool,
+      _route: &ModelRoute,
+      _provider: &ProviderDefinition,
+    ) -> String {
       match operation {
-        ProviderOperation::ChatCompletions => "/v1/chat/completions",
-        ProviderOperation::Responses => "/v1/responses",
+        ProviderOperation::ChatCompletions => "/v1/chat/completions".to_string(),
+        ProviderOperation::Responses => "/v1/responses".to_string(),
       }
     }
 
@@ -289,10 +301,16 @@ mod tests {
       }
     }
 
-    fn upstream_path(&self, operation: ProviderOperation, _stream: bool) -> &'static str {
+    fn upstream_path(
+      &self,
+      operation: ProviderOperation,
+      _stream: bool,
+      _route: &ModelRoute,
+      _provider: &ProviderDefinition,
+    ) -> String {
       match operation {
-        ProviderOperation::ChatCompletions => "/chat/completions",
-        ProviderOperation::Responses => "/v1/responses",
+        ProviderOperation::ChatCompletions => "/chat/completions".to_string(),
+        ProviderOperation::Responses => "/v1/responses".to_string(),
       }
     }
 
@@ -358,10 +376,16 @@ mod tests {
       }
     }
 
-    fn upstream_path(&self, operation: ProviderOperation, _stream: bool) -> &'static str {
+    fn upstream_path(
+      &self,
+      operation: ProviderOperation,
+      _stream: bool,
+      _route: &ModelRoute,
+      _provider: &ProviderDefinition,
+    ) -> String {
       match operation {
-        ProviderOperation::ChatCompletions => "/v1/chat/completions",
-        ProviderOperation::Responses => "/v1/responses",
+        ProviderOperation::ChatCompletions => "/v1/chat/completions".to_string(),
+        ProviderOperation::Responses => "/v1/responses".to_string(),
       }
     }
 
@@ -442,10 +466,16 @@ mod tests {
       }
     }
 
-    fn upstream_path(&self, operation: ProviderOperation, _stream: bool) -> &'static str {
+    fn upstream_path(
+      &self,
+      operation: ProviderOperation,
+      _stream: bool,
+      _route: &ModelRoute,
+      _provider: &ProviderDefinition,
+    ) -> String {
       match operation {
-        ProviderOperation::ChatCompletions => "/v1/chat/completions",
-        ProviderOperation::Responses => "/v1/responses",
+        ProviderOperation::ChatCompletions => "/v1/chat/completions".to_string(),
+        ProviderOperation::Responses => "/v1/responses".to_string(),
       }
     }
 
@@ -514,10 +544,16 @@ mod tests {
       }
     }
 
-    fn upstream_path(&self, operation: ProviderOperation, _stream: bool) -> &'static str {
+    fn upstream_path(
+      &self,
+      operation: ProviderOperation,
+      _stream: bool,
+      _route: &ModelRoute,
+      _provider: &ProviderDefinition,
+    ) -> String {
       match operation {
-        ProviderOperation::ChatCompletions => "/v1/chat/completions",
-        ProviderOperation::Responses => "/v1/responses",
+        ProviderOperation::ChatCompletions => "/v1/chat/completions".to_string(),
+        ProviderOperation::Responses => "/v1/responses".to_string(),
       }
     }
 
@@ -594,6 +630,33 @@ mod tests {
     .unwrap();
   }
 
+  fn write_config_with_provider_type_and_metadata(
+    dir: &Path,
+    base_url: &str,
+    provider_type: &str,
+    metadata_yaml: &str,
+  ) {
+    std::fs::write(
+      dir.join("providers.yaml"),
+      format!(
+        "providers:\n  openai:\n    provider_type: {provider_type}\n    base_url: {base_url}\n    enabled: true\n    metadata:\n{metadata_yaml}"
+      ),
+    )
+    .unwrap();
+
+    std::fs::write(
+      dir.join("models.yaml"),
+      "models:\n  - openai_name: gpt-test\n    provider: openai\n    provider_model: gpt-upstream\n    is_default: true\n",
+    )
+    .unwrap();
+
+    std::fs::write(
+      dir.join("credentials.yaml"),
+      "providers:\n  openai:\n    api_key: test-key\n",
+    )
+    .unwrap();
+  }
+
   async fn test_app() -> Router {
     let dir = tempfile::tempdir_in("/tmp").unwrap();
     write_config(dir.path(), "http://unused.local");
@@ -622,6 +685,28 @@ mod tests {
   ) -> TestHarness {
     let dir = tempfile::tempdir_in("/tmp").unwrap();
     write_config_with_provider_type(dir.path(), "http://unused.local", provider_type);
+    let mut adapters: HashMap<String, Arc<dyn ProviderAdapter>> = HashMap::new();
+    adapters.insert(provider_type.to_string(), adapter);
+    let registry = ProviderRegistry::from_adapters(adapters);
+    let state = Arc::new(
+      crate::app_state::AppState::new_for_tests(dir.path().to_path_buf(), registry)
+        .await
+        .unwrap(),
+    );
+    TestHarness {
+      db_path: dir.path().join("state.db"),
+      app: build_router(state),
+      _dir: dir,
+    }
+  }
+
+  async fn test_harness_with_adapter_provider_and_metadata(
+    adapter: Arc<dyn ProviderAdapter>,
+    provider_type: &str,
+    metadata_yaml: &str,
+  ) -> TestHarness {
+    let dir = tempfile::tempdir_in("/tmp").unwrap();
+    write_config_with_provider_type_and_metadata(dir.path(), "http://unused.local", provider_type, metadata_yaml);
     let mut adapters: HashMap<String, Arc<dyn ProviderAdapter>> = HashMap::new();
     adapters.insert(provider_type.to_string(), adapter);
     let registry = ProviderRegistry::from_adapters(adapters);
@@ -841,6 +926,34 @@ mod tests {
 
     let row = latest_request_row(&harness.db_path).expect("request row");
     assert_eq!(row.0, "http://unused.local/chat/completions");
+  }
+
+  #[tokio::test]
+  async fn chat_route_prefers_responses_when_provider_requests_it() {
+    let harness = test_harness_with_adapter_provider_and_metadata(
+      Arc::new(MockAdapter),
+      "openai",
+      "      prefer_responses: \"true\"\n",
+    )
+    .await;
+    let req = axum::http::Request::builder()
+      .method("POST")
+      .uri("/v1/chat/completions")
+      .header("content-type", "application/json")
+      .body(axum::body::Body::from(
+        json!({
+            "model": "gpt-test",
+            "messages": [{"role":"user","content":"hi"}]
+        })
+        .to_string(),
+      ))
+      .unwrap();
+    let res = harness.app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let _ = res.into_body().collect().await.unwrap();
+
+    let row = latest_request_row(&harness.db_path).expect("request row");
+    assert_eq!(row.0, "http://unused.local/v1/responses");
   }
 
   #[tokio::test]

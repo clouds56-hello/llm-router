@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use serde_json::Value;
 
 use super::openai_compatible::{self, HttpErrorFormat};
@@ -8,6 +8,10 @@ use super::{
   UpstreamLogContext,
 };
 use crate::config::{ModelRoute, ProviderCredential, ProviderDefinition};
+
+const CODEX_MODE_METADATA_KEY: &str = "codex_api_mode";
+const CODEX_MODE_RESPONSES: &str = "responses";
+const CHATGPT_ACCOUNT_ID_HEADER: &str = "chatgpt-account-id";
 
 #[derive(Default)]
 pub struct OpenAiAdapter {
@@ -23,10 +27,24 @@ impl OpenAiAdapter {
 
   fn headers(&self, config: &ProviderDefinition, creds: Option<&ProviderCredential>) -> HeaderMap {
     let mut headers = HeaderMap::new();
+    let codex_mode = config
+      .metadata
+      .get(CODEX_MODE_METADATA_KEY)
+      .map(|v| v.eq_ignore_ascii_case(CODEX_MODE_RESPONSES))
+      .unwrap_or(false);
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     if let Some(token) = creds.and_then(|c| c.api_key.clone()) {
       if let Ok(header_val) = HeaderValue::from_str(&format!("Bearer {token}")) {
         headers.insert(AUTHORIZATION, header_val);
+      }
+    }
+    if codex_mode {
+      if let Some(account_id) = creds.and_then(|c| c.extra.get("chatgpt_account_id").cloned()) {
+        if !account_id.trim().is_empty() {
+          if let Ok(value) = HeaderValue::from_str(&account_id) {
+            headers.insert(HeaderName::from_static(CHATGPT_ACCOUNT_ID_HEADER), value);
+          }
+        }
       }
     }
     openai_compatible::apply_config_headers(&mut headers, &config.headers);
@@ -44,10 +62,27 @@ impl ProviderAdapter for OpenAiAdapter {
     ProviderCapabilities::all()
   }
 
-  fn upstream_path(&self, operation: ProviderOperation, _stream: bool) -> &'static str {
+  fn upstream_path(
+    &self,
+    operation: ProviderOperation,
+    _stream: bool,
+    _route: &ModelRoute,
+    provider: &ProviderDefinition,
+  ) -> String {
+    let codex_mode = provider
+      .metadata
+      .get(CODEX_MODE_METADATA_KEY)
+      .map(|v| v.eq_ignore_ascii_case(CODEX_MODE_RESPONSES))
+      .unwrap_or(false);
+    if codex_mode {
+      return match operation {
+        ProviderOperation::ChatCompletions => "/chat/completions".to_string(),
+        ProviderOperation::Responses => "/responses".to_string(),
+      };
+    }
     match operation {
-      ProviderOperation::ChatCompletions => "/v1/chat/completions",
-      ProviderOperation::Responses => "/v1/responses",
+      ProviderOperation::ChatCompletions => "/v1/chat/completions".to_string(),
+      ProviderOperation::Responses => "/v1/responses".to_string(),
     }
   }
 
@@ -59,11 +94,11 @@ impl ProviderAdapter for OpenAiAdapter {
     request_body: Value,
   ) -> Result<Value, ProviderError> {
     let body = openai_compatible::with_model(route, request_body);
-    let upstream_path = self.upstream_path(ProviderOperation::ChatCompletions, false);
+    let upstream_path = self.upstream_path(ProviderOperation::ChatCompletions, false, route, config);
     let ctx = UpstreamLogContext {
       provider: route.provider.clone(),
       adapter: self.name().to_string(),
-      upstream_path: upstream_path.to_string(),
+      upstream_path: upstream_path.clone(),
       method: "POST",
       model: body.get("model").and_then(|v| v.as_str()).map(str::to_string),
       stream: false,
@@ -71,7 +106,7 @@ impl ProviderAdapter for OpenAiAdapter {
     openai_compatible::post_json(
       &self.client,
       ctx,
-      join_upstream_url(&config.base_url, upstream_path),
+      join_upstream_url(&config.base_url, &upstream_path),
       self.headers(config, creds),
       body,
       HttpErrorFormat::StatusOnly,
@@ -87,11 +122,11 @@ impl ProviderAdapter for OpenAiAdapter {
     request_body: Value,
   ) -> Result<Value, ProviderError> {
     let body = openai_compatible::with_model(route, request_body);
-    let upstream_path = self.upstream_path(ProviderOperation::Responses, false);
+    let upstream_path = self.upstream_path(ProviderOperation::Responses, false, route, config);
     let ctx = UpstreamLogContext {
       provider: route.provider.clone(),
       adapter: self.name().to_string(),
-      upstream_path: upstream_path.to_string(),
+      upstream_path: upstream_path.clone(),
       method: "POST",
       model: body.get("model").and_then(|v| v.as_str()).map(str::to_string),
       stream: false,
@@ -99,7 +134,7 @@ impl ProviderAdapter for OpenAiAdapter {
     openai_compatible::post_json(
       &self.client,
       ctx,
-      join_upstream_url(&config.base_url, upstream_path),
+      join_upstream_url(&config.base_url, &upstream_path),
       self.headers(config, creds),
       body,
       HttpErrorFormat::StatusOnly,
@@ -115,11 +150,11 @@ impl ProviderAdapter for OpenAiAdapter {
     request_body: Value,
   ) -> Result<ProviderStreamResponse, ProviderError> {
     let body = openai_compatible::with_stream(openai_compatible::with_model(route, request_body));
-    let upstream_path = self.upstream_path(ProviderOperation::ChatCompletions, true);
+    let upstream_path = self.upstream_path(ProviderOperation::ChatCompletions, true, route, config);
     let ctx = UpstreamLogContext {
       provider: route.provider.clone(),
       adapter: self.name().to_string(),
-      upstream_path: upstream_path.to_string(),
+      upstream_path: upstream_path.clone(),
       method: "POST",
       model: body.get("model").and_then(|v| v.as_str()).map(str::to_string),
       stream: true,
@@ -127,7 +162,7 @@ impl ProviderAdapter for OpenAiAdapter {
     openai_compatible::post_stream(
       &self.client,
       ctx,
-      join_upstream_url(&config.base_url, upstream_path),
+      join_upstream_url(&config.base_url, &upstream_path),
       self.headers(config, creds),
       body,
     )
@@ -142,11 +177,11 @@ impl ProviderAdapter for OpenAiAdapter {
     request_body: Value,
   ) -> Result<ProviderStreamResponse, ProviderError> {
     let body = openai_compatible::with_stream(openai_compatible::with_model(route, request_body));
-    let upstream_path = self.upstream_path(ProviderOperation::Responses, true);
+    let upstream_path = self.upstream_path(ProviderOperation::Responses, true, route, config);
     let ctx = UpstreamLogContext {
       provider: route.provider.clone(),
       adapter: self.name().to_string(),
-      upstream_path: upstream_path.to_string(),
+      upstream_path: upstream_path.clone(),
       method: "POST",
       model: body.get("model").and_then(|v| v.as_str()).map(str::to_string),
       stream: true,
@@ -154,7 +189,7 @@ impl ProviderAdapter for OpenAiAdapter {
     openai_compatible::post_stream(
       &self.client,
       ctx,
-      join_upstream_url(&config.base_url, upstream_path),
+      join_upstream_url(&config.base_url, &upstream_path),
       self.headers(config, creds),
       body,
     )
@@ -250,6 +285,62 @@ mod tests {
       Some("Bearer override")
     );
     assert!(headers.get(HeaderName::from_static("content-type")).is_none());
+  }
+
+  #[test]
+  fn codex_mode_uses_non_v1_paths() {
+    let adapter = OpenAiAdapter::new();
+    let route = route("codex", "gpt-5.4-codex");
+    let normal = provider_def("http://unused");
+    let mut codex = provider_def("http://unused");
+    codex
+      .metadata
+      .insert(CODEX_MODE_METADATA_KEY.to_string(), CODEX_MODE_RESPONSES.to_string());
+
+    assert_eq!(
+      adapter.upstream_path(ProviderOperation::ChatCompletions, false, &route, &normal),
+      "/v1/chat/completions"
+    );
+    assert_eq!(
+      adapter.upstream_path(ProviderOperation::Responses, false, &route, &normal),
+      "/v1/responses"
+    );
+    assert_eq!(
+      adapter.upstream_path(ProviderOperation::ChatCompletions, false, &route, &codex),
+      "/chat/completions"
+    );
+    assert_eq!(
+      adapter.upstream_path(ProviderOperation::Responses, false, &route, &codex),
+      "/responses"
+    );
+  }
+
+  #[test]
+  fn chatgpt_account_id_header_is_codex_only() {
+    let adapter = OpenAiAdapter::new();
+    let mut codex = provider_def("http://unused");
+    codex
+      .metadata
+      .insert(CODEX_MODE_METADATA_KEY.to_string(), CODEX_MODE_RESPONSES.to_string());
+    let normal = provider_def("http://unused");
+    let creds = ProviderCredential {
+      api_key: Some("token".to_string()),
+      auth_type: Some("bearer".to_string()),
+      extra: HashMap::from([(String::from("chatgpt_account_id"), String::from("acct_123"))]),
+    };
+
+    let codex_headers = adapter.headers(&codex, Some(&creds));
+    assert_eq!(
+      codex_headers
+        .get(HeaderName::from_static(CHATGPT_ACCOUNT_ID_HEADER))
+        .and_then(|v| v.to_str().ok()),
+      Some("acct_123")
+    );
+
+    let normal_headers = adapter.headers(&normal, Some(&creds));
+    assert!(normal_headers
+      .get(HeaderName::from_static(CHATGPT_ACCOUNT_ID_HEADER))
+      .is_none());
   }
 
   #[tokio::test]

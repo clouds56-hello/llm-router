@@ -74,10 +74,16 @@ impl ProviderAdapter for GitHubCopilotAdapter {
     ProviderCapabilities::all()
   }
 
-  fn upstream_path(&self, operation: ProviderOperation, _stream: bool) -> &'static str {
+  fn upstream_path(
+    &self,
+    operation: ProviderOperation,
+    _stream: bool,
+    _route: &ModelRoute,
+    _provider: &ProviderDefinition,
+  ) -> String {
     match operation {
-      ProviderOperation::ChatCompletions => "/chat/completions",
-      ProviderOperation::Responses => "/v1/responses",
+      ProviderOperation::ChatCompletions => "/chat/completions".to_string(),
+      ProviderOperation::Responses => "/v1/responses".to_string(),
     }
   }
 
@@ -89,11 +95,11 @@ impl ProviderAdapter for GitHubCopilotAdapter {
     request_body: Value,
   ) -> Result<Value, ProviderError> {
     let body = openai_compatible::with_model(route, request_body);
-    let upstream_path = self.upstream_path(ProviderOperation::ChatCompletions, false);
+    let upstream_path = self.upstream_path(ProviderOperation::ChatCompletions, false, route, config);
     let ctx = UpstreamLogContext {
       provider: route.provider.clone(),
       adapter: self.name().to_string(),
-      upstream_path: upstream_path.to_string(),
+      upstream_path: upstream_path.clone(),
       method: "POST",
       model: body.get("model").and_then(|v| v.as_str()).map(str::to_string),
       stream: false,
@@ -101,7 +107,7 @@ impl ProviderAdapter for GitHubCopilotAdapter {
     openai_compatible::post_json(
       &self.client,
       ctx,
-      join_upstream_url(&config.base_url, upstream_path),
+      join_upstream_url(&config.base_url, &upstream_path),
       self.headers(config, creds),
       body,
       HttpErrorFormat::StatusAndBody,
@@ -117,11 +123,11 @@ impl ProviderAdapter for GitHubCopilotAdapter {
     request_body: Value,
   ) -> Result<Value, ProviderError> {
     let body = openai_compatible::with_model(route, request_body);
-    let upstream_path = self.upstream_path(ProviderOperation::Responses, false);
+    let upstream_path = self.upstream_path(ProviderOperation::Responses, false, route, config);
     let ctx = UpstreamLogContext {
       provider: route.provider.clone(),
       adapter: self.name().to_string(),
-      upstream_path: upstream_path.to_string(),
+      upstream_path: upstream_path.clone(),
       method: "POST",
       model: body.get("model").and_then(|v| v.as_str()).map(str::to_string),
       stream: false,
@@ -129,7 +135,7 @@ impl ProviderAdapter for GitHubCopilotAdapter {
     openai_compatible::post_json(
       &self.client,
       ctx,
-      join_upstream_url(&config.base_url, upstream_path),
+      join_upstream_url(&config.base_url, &upstream_path),
       self.headers(config, creds),
       body,
       HttpErrorFormat::StatusAndBody,
@@ -145,11 +151,11 @@ impl ProviderAdapter for GitHubCopilotAdapter {
     request_body: Value,
   ) -> Result<ProviderStreamResponse, ProviderError> {
     let body = openai_compatible::with_stream(openai_compatible::with_model(route, request_body));
-    let upstream_path = self.upstream_path(ProviderOperation::ChatCompletions, true);
+    let upstream_path = self.upstream_path(ProviderOperation::ChatCompletions, true, route, config);
     let ctx = UpstreamLogContext {
       provider: route.provider.clone(),
       adapter: self.name().to_string(),
-      upstream_path: upstream_path.to_string(),
+      upstream_path: upstream_path.clone(),
       method: "POST",
       model: body.get("model").and_then(|v| v.as_str()).map(str::to_string),
       stream: true,
@@ -157,7 +163,7 @@ impl ProviderAdapter for GitHubCopilotAdapter {
     openai_compatible::post_stream(
       &self.client,
       ctx,
-      join_upstream_url(&config.base_url, upstream_path),
+      join_upstream_url(&config.base_url, &upstream_path),
       self.headers(config, creds),
       body,
     )
@@ -172,11 +178,11 @@ impl ProviderAdapter for GitHubCopilotAdapter {
     request_body: Value,
   ) -> Result<ProviderStreamResponse, ProviderError> {
     let body = openai_compatible::with_stream(openai_compatible::with_model(route, request_body));
-    let upstream_path = self.upstream_path(ProviderOperation::Responses, true);
+    let upstream_path = self.upstream_path(ProviderOperation::Responses, true, route, config);
     let ctx = UpstreamLogContext {
       provider: route.provider.clone(),
       adapter: self.name().to_string(),
-      upstream_path: upstream_path.to_string(),
+      upstream_path: upstream_path.clone(),
       method: "POST",
       model: body.get("model").and_then(|v| v.as_str()).map(str::to_string),
       stream: true,
@@ -184,7 +190,7 @@ impl ProviderAdapter for GitHubCopilotAdapter {
     openai_compatible::post_stream(
       &self.client,
       ctx,
-      join_upstream_url(&config.base_url, upstream_path),
+      join_upstream_url(&config.base_url, &upstream_path),
       self.headers(config, creds),
       body,
     )

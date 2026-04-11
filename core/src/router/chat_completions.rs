@@ -40,6 +40,11 @@ pub(super) async fn handle(
   let request_body_for_storage = body.clone();
 
   let account_override = account_override_from_headers(&headers);
+  if route.provider == "codex" {
+    if let Err(err) = state.codex_auth().ensure_fresh_api_key(account_override.clone()).await {
+      return json_error(StatusCode::UNAUTHORIZED, &format!("codex oauth refresh failed: {err}"));
+    }
+  }
   let resolved = match state
     .providers()
     .adapter_for_provider(&loaded, route, account_override.as_deref())
@@ -61,14 +66,23 @@ pub(super) async fn handle(
   );
 
   let caps = adapter.capabilities(route);
+  let prefer_responses = provider_cfg
+    .metadata
+    .get("prefer_responses")
+    .map(|v| v.eq_ignore_ascii_case("true"))
+    .unwrap_or(false);
   let upstream_operation = if stream_requested {
-    if caps.stream_chat_completion {
+    if prefer_responses && caps.stream_responses {
+      ProviderOperation::Responses
+    } else if caps.stream_chat_completion {
       ProviderOperation::ChatCompletions
     } else if caps.stream_responses {
       ProviderOperation::Responses
     } else {
       ProviderOperation::ChatCompletions
     }
+  } else if prefer_responses && caps.responses {
+    ProviderOperation::Responses
   } else if caps.chat_completion {
     ProviderOperation::ChatCompletions
   } else if caps.responses {
@@ -76,8 +90,8 @@ pub(super) async fn handle(
   } else {
     ProviderOperation::ChatCompletions
   };
-  let upstream_path = adapter.upstream_path(upstream_operation, stream_requested);
-  let upstream_endpoint = join_url(&provider_cfg.base_url, upstream_path);
+  let upstream_path = adapter.upstream_path(upstream_operation, stream_requested, route, &provider_cfg);
+  let upstream_endpoint = join_url(&provider_cfg.base_url, &upstream_path);
   persist_request_started(
     &state,
     &ctx.request_id,
@@ -98,6 +112,31 @@ pub(super) async fn handle(
   );
 
   if stream_requested {
+    if prefer_responses && caps.stream_responses {
+      let converted = chat_request_to_response_request(body);
+      return match adapter
+        .stream_responses(&provider_cfg, creds.as_ref(), route, converted)
+        .await
+      {
+        Ok(provider_stream) => sse_response(
+          convert_response_stream_to_chat_stream(provider_stream.stream, route),
+          Some(StreamPersistence {
+            state: Arc::clone(&state),
+            request_id: ctx.request_id.clone(),
+            provider: route.provider.clone(),
+            account_id: effective_account_id.clone(),
+            model: route.openai_name.clone(),
+            upstream_status: Some(provider_stream.upstream_status),
+            response_kind: StreamResponseKind::ChatCompletions,
+            started_at: ctx.started_at,
+          }),
+        ),
+        Err(err) => {
+          persist_provider_error(&state, &ctx.request_id, &err, None, ctx.started_at);
+          provider_error_response(err)
+        }
+      };
+    }
     if caps.stream_chat_completion {
       return match adapter
         .stream_chat_completion(&provider_cfg, creds.as_ref(), route, body)
@@ -165,6 +204,38 @@ pub(super) async fn handle(
         adapter.name()
       ),
     );
+  }
+
+  if prefer_responses && caps.responses {
+    let converted = chat_request_to_response_request(body);
+    return match adapter.responses(&provider_cfg, creds.as_ref(), route, converted).await {
+      Ok(data) => {
+        let chat = response_to_chat_completion(data.clone(), route);
+        let usage = extract_usage(&data);
+        persist_request_completed(
+          &state,
+          &ctx.request_id,
+          Some(StatusCode::OK.as_u16()),
+          Some(&chat),
+          None,
+          usage.clone(),
+          ctx.started_at,
+        );
+        apply_usage(
+          &state,
+          route.provider.as_str(),
+          effective_account_id.as_deref(),
+          route.openai_name.as_str(),
+          usage,
+        );
+        persist_assistant_message_from_chat_completion(&state, &ctx.request_id, &chat);
+        Json(chat).into_response()
+      }
+      Err(err) => {
+        persist_provider_error(&state, &ctx.request_id, &err, None, ctx.started_at);
+        provider_error_response(err)
+      }
+    };
   }
 
   if caps.chat_completion {

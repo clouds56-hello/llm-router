@@ -113,10 +113,9 @@ impl ClaudeAdapter {
     body: Value,
   ) -> Result<Value, ProviderError> {
     let started = log_ctx.started(&body);
-    let path = self.upstream_path(ProviderOperation::Responses, false);
     let res = self
       .client
-      .post(join_upstream_url(&config.base_url, path))
+      .post(join_upstream_url(&config.base_url, &log_ctx.upstream_path))
       .headers(self.headers(config, creds)?)
       .json(&body)
       .send()
@@ -158,10 +157,9 @@ impl ClaudeAdapter {
     route: ModelRoute,
   ) -> Result<ProviderStreamResponse, ProviderError> {
     let started = log_ctx.started(&body);
-    let path = self.upstream_path(ProviderOperation::Responses, true);
     let res = self
       .client
-      .post(join_upstream_url(&config.base_url, path))
+      .post(join_upstream_url(&config.base_url, &log_ctx.upstream_path))
       .headers(self.headers(config, creds)?)
       .json(&body)
       .send()
@@ -203,8 +201,14 @@ impl ProviderAdapter for ClaudeAdapter {
     ProviderCapabilities::all()
   }
 
-  fn upstream_path(&self, _operation: ProviderOperation, _stream: bool) -> &'static str {
-    "/v1/messages"
+  fn upstream_path(
+    &self,
+    _operation: ProviderOperation,
+    _stream: bool,
+    _route: &ModelRoute,
+    _provider: &ProviderDefinition,
+  ) -> String {
+    "/v1/messages".to_string()
   }
 
   async fn chat_completion(

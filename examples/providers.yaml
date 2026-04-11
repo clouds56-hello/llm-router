@@ -24,3 +24,11 @@ providers:
       Editor-Version: vscode/1.85.1
       Editor-Plugin-Version: copilot/1.155.0
       User-Agent: GithubCopilot/1.155.0
+
+  codex:
+    provider_type: openai
+    base_url: https://chatgpt.com/backend-api/codex
+    enabled: false
+    metadata:
+      codex_api_mode: responses
+      prefer_responses: "true"

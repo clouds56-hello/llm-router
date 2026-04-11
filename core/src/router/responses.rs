@@ -39,6 +39,11 @@ pub(super) async fn handle(
   let request_body_for_storage = body.clone();
 
   let account_override = account_override_from_headers(&headers);
+  if route.provider == "codex" {
+    if let Err(err) = state.codex_auth().ensure_fresh_api_key(account_override.clone()).await {
+      return json_error(StatusCode::UNAUTHORIZED, &format!("codex oauth refresh failed: {err}"));
+    }
+  }
   let resolved = match state
     .providers()
     .adapter_for_provider(&loaded, route, account_override.as_deref())
@@ -75,8 +80,8 @@ pub(super) async fn handle(
   } else {
     ProviderOperation::Responses
   };
-  let upstream_path = adapter.upstream_path(upstream_operation, stream_requested);
-  let upstream_endpoint = join_url(&provider_cfg.base_url, upstream_path);
+  let upstream_path = adapter.upstream_path(upstream_operation, stream_requested, route, &provider_cfg);
+  let upstream_endpoint = join_url(&provider_cfg.base_url, &upstream_path);
   persist_request_started(
     &state,
     &ctx.request_id,

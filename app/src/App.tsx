@@ -73,6 +73,7 @@ export function App() {
   const [deploymentType, setDeploymentType] = useState("github.com");
   const [enterpriseUrl, setEnterpriseUrl] = useState("");
   const [deviceFlow, setDeviceFlow] = useState<CopilotLoginStart | null>(null);
+  const [oauthProvider, setOauthProvider] = useState<string | null>(null);
   const [removedUndos, setRemovedUndos] = useState<RemovedAccountUndo[]>([]);
   const [error, setError] = useState<string | null>(null);
 
@@ -82,7 +83,7 @@ export function App() {
       .map((a) => a.provider)
       .filter((name, idx, arr) => arr.indexOf(name) === idx && !ordered.includes(name));
     const merged = [...ordered, ...extras];
-    return merged.length > 0 ? merged : ["openai", "deepseek", "claude", "github_copilot"];
+    return merged.length > 0 ? merged : ["openai", "deepseek", "claude", "github_copilot", "codex"];
   }, [providers, accounts]);
 
   const accountsByProvider = useMemo(() => groupAccountsByProvider(accounts), [accounts]);
@@ -203,27 +204,44 @@ export function App() {
     const resp = await invoke<CopilotLoginStart>("copilot_login", { request: req });
     // console.log("copilot login response", resp);
     setDeviceFlow(resp);
+    setOauthProvider("github_copilot");
   };
 
-  const completeCopilotLogin = async () => {
+  const startCodexLogin = async () => {
+    const resp = await invoke<CopilotLoginStart>("codex_login", {
+      request: {},
+    });
+    setDeviceFlow(resp);
+    setOauthProvider("codex");
+  };
+
+  const completeOAuthLogin = async () => {
     if (!deviceFlow) return;
-    const resp = await invoke<CopilotComplete>("copilot_complete_login", {
+    const command =
+      oauthProvider === "codex" ? "codex_complete_login" : "copilot_complete_login";
+    const resp = await invoke<CopilotComplete>(command, {
       request: { session_id: deviceFlow.session_id },
     });
 
     if (resp.status === "ok") {
       setDeviceFlow(null);
+      setOauthProvider(null);
       await refresh();
     } else {
-      setError(`copilot login status: ${resp.status}`);
+      setError(`oauth login status: ${resp.status}`);
     }
   };
 
   const startOauthForProvider = async (provider: string) => {
-    if (!provider.toLowerCase().includes("github")) {
-      throw new Error("OAuth is currently available only for GitHub providers");
+    if (provider === "codex") {
+      await startCodexLogin();
+      return;
     }
-    await startCopilotLogin();
+    if (provider.toLowerCase().includes("github")) {
+      await startCopilotLogin();
+      return;
+    }
+    throw new Error(`OAuth is not available for provider '${provider}'`);
   };
 
   const runStreamingTest = async () => {
@@ -342,7 +360,9 @@ export function App() {
     refreshApiKey?: boolean;
   }) => {
     if (input.refreshApiKey && !input.oauthAccessToken) {
-      await invoke("copilot_refresh_api_key", {
+      const refreshCommand =
+        input.provider === "codex" ? "codex_refresh_api_key" : "copilot_refresh_api_key";
+      await invoke(refreshCommand, {
         request: {
           account_id: input.accountId,
         },
@@ -369,7 +389,9 @@ export function App() {
       },
     });
     if (input.refreshApiKey) {
-      await invoke("copilot_refresh_api_key", {
+      const refreshCommand =
+        input.provider === "codex" ? "codex_refresh_api_key" : "copilot_refresh_api_key";
+      await invoke(refreshCommand, {
         request: {
           account_id: input.accountId,
         },
@@ -457,13 +479,14 @@ export function App() {
             enterpriseUrl={enterpriseUrl}
             setEnterpriseUrl={setEnterpriseUrl}
             deviceFlow={deviceFlow}
+            oauthProvider={oauthProvider}
             onAddApiAccount={addApiAccount}
             onUpdateAccount={modifyAccount}
             onTestAccount={testAccount}
             onRemoveAccount={removeAccount}
             onUndoRemove={undoRemove}
             onStartOauthForProvider={startOauthForProvider}
-            onCompleteCopilotLogin={completeCopilotLogin}
+            onCompleteCopilotLogin={completeOAuthLogin}
             runAction={runAction}
           />
         );

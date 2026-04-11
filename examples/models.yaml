@@ -9,6 +9,10 @@ models:
     provider: openai
     provider_model: gpt-4.1
 
+  - openai_name: gpt-5-mini
+    provider: github_copilot
+    provider_model: gpt-5-mini
+
   - openai_name: deepseek-chat
     provider: deepseek
     provider_model: deepseek-chat
@@ -16,3 +20,11 @@ models:
   - openai_name: claude-3-7-sonnet
     provider: claude
     provider_model: claude-3-7-sonnet-20250219
+
+  - openai_name: gpt-5.3-codex
+    provider: codex
+    provider_model: gpt-5.3-codex
+
+  - openai_name: gpt-5.4-mini
+    provider: codex
+    provider_model: gpt-5.4-mini

@@ -12,6 +12,7 @@ type AccountsPageProps = {
   enterpriseUrl: string;
   setEnterpriseUrl: (value: string) => void;
   deviceFlow: { verification_uri: string; user_code: string; session_id: string } | null;
+  oauthProvider: string | null;
   onAddApiAccount: (input: {
     provider: string;
     accountId?: string;
@@ -108,7 +109,7 @@ export function AccountsPage(props: AccountsPageProps) {
 
   const openAdd = () => {
     const provider = props.providerNames[0] ?? "openai";
-    const oauthDefault = provider.toLowerCase().includes("github");
+    const oauthDefault = provider.toLowerCase().includes("github") || provider === "codex";
     setAddOpen(true);
     setAddProvider(provider);
     setAddMode(oauthDefault ? "oauth" : "api_key");
@@ -119,7 +120,7 @@ export function AccountsPage(props: AccountsPageProps) {
   };
 
   const openAddForProvider = (provider: string) => {
-    const oauthDefault = provider.toLowerCase().includes("github");
+    const oauthDefault = provider.toLowerCase().includes("github") || provider === "codex";
     setAddOpen(true);
     setAddProvider(provider);
     setAddMode(oauthDefault ? "oauth" : "api_key");
@@ -409,7 +410,7 @@ export function AccountsPage(props: AccountsPageProps) {
               onChange={(e) => {
                 const provider = e.target.value;
                 setAddProvider(provider);
-                if (provider.toLowerCase().includes("github")) {
+                if (provider.toLowerCase().includes("github") || provider === "codex") {
                   setAddMode("oauth");
                 }
               }}
@@ -427,14 +428,18 @@ export function AccountsPage(props: AccountsPageProps) {
             <select
               value={addMode}
               onChange={(e) => setAddMode(e.target.value as AddMode)}
-              disabled={addProvider.toLowerCase().includes("github")}
+              disabled={addProvider.toLowerCase().includes("github") || addProvider === "codex"}
             >
               <option value="api_key">API Key</option>
               <option value="oauth">OAuth</option>
             </select>
           </label>
-          {addProvider.toLowerCase().includes("github") ? (
-            <p className="note">GitHub providers default to OAuth connection.</p>
+          {addProvider.toLowerCase().includes("github") || addProvider === "codex" ? (
+            <p className="note">
+              {addProvider === "codex"
+                ? "Codex provider defaults to OAuth connection."
+                : "GitHub providers default to OAuth connection."}
+            </p>
           ) : null}
 
           {addMode === "api_key" ? (
@@ -466,20 +471,26 @@ export function AccountsPage(props: AccountsPageProps) {
             </>
           ) : (
             <>
-              <p className="note">OAuth currently connects GitHub Copilot accounts.</p>
-              <label>
-                Deployment
-                <select value={props.deploymentType} onChange={(e) => props.setDeploymentType(e.target.value)}>
-                  <option value="github.com">GitHub.com</option>
-                  <option value="enterprise">GitHub Enterprise</option>
-                </select>
-              </label>
-              {props.deploymentType === "enterprise" ? (
-                <label>
-                  Enterprise URL/domain
-                  <input value={props.enterpriseUrl} onChange={(e) => props.setEnterpriseUrl(e.target.value)} />
-                </label>
-              ) : null}
+              {addProvider === "codex" ? (
+                <p className="note">OAuth connects your ChatGPT Pro/Plus Codex account.</p>
+              ) : (
+                <>
+                  <p className="note">OAuth currently connects GitHub Copilot accounts.</p>
+                  <label>
+                    Deployment
+                    <select value={props.deploymentType} onChange={(e) => props.setDeploymentType(e.target.value)}>
+                      <option value="github.com">GitHub.com</option>
+                      <option value="enterprise">GitHub Enterprise</option>
+                    </select>
+                  </label>
+                  {props.deploymentType === "enterprise" ? (
+                    <label>
+                      Enterprise URL/domain
+                      <input value={props.enterpriseUrl} onChange={(e) => props.setEnterpriseUrl(e.target.value)} />
+                    </label>
+                  ) : null}
+                </>
+              )}
               <div className="row">
                 <button type="button" onClick={() => void props.runAction(submitAdd)}>
                   Start OAuth
@@ -496,7 +507,8 @@ export function AccountsPage(props: AccountsPageProps) {
                 <pre>
 {`Visit: ${props.deviceFlow.verification_uri}
 Code: ${props.deviceFlow.user_code}
-Session: ${props.deviceFlow.session_id}`}
+Session: ${props.deviceFlow.session_id}
+Provider: ${props.oauthProvider ?? "unknown"}`}
                 </pre>
               ) : null}
             </>

@@ -32,10 +32,16 @@ impl ProviderAdapter for DeepSeekAdapter {
     }
   }
 
-  fn upstream_path(&self, operation: ProviderOperation, _stream: bool) -> &'static str {
+  fn upstream_path(
+    &self,
+    operation: ProviderOperation,
+    _stream: bool,
+    _route: &ModelRoute,
+    _provider: &ProviderDefinition,
+  ) -> String {
     match operation {
-      ProviderOperation::ChatCompletions => "/v1/chat/completions",
-      ProviderOperation::Responses => "/v1/responses",
+      ProviderOperation::ChatCompletions => "/v1/chat/completions".to_string(),
+      ProviderOperation::Responses => "/v1/responses".to_string(),
     }
   }
 

@@ -7,6 +7,11 @@ use serde::Serialize;
 use serde_json::Value;
 
 use llm_router_core::app_state::AppState;
+use llm_router_core::auth::codex::{
+  DeviceAuthCompleteRequest as CodexDeviceAuthCompleteRequest,
+  DeviceAuthCompleteResponse as CodexDeviceAuthCompleteResponse, DeviceAuthStartRequest as CodexDeviceAuthStartRequest,
+  DeviceAuthStartResponse as CodexDeviceAuthStartResponse,
+};
 use llm_router_core::auth::copilot::{
   DeviceAuthCompleteRequest, DeviceAuthCompleteResponse, DeviceAuthStartRequest, DeviceAuthStartResponse,
 };
@@ -278,8 +283,9 @@ pub struct LogQueryRequest {
 #[tauri::command]
 pub async fn get_login_status(state: tauri::State<'_, Arc<AppState>>) -> Result<Value, String> {
   let status = state.copilot_auth().status().map_err(|e| e.to_string())?;
+  let codex = state.codex_auth().status().map_err(|e| e.to_string())?;
 
-  Ok(serde_json::json!({"copilot": status}))
+  Ok(serde_json::json!({"copilot": status, "codex": codex}))
 }
 
 #[tauri::command]
@@ -328,6 +334,54 @@ pub async fn copilot_refresh_api_key(
 #[tauri::command]
 pub async fn copilot_logout(state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
   state.copilot_auth().logout().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn codex_login(
+  state: tauri::State<'_, Arc<AppState>>,
+  request: Option<CodexDeviceAuthStartRequest>,
+) -> Result<CodexDeviceAuthStartResponse, String> {
+  state
+    .codex_auth()
+    .start_device_authorization(request.unwrap_or_default())
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn codex_complete_login(
+  state: tauri::State<'_, Arc<AppState>>,
+  request: CodexDeviceAuthCompleteRequest,
+) -> Result<CodexDeviceAuthCompleteResponse, String> {
+  state
+    .codex_auth()
+    .complete_device_authorization(request)
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CodexRefreshApiKeyRequest {
+  pub account_id: Option<String>,
+}
+
+#[tauri::command]
+pub async fn codex_refresh_api_key(
+  state: tauri::State<'_, Arc<AppState>>,
+  request: Option<CodexRefreshApiKeyRequest>,
+) -> Result<Value, String> {
+  let account_id = request.and_then(|r| r.account_id);
+  let auth_state = state
+    .codex_auth()
+    .refresh_api_key(account_id)
+    .await
+    .map_err(|e| e.to_string())?;
+  Ok(serde_json::json!({ "codex": auth_state }))
+}
+
+#[tauri::command]
+pub async fn codex_logout(state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
+  state.codex_auth().logout().map_err(|e| e.to_string())
 }
 
 #[derive(Debug, Default, Deserialize)]
