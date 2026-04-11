@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use serde_json::Value;
 
-use super::{ProviderAdapter, ProviderCapabilities, ProviderError, ProviderStream, UpstreamLogContext};
 use super::openai_compatible::{self, HttpErrorFormat};
+use super::{ProviderAdapter, ProviderCapabilities, ProviderError, ProviderStream, UpstreamLogContext};
 use crate::config::{ModelRoute, ProviderCredential, ProviderDefinition};
 
 #[derive(Default)]

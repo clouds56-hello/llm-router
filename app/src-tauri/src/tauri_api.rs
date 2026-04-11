@@ -1,7 +1,9 @@
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::Deserialize;
+use serde::Serialize;
 use serde_json::Value;
 
 use llm_router_core::app_state::AppState;
@@ -10,7 +12,37 @@ use llm_router_core::auth::copilot::{
 };
 use llm_router_core::config::{AccountView, ConnectAccountInput, UpdateAccountInput};
 use llm_router_core::db::logging::LogQuery;
+use llm_router_core::db::AccountInformationView;
 use llm_router_core::db::ConversationView;
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct RuntimeAppConfigFile {
+  default_port: Option<u16>,
+  log_level_filter: Option<String>,
+  retention_days: Option<i64>,
+  request_retention_days: Option<i64>,
+  https_proxy: Option<String>,
+}
+
+fn runtime_config_path() -> PathBuf {
+  PathBuf::from("config").join("config.yaml")
+}
+
+fn read_runtime_app_config() -> Result<RuntimeAppConfigFile, String> {
+  let path = runtime_config_path();
+  match std::fs::read_to_string(&path) {
+    Ok(content) => serde_yaml::from_str::<RuntimeAppConfigFile>(&content)
+      .map_err(|e| format!("failed to parse {}: {e}", path.display())),
+    Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(RuntimeAppConfigFile::default()),
+    Err(err) => Err(format!("failed to read {}: {err}", path.display())),
+  }
+}
+
+fn write_runtime_app_config(cfg: &RuntimeAppConfigFile) -> Result<(), String> {
+  let path = runtime_config_path();
+  let bytes = serde_yaml::to_string(cfg).map_err(|e| format!("failed to serialize runtime config: {e}"))?;
+  std::fs::write(&path, bytes).map_err(|e| format!("failed to write {}: {e}", path.display()))
+}
 
 #[tauri::command]
 pub async fn get_provider_status(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec<Value>, String> {
@@ -41,11 +73,71 @@ pub async fn get_model_list(state: tauri::State<'_, Arc<AppState>>) -> Result<Ve
 #[tauri::command]
 pub async fn get_active_config(state: tauri::State<'_, Arc<AppState>>) -> Result<Value, String> {
   let loaded = state.config().get();
+  let app_config = read_runtime_app_config()?;
   Ok(serde_json::json!({
       "providers": loaded.providers,
       "models": loaded.models,
       "credentials": loaded.credentials,
+      "app_config": app_config,
       "last_error": state.config().last_error(),
+  }))
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct SetAppConfigRequest {
+  pub default_port: Option<u16>,
+  pub log_level_filter: Option<String>,
+  pub retention_days: Option<i64>,
+  pub request_retention_days: Option<i64>,
+  pub https_proxy: Option<String>,
+}
+
+#[tauri::command]
+pub async fn set_app_config(
+  _state: tauri::State<'_, Arc<AppState>>,
+  request: SetAppConfigRequest,
+) -> Result<Value, String> {
+  let mut cfg = read_runtime_app_config()?;
+
+  if let Some(v) = request.default_port {
+    cfg.default_port = Some(v);
+  }
+
+  if let Some(v) = request.log_level_filter {
+    let value = v.trim();
+    if value.is_empty() {
+      return Err("log_level_filter cannot be empty".to_string());
+    }
+    cfg.log_level_filter = Some(value.to_string());
+  }
+
+  if let Some(v) = request.retention_days {
+    cfg.retention_days = Some(v.max(1));
+  }
+
+  if let Some(v) = request.request_retention_days {
+    cfg.request_retention_days = Some(v.max(1));
+  }
+
+  if let Some(v) = request.https_proxy {
+    let trimmed = v.trim().to_string();
+    cfg.https_proxy = if trimmed.is_empty() { None } else { Some(trimmed) };
+  }
+
+  write_runtime_app_config(&cfg)?;
+  tracing::info!(
+    target: "config",
+    default_port = cfg.default_port.unwrap_or(11434),
+    log_level_filter = cfg.log_level_filter.as_deref().unwrap_or("info"),
+    retention_days = cfg.retention_days.unwrap_or(7),
+    request_retention_days = cfg.request_retention_days.unwrap_or(30),
+    has_https_proxy = cfg.https_proxy.is_some(),
+    "updated app config in config.yaml"
+  );
+  Ok(serde_json::json!({
+    "ok": true,
+    "app_config": cfg,
+    "note": "restart app to ensure all runtime components pick up config changes"
   }))
 }
 
@@ -76,6 +168,10 @@ pub async fn disconnect_account(
   state
     .config()
     .disconnect_account(&request.provider, &request.account_id)
+    .map_err(|e| e.to_string())?;
+  state
+    .requests()
+    .mark_account_information_disconnected(&request.provider, &request.account_id)
     .map_err(|e| e.to_string())
 }
 
@@ -232,6 +328,24 @@ pub async fn copilot_refresh_api_key(
 #[tauri::command]
 pub async fn copilot_logout(state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
   state.copilot_auth().logout().map_err(|e| e.to_string())
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct AccountInformationQueryRequest {
+  pub provider: Option<String>,
+  pub account_id: Option<String>,
+}
+
+#[tauri::command]
+pub async fn get_account_information(
+  state: tauri::State<'_, Arc<AppState>>,
+  request: Option<AccountInformationQueryRequest>,
+) -> Result<Vec<AccountInformationView>, String> {
+  let req = request.unwrap_or_default();
+  state
+    .requests()
+    .list_account_information(req.provider.as_deref(), req.account_id.as_deref())
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

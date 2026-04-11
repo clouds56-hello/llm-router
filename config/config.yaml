@@ -1,3 +1,5 @@
 default_port: 11434
 log_level_filter: info
 retention_days: 7
+request_retention_days: 30
+# https_proxy: "http://127.0.0.1:7890"

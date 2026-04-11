@@ -7,15 +7,18 @@ use chrono::Utc;
 use parking_lot::Mutex;
 use rusqlite::Connection;
 
+mod account;
 mod chat;
 pub mod logging;
 mod requests;
 mod usage;
 
+use account::AccountInformationTable;
 use chat::ChatTable;
 use requests::RequestsTable;
 use usage::UsageTable;
 
+pub use account::{AccountInformationRecord, AccountInformationView};
 pub use chat::{ChatHistoryRecord, ChatMessageRecord, ConversationMessageView, ConversationView};
 pub use requests::{RequestRecordCompleted, RequestRecordFailed, RequestRecordStart};
 pub use usage::{TokenUsage, UsageRecord};
@@ -27,6 +30,7 @@ pub struct RequestStore {
   requests: Arc<RequestsTable>,
   chat: Arc<ChatTable>,
   usage: Arc<UsageTable>,
+  account_information: Arc<AccountInformationTable>,
 }
 
 impl RequestStore {
@@ -36,7 +40,8 @@ impl RequestStore {
     Ok(Self {
       requests: Arc::new(RequestsTable::new(conn.clone())?),
       chat: Arc::new(ChatTable::new(conn.clone())?),
-      usage: Arc::new(UsageTable::new(conn)?),
+      usage: Arc::new(UsageTable::new(conn.clone())?),
+      account_information: Arc::new(AccountInformationTable::new(conn)?),
     })
   }
 
@@ -71,6 +76,26 @@ impl RequestStore {
 
   pub fn apply_usage(&self, input: UsageRecord) -> Result<()> {
     self.usage.apply_usage(input)
+  }
+
+  pub fn upsert_account_information(&self, input: AccountInformationRecord) -> Result<()> {
+    self.account_information.upsert(input)
+  }
+
+  pub fn touch_account_information_connected(&self, provider: &str, account_id: &str) -> Result<()> {
+    self.account_information.touch_connected(provider, account_id)
+  }
+
+  pub fn mark_account_information_disconnected(&self, provider: &str, account_id: &str) -> Result<()> {
+    self.account_information.mark_disconnected(provider, account_id)
+  }
+
+  pub fn list_account_information(
+    &self,
+    provider: Option<&str>,
+    account_id: Option<&str>,
+  ) -> Result<Vec<AccountInformationView>> {
+    self.account_information.list(provider, account_id)
   }
 
   pub fn prune_older_than_days(&self, days: i64) -> Result<()> {

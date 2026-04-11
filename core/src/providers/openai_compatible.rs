@@ -249,7 +249,10 @@ mod tests {
   #[test]
   fn sse_parser_preserves_multiline_and_crlf() {
     let frame = "event: message\r\ndata: {\"a\":1}\r\ndata: {\"b\":2}\r\n";
-    assert_eq!(parse_sse_frame_payloads(frame), vec!["{\"a\":1}\n{\"b\":2}".to_string()]);
+    assert_eq!(
+      parse_sse_frame_payloads(frame),
+      vec!["{\"a\":1}\n{\"b\":2}".to_string()]
+    );
   }
 
   #[test]

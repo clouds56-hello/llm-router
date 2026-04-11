@@ -24,7 +24,11 @@ impl ClaudeAdapter {
     }
   }
 
-  fn headers(&self, config: &ProviderDefinition, creds: Option<&ProviderCredential>) -> Result<HeaderMap, ProviderError> {
+  fn headers(
+    &self,
+    config: &ProviderDefinition,
+    creds: Option<&ProviderCredential>,
+  ) -> Result<HeaderMap, ProviderError> {
     let mut headers = HeaderMap::new();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     headers.insert(

@@ -11,6 +11,7 @@ use tauri::Manager;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
+use url::Url;
 
 mod tauri_api;
 
@@ -20,6 +21,7 @@ struct AppConfig {
   log_level_filter: String,
   retention_days: i64,
   request_retention_days: i64,
+  https_proxy: Option<String>,
 }
 
 impl Default for AppConfig {
@@ -29,6 +31,7 @@ impl Default for AppConfig {
       log_level_filter: "info".to_string(),
       retention_days: 7,
       request_retention_days: 30,
+      https_proxy: None,
     }
   }
 }
@@ -39,6 +42,7 @@ struct AppConfigFile {
   log_level_filter: Option<String>,
   retention_days: Option<i64>,
   request_retention_days: Option<i64>,
+  https_proxy: Option<String>,
 }
 
 fn load_app_config(config_dir: &Path) -> AppConfig {
@@ -71,6 +75,12 @@ fn load_app_config(config_dir: &Path) -> AppConfig {
       if let Some(v) = file_cfg.request_retention_days {
         cfg.request_retention_days = v.max(1);
       }
+      if let Some(v) = file_cfg.https_proxy {
+        let trimmed = v.trim();
+        if !trimmed.is_empty() {
+          cfg.https_proxy = Some(trimmed.to_string());
+        }
+      }
     }
     Err(err) => {
       eprintln!("failed to parse {}: {err}", path.display());
@@ -84,6 +94,7 @@ fn load_app_config(config_dir: &Path) -> AppConfig {
 async fn main() {
   let config_dir = PathBuf::from("config");
   let app_config = load_app_config(&config_dir);
+  let configured_proxy = apply_proxy_env(&app_config);
   let state = core::build_state(config_dir, app_config.retention_days, app_config.request_retention_days)
     .await
     .expect("state initialization failed");
@@ -96,6 +107,9 @@ async fn main() {
     .with(tracing_subscriber::fmt::layer())
     .with(state.log_layer())
     .init();
+  if let Some(proxy) = configured_proxy {
+    tracing::info!(target: "config", proxy = %proxy, "configured HTTPS proxy from config.yaml");
+  }
 
   if let Err(err) = start_router_with_fallback(Arc::clone(&state), app_config.default_port).await {
     tracing::error!("failed to start embedded router server: {err}");
@@ -107,6 +121,7 @@ async fn main() {
       tauri_api::get_provider_status,
       tauri_api::get_model_list,
       tauri_api::get_active_config,
+      tauri_api::set_app_config,
       tauri_api::list_accounts,
       tauri_api::connect_account,
       tauri_api::disconnect_account,
@@ -121,6 +136,7 @@ async fn main() {
       tauri_api::copilot_complete_login,
       tauri_api::copilot_refresh_api_key,
       tauri_api::copilot_logout,
+      tauri_api::get_account_information,
       tauri_api::get_router_state,
       tauri_api::start_router_server,
       tauri_api::stop_router_server,
@@ -137,6 +153,30 @@ async fn main() {
     })
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
+}
+
+fn apply_proxy_env(app_config: &AppConfig) -> Option<String> {
+  let Some(proxy) = app_config.https_proxy.as_ref() else {
+    return None;
+  };
+  // SAFETY: This runs during startup before background tasks and request clients are spawned.
+  unsafe {
+    std::env::set_var("HTTPS_PROXY", proxy);
+    std::env::set_var("https_proxy", proxy);
+  }
+  Some(redact_proxy_for_log(proxy))
+}
+
+fn redact_proxy_for_log(input: &str) -> String {
+  match Url::parse(input.trim()) {
+    Ok(parsed) => {
+      let scheme = parsed.scheme();
+      let host = parsed.host_str().unwrap_or("unknown");
+      let port = parsed.port().map(|v| format!(":{v}")).unwrap_or_default();
+      format!("{scheme}://{host}{port}")
+    }
+    Err(_) => "invalid_proxy_url".to_string(),
+  }
 }
 
 async fn start_router_with_fallback(

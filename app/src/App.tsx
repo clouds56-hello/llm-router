@@ -10,6 +10,7 @@ import { StatusPage } from "./pages/StatusPage";
 import { StreamPage } from "./pages/StreamPage";
 import {
   type AccountView,
+  type AccountInformationView,
   type ConversationView,
   type CopilotComplete,
   type CopilotLoginStart,
@@ -57,6 +58,7 @@ export function App() {
   const [activeTab, setActiveTab] = useState<TabId>(readStoredTab);
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
   const [accounts, setAccounts] = useState<AccountView[]>([]);
+  const [accountInformation, setAccountInformation] = useState<AccountInformationView[]>([]);
   const [models, setModels] = useState<ModelView[]>([]);
   const [config, setConfig] = useState<Record<string, unknown> | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -144,20 +146,22 @@ export function App() {
           .filter(([, value]) => value !== null)
           .map(([key, value]) => [key, String(value)])
       ).toString()}`;
-      const [providerData, accountData, modelData, configData, logsData, conversationData] = await Promise.all([
-        invokeOrFetch<ProviderStatus[]>("get_provider_status", "/api/providers/status", routerBase).then((v) =>
-          Array.isArray(v) ? v : (v as unknown as { providers: ProviderStatus[] }).providers
-        ),
-        invoke<AccountView[]>("list_accounts"),
+      const [providerData, accountData, modelData, configData, logsData, conversationData, accountInfoData] =
+        await Promise.all([
+          invokeOrFetch<ProviderStatus[]>("get_provider_status", "/api/providers/status", routerBase).then((v) =>
+            Array.isArray(v) ? v : (v as unknown as { providers: ProviderStatus[] }).providers
+          ),
+          invoke<AccountView[]>("list_accounts"),
         invokeOrFetch<ModelView[]>("get_model_list", "/api/models", routerBase).then((v) =>
           Array.isArray(v) ? v : (v as unknown as { models: ModelView[] }).models
         ),
         invoke<Record<string, unknown>>("get_active_config"),
-        invokeOrFetch<Record<string, LogEntry[]>>("get_request_logs", logsFallbackPath, routerBase, {
-          request: logsReq,
-        }),
-        invoke<ConversationView[]>("get_chat_conversations", { request: { limit: 100 } }),
-      ]);
+          invokeOrFetch<Record<string, LogEntry[]>>("get_request_logs", logsFallbackPath, routerBase, {
+            request: logsReq,
+          }),
+          invoke<ConversationView[]>("get_chat_conversations", { request: { limit: 100 } }),
+          invoke<AccountInformationView[]>("get_account_information"),
+        ]);
 
       setProviders(providerData);
       setAccounts(accountData);
@@ -165,6 +169,7 @@ export function App() {
       setConfig(configData);
       setLogs(logsData.logs ?? []);
       setConversations(conversationData ?? []);
+      setAccountInformation(accountInfoData ?? []);
 
       const routerState = await invoke<{ running: boolean; addr: string | null }>("get_router_state");
       if (routerState.running && routerState.addr) {
@@ -352,9 +357,6 @@ export function App() {
     }
     if (input.oauthAccessToken) {
       setSecrets.oauth_access_token = input.oauthAccessToken;
-      if (input.refreshApiKey) {
-        setSecrets.api_key = input.oauthAccessToken;
-      }
     }
     await invoke("update_account", {
       request: {
@@ -366,6 +368,13 @@ export function App() {
         set_secrets: Object.keys(setSecrets).length > 0 ? setSecrets : null,
       },
     });
+    if (input.refreshApiKey) {
+      await invoke("copilot_refresh_api_key", {
+        request: {
+          account_id: input.accountId,
+        },
+      });
+    }
     await refresh();
   };
 
@@ -421,6 +430,19 @@ export function App() {
     await refresh();
   };
 
+  const setAppConfig = async (patch: {
+    default_port?: number;
+    log_level_filter?: string;
+    retention_days?: number;
+    request_retention_days?: number;
+    https_proxy?: string;
+  }) => {
+    await invoke("set_app_config", {
+      request: patch,
+    });
+    await refresh();
+  };
+
   const renderActiveTab = () => {
     switch (activeTab) {
       case "accounts":
@@ -428,6 +450,7 @@ export function App() {
           <AccountsPage
             providerNames={providerNames}
             accountsByProvider={accountsByProvider}
+            accountInformation={accountInformation}
             removedUndos={removedUndos}
             deploymentType={deploymentType}
             setDeploymentType={setDeploymentType}
@@ -486,7 +509,7 @@ export function App() {
           />
         );
       case "config":
-        return <ConfigPage config={config} />;
+        return <ConfigPage config={config} onSetAppConfig={setAppConfig} runAction={runAction} />;
       case "about":
         return <AboutPage routerBase={routerBase} />;
       default:

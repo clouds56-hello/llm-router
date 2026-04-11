@@ -1,10 +1,11 @@
 import { type ReactNode, useMemo, useState } from "react";
 
-import type { AccountView, RemovedAccountUndo } from "../lib/state";
+import type { AccountInformationView, AccountQuotaItem, AccountView, RemovedAccountUndo } from "../lib/state";
 
 type AccountsPageProps = {
   providerNames: string[];
   accountsByProvider: Record<string, AccountView[]>;
+  accountInformation: AccountInformationView[];
   removedUndos: RemovedAccountUndo[];
   deploymentType: string;
   setDeploymentType: (value: string) => void;
@@ -81,6 +82,14 @@ export function AccountsPage(props: AccountsPageProps) {
     }
     return out;
   }, [props.removedUndos]);
+
+  const accountInfoByKey = useMemo(() => {
+    const out: Record<string, AccountInformationView> = {};
+    for (const row of props.accountInformation) {
+      out[`${row.provider}::${row.account_id}`] = row;
+    }
+    return out;
+  }, [props.accountInformation]);
 
   const openAdd = () => {
     const provider = props.providerNames[0] ?? "openai";
@@ -230,6 +239,8 @@ export function AccountsPage(props: AccountsPageProps) {
 
                       const account = row.account;
                       const originalIndex = index;
+                      const info = accountInfoByKey[`${providerName}::${account.id}`];
+                      const quotaItems: AccountQuotaItem[] = parseQuotaItems(info?.quota);
                       return (
                         <li key={account.id}>
                           <div className="row row-tight">
@@ -262,6 +273,29 @@ export function AccountsPage(props: AccountsPageProps) {
                               Remove
                             </button>
                           </div>
+                          {info ? (
+                            <div className="row row-tight">
+                              <span>status: {info.status}</span>
+                              {info.plan ? <span>plan: {info.plan}</span> : null}
+                              {info.email ? <span>email: {info.email}</span> : null}
+                            </div>
+                          ) : null}
+                          {quotaItems.length > 0 ? (
+                            <div>
+                              <small>quota:</small>
+                              <ul>
+                                {quotaItems.map((q) => (
+                                  <li key={q.name}>
+                                    <small>
+                                      {q.name} | total: {formatQuotaNumber(q.total)} | remaining: {formatQuotaNumber(q.remaining)}
+                                      {" | "}percent: {formatQuotaNumber(q.percent)}
+                                      {q.expires ? ` | expires: ${q.expires}` : ""}
+                                    </small>
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          ) : null}
                           <small>secrets: {account.secret_keys.join(", ") || "none"}</small>
                         </li>
                       );
@@ -435,4 +469,34 @@ Session: ${props.deviceFlow.session_id}`}
       ) : null}
     </section>
   );
+}
+
+function parseQuotaItems(raw: string | null | undefined): AccountQuotaItem[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((row): AccountQuotaItem | null => {
+        if (!row || typeof row !== "object") return null;
+        const v = row as Record<string, unknown>;
+        if (typeof v.name !== "string" || !v.name.trim()) return null;
+        return {
+          name: v.name,
+          total: typeof v.total === "number" ? v.total : null,
+          percent: typeof v.percent === "number" ? v.percent : null,
+          remaining: typeof v.remaining === "number" ? v.remaining : null,
+          expires: typeof v.expires === "string" ? v.expires : null,
+        };
+      })
+      .filter((v): v is AccountQuotaItem => v !== null);
+  } catch {
+    return [];
+  }
+}
+
+function formatQuotaNumber(value: number | null | undefined): string {
+  if (typeof value !== "number" || Number.isNaN(value)) return "n/a";
+  if (Number.isInteger(value)) return String(value);
+  return value.toFixed(2);
 }

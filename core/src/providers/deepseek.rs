@@ -39,10 +39,7 @@ impl ProviderAdapter for DeepSeekAdapter {
     route: &ModelRoute,
     request_body: Value,
   ) -> Result<Value, ProviderError> {
-    self
-      .inner
-      .chat_completion(config, creds, route, request_body)
-      .await
+    self.inner.chat_completion(config, creds, route, request_body).await
   }
 
   async fn responses(

@@ -568,6 +568,15 @@ impl ConfigManager {
 
     loaded.credentials.normalize_v2();
     self.persist_and_swap(loaded)?;
+    tracing::info!(
+      target: "account",
+      provider = %provider,
+      account_id = %account_id,
+      updated_existing = updated_existing,
+      set_default = input.set_default.unwrap_or(false),
+      enabled = input.enabled.unwrap_or(true),
+      "account connected"
+    );
 
     self
       .list_accounts()
@@ -584,7 +593,14 @@ impl ConfigManager {
 
     provider_cfg.accounts.retain(|a| a.id != account_id);
     loaded.credentials.normalize_v2();
-    self.persist_and_swap(loaded)
+    self.persist_and_swap(loaded)?;
+    tracing::info!(
+      target: "account",
+      provider = provider,
+      account_id = account_id,
+      "account disconnected"
+    );
+    Ok(())
   }
 
   pub fn set_default_account(&self, provider: &str, account_id: &str) -> Result<()> {
@@ -607,12 +623,27 @@ impl ConfigManager {
     }
 
     loaded.credentials.normalize_v2();
-    self.persist_and_swap(loaded)
+    self.persist_and_swap(loaded)?;
+    tracing::info!(
+      target: "account",
+      provider = provider,
+      account_id = account_id,
+      "account set as default"
+    );
+    Ok(())
   }
 
   pub fn update_account(&self, input: UpdateAccountInput) -> Result<AccountView> {
     let mut loaded = self.current.read().clone();
     let provider = input.provider.clone();
+    let updated_label = input.label.is_some();
+    let updated_auth_type = input.auth_type.is_some();
+    let updated_enabled = input.enabled.is_some();
+    let set_default = input.set_default.unwrap_or(false);
+    let clear_secret_keys_count = input.clear_secret_keys.as_ref().map(Vec::len).unwrap_or(0);
+    let set_secrets_count = input.set_secrets.as_ref().map(HashMap::len).unwrap_or(0);
+    let clear_meta_keys_count = input.clear_meta_keys.as_ref().map(Vec::len).unwrap_or(0);
+    let set_meta_count = input.set_meta.as_ref().map(HashMap::len).unwrap_or(0);
 
     let provider_cfg = loaded
       .credentials
@@ -668,6 +699,20 @@ impl ConfigManager {
 
     loaded.credentials.normalize_v2();
     self.persist_and_swap(loaded)?;
+    tracing::info!(
+      target: "account",
+      provider = %provider,
+      account_id = %input.account_id,
+      updated_label = updated_label,
+      updated_auth_type = updated_auth_type,
+      updated_enabled = updated_enabled,
+      set_default = set_default,
+      clear_secret_keys_count = clear_secret_keys_count,
+      set_secrets_count = set_secrets_count,
+      clear_meta_keys_count = clear_meta_keys_count,
+      set_meta_count = set_meta_count,
+      "account updated"
+    );
 
     self
       .list_accounts()

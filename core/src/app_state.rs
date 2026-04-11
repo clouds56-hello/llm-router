@@ -55,7 +55,7 @@ impl AppState {
     requests: RequestStore,
     providers: ProviderRegistry,
   ) -> Result<Self> {
-    let copilot_auth = CopilotAuthManager::new(config_dir, config.clone());
+    let copilot_auth = CopilotAuthManager::new(config_dir, config.clone(), requests.clone());
 
     Ok(Self {
       config,

@@ -28,6 +28,8 @@ Desktop behavior:
   - `default_port`
   - `log_level_filter`
   - `retention_days`
+  - `request_retention_days`
+  - `https_proxy` (example: `http://127.0.0.1:7890`)
 
 Dashboard includes:
 - provider status

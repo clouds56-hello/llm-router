@@ -13,8 +13,8 @@ use crate::config::{LoadedConfig, ModelRoute, ProviderCredential, ProviderDefini
 pub mod claude;
 pub mod copilot;
 pub mod deepseek;
-mod openai_compatible;
 pub mod openai;
+mod openai_compatible;
 mod upstream_logging;
 
 pub type ProviderStream = Pin<Box<dyn Stream<Item = Result<String, ProviderError>> + Send + 'static>>;

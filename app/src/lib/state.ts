@@ -37,6 +37,31 @@ export type AccountView = {
   secret_keys: string[];
 };
 
+export type AccountQuotaItem = {
+  name: string;
+  total?: number | null;
+  percent?: number | null;
+  remaining?: number | null;
+  expires?: string | null;
+};
+
+export type AccountInformationView = {
+  provider: string;
+  account_id: string;
+  user_id?: string | null;
+  name?: string | null;
+  email?: string | null;
+  plan?: string | null;
+  quota?: string | null;
+  reset_date?: string | null;
+  status: string;
+  metadata: Record<string, unknown>;
+  first_seen_at: string;
+  last_seen_at: string;
+  updated_at: string;
+  disconnected_at?: string | null;
+};
+
 export type ConversationMessage = {
   seq: number;
   role: string;
