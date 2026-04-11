@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use serde_json::Value;
 
-use super::openai_compatible::{self, HttpErrorFormat};
+use super::utils::{self, HttpErrorFormat};
 use super::{
   join_upstream_url, ProviderAdapter, ProviderCapabilities, ProviderError, ProviderOperation, ProviderStreamResponse,
   UpstreamLogContext,
@@ -47,7 +47,7 @@ impl OpenAiAdapter {
         }
       }
     }
-    openai_compatible::apply_config_headers(&mut headers, &config.headers);
+    utils::apply_config_headers(&mut headers, &config.headers);
     headers
   }
 
@@ -71,10 +71,13 @@ impl OpenAiAdapter {
       match obj.get("input") {
         Some(Value::Array(_)) => {}
         Some(Value::String(value)) => {
-          obj.insert("input".to_string(), serde_json::json!([{
-            "role": "user",
-            "content": value,
-          }]));
+          obj.insert(
+            "input".to_string(),
+            serde_json::json!([{
+              "role": "user",
+              "content": value,
+            }]),
+          );
         }
         Some(value) => {
           obj.insert("input".to_string(), Value::Array(vec![value.clone()]));
@@ -114,9 +117,9 @@ impl ProviderAdapter for OpenAiAdapter {
     provider: &ProviderDefinition,
     request_body: &Value,
   ) -> Value {
-    let mut body = openai_compatible::with_model(route, request_body.clone());
+    let mut body = utils::with_model(route, request_body.clone());
     if stream {
-      body = openai_compatible::with_stream(body);
+      body = utils::with_stream(body);
     }
     if operation == ProviderOperation::Responses {
       body = Self::ensure_codex_instructions(provider, body);
@@ -156,7 +159,7 @@ impl ProviderAdapter for OpenAiAdapter {
         "codex provider does not support chat completions".to_string(),
       ));
     }
-    let body = openai_compatible::with_model(route, request_body);
+    let body = utils::with_model(route, request_body);
     let upstream_path = self.upstream_path(ProviderOperation::ChatCompletions, false, route, config);
     let ctx = UpstreamLogContext {
       provider: route.provider.clone(),
@@ -166,7 +169,7 @@ impl ProviderAdapter for OpenAiAdapter {
       model: body.get("model").and_then(|v| v.as_str()).map(str::to_string),
       stream: false,
     };
-    openai_compatible::post_json(
+    utils::post_json(
       &self.client,
       ctx,
       join_upstream_url(&config.base_url, &upstream_path),
@@ -184,7 +187,7 @@ impl ProviderAdapter for OpenAiAdapter {
     route: &ModelRoute,
     request_body: Value,
   ) -> Result<Value, ProviderError> {
-    let body = Self::ensure_codex_instructions(config, openai_compatible::with_model(route, request_body));
+    let body = Self::ensure_codex_instructions(config, utils::with_model(route, request_body));
     let upstream_path = self.upstream_path(ProviderOperation::Responses, false, route, config);
     let ctx = UpstreamLogContext {
       provider: route.provider.clone(),
@@ -194,7 +197,7 @@ impl ProviderAdapter for OpenAiAdapter {
       model: body.get("model").and_then(|v| v.as_str()).map(str::to_string),
       stream: false,
     };
-    openai_compatible::post_json(
+    utils::post_json(
       &self.client,
       ctx,
       join_upstream_url(&config.base_url, &upstream_path),
@@ -217,7 +220,7 @@ impl ProviderAdapter for OpenAiAdapter {
         "codex provider does not support streaming chat completions".to_string(),
       ));
     }
-    let body = openai_compatible::with_stream(openai_compatible::with_model(route, request_body));
+    let body = utils::with_stream(utils::with_model(route, request_body));
     let upstream_path = self.upstream_path(ProviderOperation::ChatCompletions, true, route, config);
     let ctx = UpstreamLogContext {
       provider: route.provider.clone(),
@@ -227,7 +230,7 @@ impl ProviderAdapter for OpenAiAdapter {
       model: body.get("model").and_then(|v| v.as_str()).map(str::to_string),
       stream: true,
     };
-    openai_compatible::post_stream(
+    utils::post_stream(
       &self.client,
       ctx,
       join_upstream_url(&config.base_url, &upstream_path),
@@ -244,10 +247,7 @@ impl ProviderAdapter for OpenAiAdapter {
     route: &ModelRoute,
     request_body: Value,
   ) -> Result<ProviderStreamResponse, ProviderError> {
-    let body = Self::ensure_codex_instructions(
-      config,
-      openai_compatible::with_stream(openai_compatible::with_model(route, request_body)),
-    );
+    let body = Self::ensure_codex_instructions(config, utils::with_stream(utils::with_model(route, request_body)));
     let upstream_path = self.upstream_path(ProviderOperation::Responses, true, route, config);
     let ctx = UpstreamLogContext {
       provider: route.provider.clone(),
@@ -257,7 +257,7 @@ impl ProviderAdapter for OpenAiAdapter {
       model: body.get("model").and_then(|v| v.as_str()).map(str::to_string),
       stream: true,
     };
-    openai_compatible::post_stream(
+    utils::post_stream(
       &self.client,
       ctx,
       join_upstream_url(&config.base_url, &upstream_path),

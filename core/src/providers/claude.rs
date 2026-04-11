@@ -7,7 +7,7 @@ use serde_json::{json, Map, Value};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
-use super::openai_compatible;
+use super::utils;
 use super::{
   join_upstream_url, ProviderAdapter, ProviderCapabilities, ProviderError, ProviderOperation, ProviderStream,
   ProviderStreamResponse, UpstreamLogContext,
@@ -42,7 +42,7 @@ impl ClaudeAdapter {
       let value = HeaderValue::from_str(&token).map_err(|e| ProviderError::internal(e.to_string()))?;
       headers.insert(HeaderName::from_static("x-api-key"), value);
     }
-    openai_compatible::apply_config_headers(&mut headers, &config.headers);
+    utils::apply_config_headers(&mut headers, &config.headers);
     Ok(headers)
   }
 

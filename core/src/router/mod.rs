@@ -806,6 +806,30 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn routes_chat_endpoint_with_openai_compatible_provider_type() {
+    let app = test_harness_with_adapter_and_provider_type(Arc::new(MockAdapter), "openai-compatible")
+      .await
+      .app;
+    let req = axum::http::Request::builder()
+      .method("POST")
+      .uri("/v1/chat/completions")
+      .header("content-type", "application/json")
+      .body(axum::body::Body::from(
+        json!({
+            "model": "gpt-test",
+            "messages": [{"role":"user","content":"hi"}]
+        })
+        .to_string(),
+      ))
+      .unwrap();
+
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    assert!(String::from_utf8_lossy(&body).contains("chat_123"));
+  }
+
+  #[tokio::test]
   async fn supports_sse_streaming_chat() {
     let app = test_app().await;
     let req = axum::http::Request::builder()

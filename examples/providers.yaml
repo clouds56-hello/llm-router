@@ -6,6 +6,13 @@ providers:
     metadata:
       label: OpenAI
 
+  openai_compatible:
+    provider_type: openai-compatible
+    base_url: https://your-openai-compatible-host.example.com
+    enabled: false
+    metadata:
+      label: OpenAI-Compatible
+
   deepseek:
     provider_type: deepseek
     base_url: https://api.deepseek.com

@@ -14,8 +14,9 @@ pub mod claude;
 pub mod copilot;
 pub mod deepseek;
 pub mod openai;
-mod openai_compatible;
+pub mod openai_compat;
 mod upstream_logging;
+mod utils;
 
 pub type ProviderStream = Pin<Box<dyn Stream<Item = Result<String, ProviderError>> + Send + 'static>>;
 
@@ -193,6 +194,10 @@ impl ProviderRegistry {
   pub fn new() -> Self {
     let mut adapters: HashMap<String, Arc<dyn ProviderAdapter>> = HashMap::new();
     adapters.insert("openai".to_string(), Arc::new(openai::OpenAiAdapter::new()));
+    adapters.insert(
+      "openai-compatible".to_string(),
+      Arc::new(openai_compat::OpenAiCompatibleAdapter::new()),
+    );
     adapters.insert("deepseek".to_string(), Arc::new(deepseek::DeepSeekAdapter::new()));
     adapters.insert("claude".to_string(), Arc::new(claude::ClaudeAdapter::new()));
     adapters.insert(
