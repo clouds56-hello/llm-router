@@ -1,0 +1,1412 @@
+#!/usr/bin/env python3
+"""
+DeepWiki Scraper - Extract wiki pages from deepwiki.com as markdown files
+
+Usage:
+    python deepwiki-scraper.py <owner/repo> <output-dir>
+
+Example:
+    python deepwiki-scraper.py jzombie/deepwiki-to-mdbook ./wiki-output
+"""
+
+import sys
+import re
+import time
+import html
+from pathlib import Path
+from urllib.parse import urljoin, urlparse
+import requests
+from bs4 import BeautifulSoup
+import html2text
+
+def sanitize_filename(text):
+    """Convert text to a safe filename"""
+    text = re.sub(r'[^\w\s-]', '', text)
+    text = re.sub(r'[-\s]+', '-', text)
+    return text.strip('-').lower()
+
+def normalized_number_parts(page_number: str):
+    """Shift DeepWiki numbering down by one so page 1 becomes unnumbered."""
+    if not page_number:
+        return None
+    parts = page_number.split('.')
+    try:
+        main = int(parts[0]) - 1
+    except ValueError:
+        return None
+    remainder = parts[1:]
+    if main <= 0:
+        if not remainder:
+            return []
+        main = 1
+    normalized = [str(main)] + remainder
+    return normalized
+
+def resolve_output_path(page_number: str, title: str):
+    slug = sanitize_filename(title) or 'page'
+    parts = normalized_number_parts(page_number)
+    if parts is None or not parts:
+        filename = f"{slug}.md"
+        return filename, None
+    filename = f"{'-'.join(parts)}-{slug}.md"
+    section_dir = f"section-{parts[0]}" if len(parts) > 1 else None
+    return filename, section_dir
+
+def build_target_path(page_number: str, slug: str) -> str:
+    slug = sanitize_filename(slug) or 'page'
+    parts = normalized_number_parts(page_number)
+    if parts is None or not parts:
+        return f"{slug}.md"
+    filename = f"{'-'.join(parts)}-{slug}.md"
+    if len(parts) > 1:
+        return f"section-{parts[0]}/{filename}"
+    return filename
+
+def fetch_page(url: str, session: requests.Session) -> requests.Response:
+    """Fetch a page with retries and browser-like headers"""
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
+
+    for attempt in range(3):
+        try:
+            response = session.get(url, headers=headers, timeout=30)
+            response.raise_for_status()
+            return response
+        except Exception as e:
+            if attempt == 2:
+                raise
+            print(f"  Retry {attempt + 1}/3 after error: {e}")
+            time.sleep(2)
+
+    raise RuntimeError(f"Failed to fetch page after retries: {url}")
+
+def discover_subsections(repo, main_page_num, session):
+    """Try to discover subsections for a main page by checking common patterns"""
+    base_url = f"https://deepwiki.com/{repo}"
+    subsections = []
+
+    # Try up to 10 subsections (e.g., 2.1, 2.2, ..., 2.10)
+    for sub_num in range(1, 11):
+        test_url = f"{base_url}/{main_page_num}-{sub_num}-"
+        try:
+            response = session.head(test_url, allow_redirects=True, timeout=5)
+            if response.status_code == 200:
+                # Follow redirect to get actual URL
+                actual_url = response.url
+                # Extract title from URL slug
+                match = re.search(r'/(\d+-\d+)-(.+)$', urlparse(actual_url).path)
+                if match:
+                    page_num = match.group(1).replace('-', '.')
+                    title_slug = match.group(2)
+                    # Convert slug to title (best guess)
+                    title = title_slug.replace('-', ' ').strip()
+
+                    subsections.append({
+                        'number': page_num,
+                        'title': title,
+                        'url': actual_url,
+                        'href': urlparse(actual_url).path,
+                        'level': 1
+                    })
+        except:
+            # Connection error or timeout, stop trying
+            break
+
+    return subsections
+
+def extract_wiki_structure(repo, session):
+    """Extract the complete wiki structure including subsections from the main wiki page"""
+    base_url = f"https://deepwiki.com/{repo}"
+
+    print(f"Fetching wiki structure from {base_url}...")
+    response = fetch_page(base_url, session)
+    soup = BeautifulSoup(response.text, 'html.parser')
+
+    pages = []
+
+    # Find all links that match the page pattern (including subsections with dots)
+    # Pattern: /owner/repo/<number>-<slug> (e.g., /owner/repo/1-overview, /owner/repo/2.1-subsection)
+    repo_pattern = re.escape(repo)
+    all_links = soup.find_all('a', href=re.compile(rf'^/{repo_pattern}/\d+'))
+
+    seen_urls = set()
+    for link in all_links:
+        href = link.get('href', '')
+        if not href or href in seen_urls:
+            continue
+
+        # Extract page number and title (format: /owner/repo/<number>-<slug>)
+        match = re.search(r'/(\d+(?:\.\d+)*)-(.+)$', href)
+        if match:
+            page_num = match.group(1)
+            title = link.get_text(strip=True)
+            full_url = urljoin(base_url, href)
+
+            # Determine if this is a subsection based on page number
+            level = page_num.count('.')
+
+            pages.append({
+                'number': page_num,
+                'title': title,
+                'url': full_url,
+                'href': href,
+                'level': level  # 0 for main pages (1, 2, 3), 1 for subsections (2.1, 2.2)
+            })
+            seen_urls.add(href)
+
+    # Sort by page number (properly handling subsections)
+    def sort_key(page):
+        parts = [int(x) for x in page['number'].split('.')]
+        return parts
+
+    pages.sort(key=sort_key)
+
+    return pages
+
+def clean_deepwiki_footer(markdown):
+    """Remove DeepWiki UI elements from the end of markdown content"""
+    lines = markdown.split('\n')
+
+    # Find where the DeepWiki footer starts
+    # Use regex patterns to handle variations in the UI text
+    footer_patterns = [
+        r'^\s*Dismiss\s*$',
+        r'Refresh this wiki',
+        r'This wiki was recently refreshed',
+        r'###\s*On this page',
+        r'Please wait \d+ days? to refresh',  # Handles "1 day" or "N days"
+        r'You can refresh again in',           # Alternative phrasing
+        r'^\s*View this search on DeepWiki',
+        r'^\s*Edit Wiki\s*$'
+    ]
+
+    # Compile patterns for efficiency
+    compiled_patterns = [re.compile(pattern, re.IGNORECASE) for pattern in footer_patterns]
+
+    # Scan from end backwards to find footer start
+    footer_start = None
+    for i in range(len(lines) - 1, max(0, len(lines) - 50), -1):
+        line = lines[i].strip()
+        if any(pattern.search(line) for pattern in compiled_patterns):
+            footer_start = i
+            break
+
+    # If we found a footer, scan backwards to find the first indicator
+    # (in case there are multiple, we want the earliest one)
+    if footer_start is not None:
+        for i in range(footer_start - 1, max(0, footer_start - 20), -1):
+            line = lines[i].strip()
+            if any(pattern.search(line) for pattern in compiled_patterns):
+                footer_start = i
+            elif line and not line.startswith('*') and not line.startswith('-'):
+                # Hit content that's not part of the footer
+                break
+
+        # Remove everything from footer_start onwards
+        lines = lines[:footer_start]
+
+    # Also remove trailing empty lines
+    while lines and not lines[-1].strip():
+        lines.pop()
+
+    return '\n'.join(lines)
+
+def convert_html_to_markdown(html_content):
+    """Convert HTML to markdown using html2text - diagrams will be added later"""
+    # Use html2text for conversion
+    h = html2text.HTML2Text()
+    h.ignore_links = False
+    h.body_width = 0  # No line wrapping
+    markdown = h.handle(html_content)
+
+    # NOTE: Mermaid diagram processing is DISABLED
+    # Diagrams will be matched and inserted in a separate pass
+    # This is because the HTML contains diagrams from ALL pages mixed together
+
+    # Clean up DeepWiki footer UI elements
+    markdown = clean_deepwiki_footer(markdown)
+
+    return markdown.strip()
+
+def normalize_mermaid_edge_labels(diagram_text: str) -> str:
+    """Flatten multiline edge labels that Mermaid 11 rejects."""
+    stripped = diagram_text.strip()
+    if not stripped:
+        return diagram_text
+
+    header = stripped.splitlines()[0].lower()
+    if not header.startswith(('graph', 'flowchart')):
+        return diagram_text
+
+    def replacer(match: re.Match) -> str:
+        label = match.group(1)
+        needs_cleanup = any(tok in label for tok in ('\n', '\\n', '(', ')'))
+        if not needs_cleanup:
+            return match.group(0)
+
+        cleaned = label.replace('\\n', ' ').replace('\n', ' ')
+        cleaned = cleaned.replace('(', ' ').replace(')', ' ')
+        cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+        return f"|{cleaned}|"
+
+    return re.sub(r'\|([^|]*)\|', replacer, diagram_text)
+
+def normalize_mermaid_state_descriptions(diagram_text: str) -> str:
+    """Ensure state descriptions adhere to the `State : Description` syntax."""
+    stripped = diagram_text.strip()
+    if not stripped:
+        return diagram_text
+
+    header = stripped.splitlines()[0].lower()
+    if not header.startswith('statediagram'):
+        return diagram_text
+
+    normalized_lines = []
+    for line in diagram_text.split('\n'):
+        if ':' not in line or '::' in line:
+            normalized_lines.append(line)
+            continue
+
+        prefix, suffix = line.split(':', 1)
+        if prefix.strip() and suffix.strip():
+            cleaned_suffix = suffix.replace('\\n', ' ').replace('\n', ' ')
+            cleaned_suffix = cleaned_suffix.replace(':', ' - ')
+            cleaned_suffix = re.sub(r'\s+', ' ', cleaned_suffix).strip()
+            line = f"{prefix.rstrip()} : {cleaned_suffix}"
+        normalized_lines.append(line)
+
+    return '\n'.join(normalized_lines)
+
+def normalize_flowchart_nodes(diagram_text: str) -> str:
+    """Ensure flowchart nodes don't include tokens (like |) that break parsing."""
+    stripped = diagram_text.strip()
+    if not stripped:
+        return diagram_text
+
+    header = stripped.splitlines()[0].lower()
+    if not header.startswith(('graph', 'flowchart')):
+        return diagram_text
+
+    def replace_node_label(match: re.Match) -> str:
+        label = match.group(1)
+        label = label.replace('|', '/')
+        label = re.sub(r'\s+', ' ', label)
+        return f'["{label.strip()}"]'
+
+    text = re.sub(r'\["([^"]*)"\]', replace_node_label, diagram_text)
+
+    # Insert newlines between consecutive statements that were flattened into one line
+    text = re.sub(r'(\"]|\}|\))\s+(?=[A-Za-z0-9_])', r'\1\n', text)
+    text = re.sub(r'(\s\])\s+(?=[A-Za-z0-9_])', r'\1\n', text)
+
+    return text
+
+CONNECTOR_PATTERN = r'-->|==>|-.->|--x|x--|o-->|o->|x->|\*-->|<-->|<-\.->|<--|--o'
+FLOW_CONNECTORS = [
+    '-->', '==>', '-.->', '--x', 'x--', 'o-->', 'o->', 'x->',
+    '*-->', '<-->', '<-.->', '<--', '--o',
+]
+CONNECTOR_PATTERN = '|'.join(re.escape(token) for token in FLOW_CONNECTORS)
+STATEMENT_BREAK_PATTERN = re.compile(
+    rf'(?<!\n)([ \t]+)(?=[A-Za-z0-9_][\w\-]*(?:\s*\[[^\]]*\])?\s*(?:{CONNECTOR_PATTERN})(?:\|[^|]*\|)?\s*)'
+)
+
+def normalize_statement_separators(diagram_text: str) -> str:
+    """Insert newlines between consecutive Mermaid statements flattened onto one line."""
+    stripped = diagram_text.strip()
+    if not stripped:
+        return diagram_text
+
+    header = stripped.splitlines()[0].lower()
+    if not header.startswith(('graph', 'flowchart')):
+        return diagram_text
+
+    def repl(match: re.Match) -> str:
+        spaces = match.group(1)
+        indent_len = len(spaces.replace('\t', '    '))
+        return '\n' + (' ' * indent_len)
+
+    return STATEMENT_BREAK_PATTERN.sub(repl, diagram_text)
+
+def normalize_empty_node_labels(diagram_text: str) -> str:
+    """Give empty Mermaid node labels a fallback so the parser accepts them."""
+    stripped = diagram_text.strip()
+    if not stripped:
+        return diagram_text
+
+    def repl(match: re.Match) -> str:
+        node_id = match.group(1)
+        label_source = re.sub(r'[_\-]+', ' ', node_id).strip() or node_id
+        return f'{node_id}["{label_source}"]'
+
+    return re.sub(r'(\b[A-Za-z0-9_]+)\[""\]', repl, diagram_text)
+
+def normalize_gantt_diagram(diagram_text: str) -> str:
+    """Assign synthetic task IDs when omitted so Mermaid accepts gantt charts."""
+    stripped = diagram_text.lstrip()
+    if not stripped.startswith('gantt'):
+        return diagram_text
+
+    lines = diagram_text.split('\n')
+    normalized = []
+    task_counter = 1
+
+    task_line_pattern = re.compile(r'^(\s*"[^"]+"\s*):\s*(.+)$')
+
+    for line in lines:
+        match = task_line_pattern.match(line)
+        if not match:
+            normalized.append(line)
+            continue
+
+        remainder = match.group(2)
+        parts = [p.strip() for p in remainder.split(',', 2)]
+        if len(parts) < 2:
+            normalized.append(line)
+            continue
+
+        first_token = parts[0]
+        if re.match(r'^[A-Za-z_][\w-]*$', first_token) or first_token.lower().startswith('after '):
+            normalized.append(line)
+            continue
+
+        task_id = f"task{task_counter}"
+        task_counter += 1
+        start_value = parts[0]
+        end_value = parts[1]
+        suffix = ''
+        if len(parts) == 3:
+            suffix = f", {parts[2]}"
+
+        rebuilt = f"{match.group(1)}:{task_id}, {start_value}, {end_value}{suffix}"
+        normalized.append(rebuilt)
+
+    return '\n'.join(normalized)
+
+def normalize_mermaid_diagram(diagram_text: str) -> str:
+    """Apply all normalization passes that keep diagrams compatible with Mermaid 11."""
+    text = normalize_mermaid_edge_labels(diagram_text)
+    text = normalize_mermaid_state_descriptions(text)
+    text = normalize_flowchart_nodes(text)
+    text = normalize_statement_separators(text)
+    text = normalize_empty_node_labels(text)
+    text = normalize_gantt_diagram(text)
+    return text
+
+SOURCE_LINK_PATTERN = re.compile(r'\[([A-Za-z0-9._/-]+?)(\d+-\d+)\]')
+
+def format_source_references(markdown: str) -> str:
+    """Insert colon between filenames and line numbers inside source links."""
+    def replacer(match: re.Match) -> str:
+        filename = match.group(1)
+        lines = match.group(2)
+        if filename.endswith(':'):
+            return match.group(0)
+        return f'[{filename}:{lines}]'
+
+    return SOURCE_LINK_PATTERN.sub(replacer, markdown)
+
+    # Original markitdown code (temporarily disabled)
+    # try:
+    #     # Try markitdown first - create a temporary file since it expects file-like input
+    #     import tempfile
+    #     with tempfile.NamedTemporaryFile(mode='w', suffix='.html', delete=False) as f:
+    #         f.write(html_content)
+    #         temp_path = f.name
+    #
+    #     try:
+    #         md = MarkItDown()
+    #         result = md.convert(temp_path)
+    #         markdown = result.text_content
+    #     finally:
+    #         # Clean up temp file
+    #         os.unlink(temp_path)
+    #
+    #     return markdown.strip()
+    # except Exception as e:
+    #     print(f"  Warning: markitdown failed ({e}), falling back to html2text")
+    #     # Fallback to html2text
+    #     h = html2text.HTML2Text()
+    #     h.ignore_links = False
+    #     h.body_width = 0  # No line wrapping
+    #     markdown = h.handle(html_content)
+    #     return markdown.strip()
+
+def extract_mermaid_from_nextjs_data(html_text):
+    """Extract mermaid diagram code from Next.js streaming response"""
+    mermaid_blocks = []
+
+    try:
+        # Strategy 1: Look for ```mermaid blocks with newline markers. DeepWiki's
+        # payload sometimes uses escaped \n sequences and sometimes embeds real
+        # newline characters, so handle both forms here.
+        pattern = r'```mermaid(?:\\r\\n|\\n|\r?\n)(.*?)(?:\\r\\n|\\n|\r?\n)```'
+        matches = re.finditer(pattern, html_text, re.DOTALL)
+
+        for match in matches:
+            block = match.group(1)
+
+            # Unescape newlines and other escapes
+            block = block.replace('\\n', '\n')
+            block = block.replace('\\t', '\t')
+            block = block.replace('\\"', '"')
+            block = block.replace('\\\\', '\\')
+            block = block.replace('\\u003c', '<')
+            block = block.replace('\\u003e', '>')
+            block = block.replace('\\u0026', '&')
+
+            block = block.strip()
+            if len(block) > 10:
+                mermaid_blocks.append(block)
+                lines = block.split('\n')
+                print(f"  Found mermaid diagram: {lines[0][:50]}... ({len(lines)} lines)")
+
+        # Strategy 2: JavaScript string extraction (fallback)
+        if not mermaid_blocks:
+            print(f"  No fenced mermaid blocks found, trying JavaScript extraction...")
+
+            mermaid_starts = ['graph TD', 'graph TB', 'graph LR', 'graph RL', 'graph BT',
+                            'flowchart TD', 'flowchart TB', 'flowchart LR',
+                            'sequenceDiagram', 'classDiagram']
+
+            for start_keyword in mermaid_starts:
+                pos = 0
+                while True:
+                    pos = html_text.find(start_keyword, pos)
+                    if pos == -1:
+                        break
+
+                    # Look backwards for opening quote
+                    search_start = max(0, pos - 20)
+                    prefix = html_text[search_start:pos]
+                    quote_pos = prefix.rfind('"')
+
+                    if quote_pos == -1:
+                        pos += 1
+                        continue
+
+                    string_start = search_start + quote_pos + 1
+
+                    # Scan forward for closing quote
+                    i = pos
+                    while i < len(html_text) and i < pos + 10000:
+                        if i > 0 and html_text[i-1] == '\\':
+                            i += 1
+                            continue
+
+                        if html_text[i] == '"':
+                            string_end = i
+                            break
+                        i += 1
+                    else:
+                        pos += 1
+                        continue
+
+                    # Extract and unescape
+                    block = html_text[string_start:string_end]
+                    block = block.replace('\\n', '\n')
+                    block = block.replace('\\t', '\t')
+                    block = block.replace('\\"', '"')
+                    block = block.replace('\\\\', '\\')
+                    block = block.replace('\\u003c', '<')
+                    block = block.replace('\\u003e', '>')
+                    block = block.replace('\\u0026', '&')
+
+                    # Clean up HTML tags that break mermaid rendering (after unescaping)
+                    block = block.replace('<br/>', ' ')
+                    block = block.replace('<br />', ' ')
+                    block = block.replace('<br>', ' ')
+                    block = re.sub(r'<[^>]+>', '', block)  # Remove any remaining HTML tags
+
+                    lines = [l for l in block.split('\n') if l.strip()]
+                    if len(lines) >= 3:
+                        mermaid_blocks.append(block.strip())
+                        print(f"  Found JS mermaid diagram: {lines[0][:50]}... ({len(lines)} lines)")
+
+                    pos += 1
+
+        # Deduplicate
+        unique_blocks = []
+        seen = set()
+        for block in mermaid_blocks:
+            fingerprint = block[:100]
+            if fingerprint not in seen:
+                seen.add(fingerprint)
+                unique_blocks.append(block)
+
+        if unique_blocks:
+            print(f"  Extracted {len(unique_blocks)} unique mermaid diagram(s)")
+        else:
+            print(f"  Warning: No valid mermaid diagrams extracted")
+
+        return unique_blocks
+
+        if unique_blocks:
+            print(f"  Extracted {len(unique_blocks)} unique mermaid diagram(s)")
+        else:
+            print(f"  Warning: No valid mermaid diagrams extracted")
+
+        return unique_blocks
+
+    except Exception as e:
+        print(f"  Warning: Failed to extract mermaid from page data: {e}")
+        import traceback
+        traceback.print_exc()
+        return []
+
+def inject_mermaid_into_html(soup, mermaid_blocks):
+    """Inject mermaid blocks into the HTML before markdown conversion"""
+    if not mermaid_blocks:
+        return soup
+
+    # Since we extract ALL diagrams from the Next.js payload (which includes all pages),
+    # but we only want the diagrams for THIS specific page, we have a mismatch.
+    # Best approach: Place diagrams after EVERY paragraph, not just headings,
+    # to create enough insertion points.
+
+    content = soup.find('article') or soup.find('main') or soup.find('body')
+    if not content:
+        return soup
+
+    # Find all insertion points: headings and paragraphs
+    insertion_points = []
+
+    # Add headings
+    for heading in content.find_all(['h2', 'h3', 'h4', 'h5', 'h6']):  # Skip h1 (page title)
+        insertion_points.append(heading)
+
+    # Add some paragraphs as well (every 2nd paragraph)
+    paragraphs = content.find_all('p')
+    for i, p in enumerate(paragraphs):
+        if i % 2 == 0 and len(p.get_text().strip()) > 50:  # Only substantial paragraphs
+            insertion_points.append(p)
+
+    # If still not enough points, just bail and place what we can
+    if len(insertion_points) == 0:
+        print(f"  Warning: No insertion points found for {len(mermaid_blocks)} diagrams")
+        return soup
+
+    # Limit to reasonable number of diagrams (probably only ~10-20 are actually relevant to this page)
+    diagrams_to_place = min(len(mermaid_blocks), len(insertion_points), 50)
+
+    # Inject placeholders
+    for i in range(diagrams_to_place):
+        marker_id = f"MERMAID_PLACEHOLDER_{i}"
+        marker_html = f'<p>[[{marker_id}]]</p>'
+        marker_tag = BeautifulSoup(marker_html, 'html.parser')
+
+        # Insert after this insertion point
+        insertion_points[i].insert_after(marker_tag)
+        if i < 10:  # Only print first 10 to avoid spam
+            print(f"  Placed diagram {i+1} after: {insertion_points[i].get_text()[:40]}")
+
+    if diagrams_to_place < len(mermaid_blocks):
+        print(f"  Note: Placed {diagrams_to_place}/{len(mermaid_blocks)} diagrams (limiting to page-relevant content)")
+
+    return soup
+
+def inject_mermaid_into_markdown(markdown, mermaid_blocks):
+    """
+    Inject mermaid blocks into markdown using intelligent heuristics.
+    Place diagrams after headings that suggest a diagram should follow.
+    """
+    if not mermaid_blocks:
+        return markdown
+
+    # Keywords that suggest a diagram should follow this heading
+    diagram_keywords = [
+        'diagram', 'architecture', 'flow', 'structure', 'pipeline',
+        'workflow', 'overview', 'layers', 'graph', 'visualization',
+        'sequence', 'process', 'hierarchy', 'dependency', 'lifecycle'
+    ]
+
+    lines = markdown.split('\n')
+    result = []
+    diagram_idx = 0
+
+    i = 0
+    while i < len(lines) and diagram_idx < len(mermaid_blocks):
+        line = lines[i]
+        result.append(line)
+
+        # Check if this is a heading that should have a diagram
+        stripped = line.strip().lower()
+        if stripped.startswith('###') or stripped.startswith('##'):
+            # Extract heading text
+            heading_text = stripped.lstrip('#').strip()
+
+            # Check if heading contains diagram keywords
+            if any(keyword in heading_text for keyword in diagram_keywords):
+                # Look ahead to see if next non-empty line is already a diagram
+                next_line_idx = i + 1
+                while next_line_idx < len(lines) and not lines[next_line_idx].strip():
+                    next_line_idx += 1
+
+                # Only inject if next content is not already a diagram
+                if next_line_idx < len(lines) and not lines[next_line_idx].strip().startswith('```'):
+                    # Clean up HTML tags from mermaid block before inserting
+                    cleaned_block = mermaid_blocks[diagram_idx]
+                    cleaned_block = cleaned_block.replace('<br/>', ' ')
+                    cleaned_block = cleaned_block.replace('<br />', ' ')
+                    cleaned_block = cleaned_block.replace('<br>', ' ')
+                    cleaned_block = re.sub(r'<[^>]+>', '', cleaned_block)
+
+                    # Insert diagram after this heading
+                    result.append('')
+                    result.append('```mermaid')
+                    result.append(cleaned_block)
+                    result.append('```')
+                    result.append('')
+                    diagram_idx += 1
+                    print(f"  [DEBUG] Inserted diagram {diagram_idx} after heading: {heading_text[:50]}")
+
+        i += 1
+
+    # Append remaining lines
+    while i < len(lines):
+        result.append(lines[i])
+        i += 1
+
+    # If we still have unused diagrams, append them at the end
+    if diagram_idx < len(mermaid_blocks):
+        print(f"  [DEBUG] {len(mermaid_blocks) - diagram_idx} diagrams not placed, appending at end")
+        result.append('')
+        result.append('## Additional Diagrams')
+        result.append('')
+        for idx in range(diagram_idx, len(mermaid_blocks)):
+            result.append('```mermaid')
+            result.append(mermaid_blocks[idx])
+            result.append('```')
+            result.append('')
+
+    return '\n'.join(result)
+
+def extract_mermaid_from_nextjs_page(html_content):
+    """Extract mermaid diagrams directly from the HTML source"""
+    diagrams = []
+
+    try:
+        # Extract mermaid blocks directly from HTML
+        # Pattern: ```mermaid\n...```
+        # This works because DeepWiki embeds the content in the initial HTML
+        pattern = r'```mermaid\n(.*?)\n```'
+        matches = re.finditer(pattern, html_content, re.DOTALL)
+
+        for match in matches:
+            diagram = match.group(1).strip()
+            if len(diagram) > 20:  # Basic sanity check
+                diagrams.append(diagram)
+
+        # Deduplicate diagrams
+        unique_diagrams = []
+        seen_fingerprints = set()
+        for diagram in diagrams:
+            fingerprint = diagram[:100]
+            if fingerprint not in seen_fingerprints:
+                seen_fingerprints.add(fingerprint)
+                unique_diagrams.append(diagram)
+
+        return unique_diagrams
+
+    except Exception as e:
+        print(f"  [WARNING] Failed to extract diagrams: {e}")
+        return []
+
+
+def inject_diagrams_into_markdown(markdown, diagrams):
+    """Inject diagrams into markdown content at appropriate locations"""
+    if not diagrams:
+        return markdown
+
+    lines = markdown.split('\n')
+    result = []
+    diagram_idx = 0
+
+    # Strategy: inject diagrams after headings (## level or higher)
+    for i, line in enumerate(lines):
+        result.append(line)
+
+        # After a heading that's ## or higher, inject next diagram
+        if line.startswith('##') and diagram_idx < len(diagrams):
+            # Add blank line, diagram block, and another blank line
+            result.append('')
+            result.append('```mermaid')
+            result.append(diagrams[diagram_idx])
+            result.append('```')
+            result.append('')
+            diagram_idx += 1
+
+    # If there are leftover diagrams, append them at the end
+    if diagram_idx < len(diagrams):
+        result.append('')
+        result.append('## Additional Diagrams')
+        result.append('')
+        for idx in range(diagram_idx, len(diagrams)):
+            result.append('```mermaid')
+            result.append(diagrams[idx])
+            result.append('```')
+            result.append('')
+
+    return '\n'.join(result)
+
+def extract_page_content(url, session, current_page_info=None):
+    """Extract the main content from a wiki page"""
+    print(f"  Fetching {url}...")
+    response = fetch_page(url, session)
+
+    # Parse HTML with BeautifulSoup
+    soup = BeautifulSoup(response.text, 'html.parser')
+
+
+    # Remove unwanted elements first
+    for elem in soup.select('nav, header, footer, aside, .sidebar, .menu, script, style, .navigation, [role="navigation"]'):
+        elem.decompose()
+
+    # Find main content area
+    content = None
+
+    # Try common content selectors
+    for selector in ['article', 'main', '.wiki-content', '.content', '#content', '.markdown-body']:
+        content = soup.select_one(selector)
+        if content:
+            break
+
+    # Try role attribute separately
+    if not content:
+        content = soup.find(attrs={'role': 'main'})
+
+    # Fallback: look for the largest text block
+    if not content:
+        content = soup.find('body')
+
+    if not content:
+        raise Exception(f"Could not find content on page: {url}")
+
+    # Remove DeepWiki header/UI elements before main content
+    # Look for specific text patterns and remove those elements
+    for elem in content.find_all(['div', 'span', 'a', 'button']):
+        text = elem.get_text(strip=True)
+        # Remove elements containing these DeepWiki UI strings
+        if any(keyword in text for keyword in [
+            'Index your code with Devin',
+            'Edit Wiki',
+            'Last indexed:',
+            'View this search on DeepWiki'
+        ]) and len(text) < 200:  # Only remove short elements (not whole paragraphs)
+            elem.decompose()
+
+    # Remove specific DeepWiki navigation elements (table of contents list)
+    # This is typically a long list of links to all wiki pages
+    for ul in content.find_all('ul'):
+        # Check if this looks like a navigation menu (many links to wiki pages)
+        links = ul.find_all('a')
+        if len(links) > 5:  # If more than 5 links in one list
+            # Check if they're internal wiki links
+            wiki_links = [a for a in links if a.get('href', '').startswith('/')]
+            if len(wiki_links) > len(links) * 0.8:  # If 80%+ are internal links
+                ul.decompose()
+
+    # Convert to markdown
+    html_content = str(content)
+
+    # DEBUG: Check if mermaid blocks exist in HTML
+    mermaid_count = html_content.count('language-mermaid')
+    print(f"  [DEBUG] Found {mermaid_count} mermaid blocks in HTML content")
+
+    markdown = convert_html_to_markdown(html_content)
+
+    # NOTE: Mermaid diagram injection disabled - diagrams are mixed across all pages
+    # in the JavaScript payload and cannot be reliably extracted per-page
+
+    # Clean up markdown: remove duplicate titles and stray "Menu" lines
+    lines = markdown.split('\n')
+    clean_lines = []
+    seen_title = False
+
+    for line in lines:
+        stripped = line.strip()
+
+        # Skip standalone "Menu"
+        if stripped == 'Menu':
+            continue
+
+        # Skip duplicate titles (keep first occurrence)
+        if line.startswith('# '):
+            if seen_title and line == clean_lines[0]:
+                continue  # Skip duplicate
+            seen_title = True
+
+        clean_lines.append(line)
+
+    markdown = '\n'.join(clean_lines).strip()
+    markdown = format_source_references(markdown)
+
+    # Determine source location for relative linking
+    source_section_dir = None
+    if current_page_info:
+        _, possible_section = resolve_output_path(
+            current_page_info.get('number', ''),
+            current_page_info.get('title', '')
+        )
+        source_section_dir = possible_section
+
+    # Fix internal wiki links to match our filename structure
+    # Convert markdown link to appropriate relative path
+    def fix_wiki_link(match):
+        full_path = match.group(1)
+        # Extract page number and slug (full_path is just "4-query-planning" part)
+        link_match = re.search(r'^(\d+(?:\.\d+)*)-(.+)$', full_path)
+        if link_match:
+            page_num = link_match.group(1)
+            slug = link_match.group(2)
+            target_path = build_target_path(page_num, slug)
+
+            if source_section_dir:
+                if target_path.startswith('section-'):
+                    if target_path.startswith(f"{source_section_dir}/"):
+                        target_path = target_path.split('/', 1)[1]
+                    else:
+                        target_path = f"../{target_path}"
+                else:
+                    target_path = f"../{target_path}"
+            return f']({target_path})'
+        return match.group(0)
+
+    # Replace wiki links: [text](/owner/repo/page) -> [text](file.md)
+    markdown = re.sub(r'\]\(/[^/]+/[^/]+/([^)]+)\)', fix_wiki_link, markdown)
+
+    return markdown
+
+
+def extract_and_enhance_diagrams(repo, temp_dir, session, diagram_source_url):
+    """Extract diagrams from JavaScript and enhance all markdown files in temp directory."""
+    print("\n" + "="*80)
+    print("PHASE 2: Extracting diagrams and enhancing markdown files")
+    print("="*80)
+
+    # Extract all diagrams first (fetch from any page - they're all in the JS)
+    print("\nExtracting diagrams from JavaScript payload...")
+    url = diagram_source_url or f'https://deepwiki.com/{repo}/overview'
+
+    try:
+        response = session.get(url)
+        response.raise_for_status()
+        html_text = response.text
+    except Exception as e:
+        print(f"  Warning: Could not fetch diagrams: {e}")
+        return
+
+    # Extract diagrams with context
+    diagram_pattern = r'```mermaid(?:\\r\\n|\\n|\r?\n)(.*?)(?:\\r\\n|\\n|\r?\n)```'
+    diagram_matches = list(re.finditer(diagram_pattern, html_text, re.DOTALL))
+    print(f"  Found {len(diagram_matches)} total diagrams")
+
+    # Extract diagrams with surrounding context (allow short leading sections)
+    diagram_contexts = []
+    context_window = 2000  # characters to capture before each diagram
+
+    def merge_multiline_labels(diagram_text: str) -> str:
+        """Collapse wrapped Mermaid labels into literal \n sequences."""
+        def collapse_shape_labels(text: str) -> str:
+            patterns = (
+                r'(\(\("?)(.*?)("?\)\))',   # ("...") and (("..."))
+                r'(\("?)(.*?)("?\))',
+                r'(\{"?)(.*?)("?\})',
+                r'(\["?)(.*?)("?\])',
+                r'(\{\{"?)(.*?)("?\}\})',
+                r'(\[\["?)(.*?)("?\]\])',
+            )
+
+            structural_tokens = (
+                '--', ':::', 'state ', 'subgraph ', 'graph ', 'flowchart',
+                'sequenceDiagram', 'class ', 'participant ', 'loop ', 'opt ',
+                'alt ', 'rect ', 'end', 'gantt', 'journey', 'erDiagram',
+                'mindmap', 'gitGraph', 'C4', 'actor ', 'activate ', 'deactivate ',
+                'box ', 'par ', 'and ', 'critical '
+            )
+
+            def looks_like_mermaid_code(line: str) -> bool:
+                if not line:
+                    return False
+                if any(token in line for token in structural_tokens):
+                    return True
+                if re.search(r'\bstate\b', line):
+                    return True
+                if re.search(r'\w\s*->', line):
+                    return True
+                if '[' in line or ']' in line or '{' in line or '}' in line:
+                    return True
+                return False
+
+            def replacer(match: re.Match) -> str:
+                opener, body, closer = match.groups()
+                if '\n' not in body:
+                    return opener + body + closer
+
+                lines = [line.strip() for line in body.splitlines() if line.strip()]
+                if not lines:
+                    return opener + body + closer
+
+                if any(looks_like_mermaid_code(line) for line in lines):
+                    return opener + body + closer
+
+                collapsed = '\\n'.join(lines)
+                return f"{opener}{collapsed}{closer}"
+
+            collapsed_text = text
+            for pattern in patterns:
+                collapsed_text = re.sub(pattern, replacer, collapsed_text, flags=re.DOTALL)
+            return collapsed_text
+
+        text = collapse_shape_labels(diagram_text)
+
+        lines = text.split('\n')
+        merged_lines = []
+        current_label_index = None
+
+        label_headings = (
+            'state ', 'subgraph ', 'class ', 'style ', 'click ', 'linkStyle ',
+            'direction ', 'note ', 'loop ', 'opt ', 'alt ', 'rect ', 'end',
+            'graph ', 'flowchart', 'sequenceDiagram', 'erDiagram', 'journey',
+            'gantt', 'timeline', 'pie ', 'quadrantChart', 'mindmap', 'gitGraph',
+            'C4', 'blockDiag', 'requirementDiagram', 'actor ', 'activate ',
+            'deactivate ', 'participant ', 'box ', 'par ', 'and ', 'critical ',
+        )
+
+        label_pattern = re.compile(r'^\s*[^\[\]{}()<>"\-]+?:\s+.+')
+
+        def qualifies_as_label(stripped_line: str) -> bool:
+            if not stripped_line:
+                return False
+            if label_pattern.match(stripped_line) is None:
+                return False
+            if any(stripped_line.startswith(prefix) for prefix in label_headings):
+                return False
+            return True
+
+        def is_textual_continuation(stripped_line: str) -> bool:
+            if not stripped_line:
+                return False
+            if any(token in stripped_line for token in ('[', ']', '{', '}', '(', ')', '--', ':::', '->', '=>')):
+                return False
+            if any(stripped_line.startswith(prefix) for prefix in label_headings):
+                return False
+            return True
+
+        for line in lines:
+            stripped = line.strip()
+
+            if current_label_index is not None and is_textual_continuation(stripped):
+                merged_lines[current_label_index] += f"\\n{stripped}"
+                continue
+
+            merged_lines.append(line)
+
+            if qualifies_as_label(stripped):
+                current_label_index = len(merged_lines) - 1
+            else:
+                current_label_index = None
+
+        return '\n'.join(merged_lines)
+
+    def strip_wrapping_quotes(diagram_text: str) -> str:
+        """Remove unnecessary quotation marks around edge labels."""
+
+        # Edge labels like -->|"text"| should drop the extra quotes.
+        edge_label_pattern = re.compile(r'(\|)"([^"\|]+)"(\|)')
+        text = edge_label_pattern.sub(r'\1\2\3', diagram_text)
+
+        # State diagram transitions use : "label" syntax.
+        state_label_pattern = re.compile(r'(:\s*)"([^"\|]+)"')
+        text = state_label_pattern.sub(r'\1\2', text)
+
+        return text
+
+    for match in diagram_matches:
+        diagram = match.group(1)
+        context_start = max(0, match.start() - context_window)
+        context_before = html_text[context_start:match.start()]
+
+        # Unescape context - keep last 500 chars for matching
+        context = context_before.replace('\\n', '\n')
+        context = context.replace('\\t', ' ')
+        context = context.replace('\\"', '"')
+        context = context.replace('\\\\', '\\')
+        context = context.replace('\\u003c', '<')
+        context = context.replace('\\u003e', '>')
+        context = context.replace('\\u0026', '&')
+        context = context[-500:].strip()
+
+        # Unescape diagram content
+        diagram = diagram.replace('\\n', '\n')
+        diagram = diagram.replace('\\t', '\t')
+        diagram = diagram.replace('\\"', '"')
+        diagram = diagram.replace('\\\\', '\\')
+        diagram = diagram.replace('\\u003c', '<')
+        diagram = diagram.replace('\\u003e', '>')
+        diagram = diagram.replace('\\u0026', '&')
+        diagram = re.sub(r'<br\s*/?>', lambda _: '\\n', diagram, flags=re.IGNORECASE)
+        diagram = re.sub(
+            r'participant\s+([A-Za-z0-9_\-]+)\["([^\"]+)"\]',
+            lambda m: f'participant {m.group(1)} as "{m.group(2)}"',
+            diagram,
+        )
+        diagram = re.sub(
+            r'(participant\s+[^\s]+\s+as\s+")([^\"]+)(")',
+            lambda m: f"{m.group(1)}{' '.join(m.group(2).split())}{m.group(3)}",
+            diagram,
+        )
+        diagram = merge_multiline_labels(diagram)
+        diagram = strip_wrapping_quotes(diagram)
+        diagram = normalize_mermaid_diagram(diagram)
+        diagram = diagram.strip()
+
+        if len(diagram) > 10:
+            context_lines = [l.strip() for l in context.split('\n') if l.strip()]
+
+            # Find last heading
+            last_heading = None
+            for line in reversed(context_lines):
+                if line.startswith('#'):
+                    last_heading = line
+                    break
+
+            # Get last 2-3 non-heading lines as anchor text
+            anchor_lines = []
+            for line in reversed(context_lines):
+                if not line.startswith('#') and len(line) > 20:
+                    anchor_lines.insert(0, line)
+                    if len(anchor_lines) >= 3:
+                        break
+
+            anchor_text = ' '.join(anchor_lines)[-300:] if anchor_lines else ''
+
+            diagram_contexts.append({
+                'last_heading': last_heading or '',
+                'anchor_text': anchor_text,
+                'diagram': diagram
+            })
+
+    print(f"  Found {len(diagram_contexts)} diagrams with context")
+
+    # Now enhance all markdown files IN TEMP DIRECTORY
+    print("\nEnhancing markdown files with diagrams...")
+    md_files = list(temp_dir.glob('**/*.md'))
+
+    def first_body_heading_index(lines):
+        for idx, line in enumerate(lines):
+            if line.strip().startswith('## '):
+                return idx
+        return None
+
+    def protected_prefix_end(lines):
+        idx = 0
+        if idx < len(lines) and lines[idx].strip().startswith('# '):
+            idx += 1
+        while idx < len(lines) and not lines[idx].strip():
+            idx += 1
+        if idx < len(lines) and lines[idx].strip().lower().startswith('relevant source files'):
+            idx += 1
+            while idx < len(lines) and not lines[idx].strip():
+                idx += 1
+            while idx < len(lines) and is_list_line(lines[idx]):
+                idx += 1
+            while idx < len(lines) and not lines[idx].strip():
+                idx += 1
+        return idx
+
+    def is_list_line(line: str) -> bool:
+        stripped = line.lstrip()
+        if not stripped:
+            return False
+        if stripped[0] in ('-', '*', '+'):
+            return True
+        return bool(re.match(r'\d+[.)]\s', stripped))
+
+    def advance_past_lists(lines, start_idx):
+        idx = start_idx
+        probe = idx
+        while probe < len(lines) and not lines[probe].strip():
+            probe += 1
+        if probe < len(lines) and is_list_line(lines[probe]):
+            idx = probe
+            while idx < len(lines) and is_list_line(lines[idx]):
+                idx += 1
+            return idx
+        while idx < len(lines) and is_list_line(lines[idx]):
+            idx += 1
+        return idx
+    def enforce_content_start(lines, idx, body_start, guard_idx):
+        min_idx = guard_idx
+        if body_start is not None:
+            min_idx = max(min_idx, body_start)
+        if idx > min_idx:
+            return idx
+        idx = min_idx + 1
+        while idx < len(lines) and not lines[idx].strip():
+            idx += 1
+        return idx
+
+    enhanced_count = 0
+    for md_file in md_files:
+        with open(md_file, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        # Skip if file already contains real mermaid fences (to avoid duplicates)
+        if re.search(r'^\s*`{3,}\s*mermaid\b', content, re.IGNORECASE | re.MULTILINE):
+            continue
+
+        # Match and insert diagrams
+        lines = content.split('\n')
+        body_start_idx = first_body_heading_index(lines)
+        guard_idx = protected_prefix_end(lines)
+        diagrams_used = set()
+        pending_insertions = []
+
+        # Normalize content for matching
+        content_normalized = content.lower()
+        content_normalized = ' '.join(content_normalized.split())
+
+        for idx, item in enumerate(diagram_contexts):
+            if idx in diagrams_used:
+                continue
+
+            anchor = item['anchor_text']
+            heading = item['last_heading']
+
+            if not anchor and not heading:
+                continue
+
+            best_match_line = -1
+            best_match_score = 0
+
+            # Try anchor text matching
+            if len(anchor) > 50:
+                anchor_normalized = anchor.lower()
+                anchor_normalized = ' '.join(anchor_normalized.split())
+
+                for chunk_size in [300, 200, 150, 100, 80]:
+                    if len(anchor_normalized) >= chunk_size:
+                        test_chunk = anchor_normalized[-chunk_size:]
+                        pos = content_normalized.find(test_chunk)
+                        if pos != -1:
+                            # Convert char position to line number
+                            char_count = 0
+                            for line_num, line in enumerate(lines):
+                                char_count += len(' '.join(line.split())) + 1
+                                if char_count >= pos:
+                                    best_match_line = line_num
+                                    best_match_score = chunk_size
+                                    break
+                            if best_match_line != -1:
+                                break
+
+            # Fallback: heading match
+            if best_match_line == -1 and heading:
+                heading_normalized = heading.lower().replace('#', '').strip()
+                heading_normalized = ' '.join(heading_normalized.split())
+
+                for line_num, line in enumerate(lines):
+                    if line.strip().startswith('#'):
+                        line_normalized = line.lower().replace('#', '').strip()
+                        line_normalized = ' '.join(line_normalized.split())
+
+                        if heading_normalized in line_normalized:
+                            best_match_line = line_num
+                            best_match_score = 50
+                            break
+
+            if best_match_line != -1 and best_match_score >= 80:
+                # Find insertion point: after paragraph
+                insert_line = best_match_line + 1
+
+                if lines[best_match_line].strip().startswith('#'):
+                    # Skip blank lines after heading
+                    while insert_line < len(lines) and not lines[insert_line].strip():
+                        insert_line += 1
+                    # Skip through paragraph
+                    while insert_line < len(lines):
+                        if not lines[insert_line].strip() or lines[insert_line].strip().startswith('#'):
+                            break
+                        insert_line += 1
+                else:
+                    # Find end of current paragraph
+                    while insert_line < len(lines):
+                        if not lines[insert_line].strip() or lines[insert_line].strip().startswith('#'):
+                            break
+                        insert_line += 1
+
+                pending_insertions.append((insert_line, item['diagram'], best_match_score, idx))
+                diagrams_used.add(idx)
+
+        # Insert diagrams (from bottom up)
+        if pending_insertions:
+            pending_insertions.sort(key=lambda x: x[0], reverse=True)
+
+            for insert_line, diagram, score, idx in pending_insertions:
+                insert_line = enforce_content_start(lines, insert_line, body_start_idx, guard_idx)
+                insert_line = advance_past_lists(lines, insert_line)
+
+                max_backticks = 0
+                for match in re.finditer(r'`+', diagram):
+                    run_length = len(match.group(0))
+                    if run_length > max_backticks:
+                        max_backticks = run_length
+                fence_len = max(3, max_backticks + 1)
+                fence = '`' * fence_len
+
+                lines_to_insert = [
+                    '',
+                    f"{fence}mermaid",
+                    diagram,
+                    fence,
+                    '',
+                ]
+
+                for line in reversed(lines_to_insert):
+                    lines.insert(insert_line, line)
+
+            # Save enhanced file
+            with open(md_file, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(lines))
+
+            enhanced_count += 1
+            print(f"  ✓ {md_file.name} ({len(pending_insertions)} diagrams)")
+
+    print(f"\n✓ Enhanced {enhanced_count} files with diagrams")
+
+def main():
+    if len(sys.argv) < 3:
+        print("Usage: python deepwiki-scraper.py <owner/repo> <output-dir>")
+        print("Example: python deepwiki-scraper.py jzombie/deepwiki-to-mdbook ./wiki-output")
+        sys.exit(1)
+
+    repo = sys.argv[1]
+    output_dir = Path(sys.argv[2])
+
+    # Validate repo format
+    if not re.match(r'^[\w-]+/[\w-]+$', repo):
+        print("Error: Repository must be in format 'owner/repo'")
+        sys.exit(1)
+
+    # Create temp directory for work-in-progress
+    import tempfile
+    import shutil
+
+    with tempfile.TemporaryDirectory(prefix='deepwiki_') as temp_path:
+        temp_dir = Path(temp_path)
+
+        print("="*80)
+        print("PHASE 1: Extracting clean markdown content")
+        print("="*80)
+        print(f"Working directory: {temp_dir}")
+        print(f"Output directory: {output_dir}")
+
+        # Create session with headers
+        session = requests.Session()
+        session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+        })
+
+        try:
+            # Extract wiki structure
+            pages = extract_wiki_structure(repo, session)
+
+            if not pages:
+                print("\nError: No wiki pages found")
+                print("The repository may not have a DeepWiki wiki, or the HTML structure has changed.")
+                sys.exit(1)
+
+            print(f"\nFound {len(pages)} pages\n")
+
+            # Create directory structure for subsections
+            main_pages = [p for p in pages if p['level'] == 0]
+            print(f"Main pages: {len(main_pages)}")
+            print(f"Subsections: {len(pages) - len(main_pages)}\n")
+
+            # Extract each page TO TEMP DIRECTORY
+            success_count = 0
+            for page in pages:
+                try:
+                    markdown = extract_page_content(page['url'], session, current_page_info=page)
+
+                    filename, section_dir = resolve_output_path(page['number'], page['title'])
+                    if section_dir:
+                        section_path = temp_dir / section_dir
+                        section_path.mkdir(exist_ok=True)
+                        filepath = section_path / filename
+                    else:
+                        filepath = temp_dir / filename
+
+                    # Ensure content starts with title
+                    if not markdown.startswith('#'):
+                        markdown = f"# {page['title']}\n\n{markdown}"
+
+                    # Write file to temp
+                    filepath.write_text(markdown, encoding='utf-8')
+                    print(f"  ✓ {filepath.relative_to(temp_dir)} ({len(markdown)} bytes)")
+                    success_count += 1
+
+                    # Be nice to the server
+                    time.sleep(1)
+
+                except Exception as e:
+                    print(f"  ✗ Failed to extract {page['title']}: {e}")
+
+            print(f"\n✓ Successfully extracted {success_count}/{len(pages)} pages to temp directory")
+
+            # Snapshot pre-enhancement markdown for debugging
+            raw_output_dir = (output_dir.parent / 'raw_markdown').resolve()
+            try:
+                if raw_output_dir.exists():
+                    shutil.rmtree(raw_output_dir)
+                raw_output_dir.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(temp_dir, raw_output_dir)
+                print(f"✓ Saved raw markdown snapshot to {raw_output_dir}")
+            except Exception as e:
+                print(f"✗ Warning: Failed to snapshot raw markdown ({e})")
+
+            # Phase 2: Enhance with diagrams using fuzzy matching
+            overview_page = next((p for p in pages if normalized_number_parts(p['number']) == []), pages[0])
+            diagram_source_url = overview_page['url']
+            extract_and_enhance_diagrams(repo, temp_dir, session, diagram_source_url)
+
+            # Move completed files from temp to final output directory
+            print("\n" + "="*80)
+            print("PHASE 3: Moving completed files to output directory")
+            print("="*80)
+
+            # Create output directory
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+            # Remove old files in output (including temp/helper files)
+            for old_file in output_dir.glob('**/*'):
+                if old_file.is_file():
+                    old_file.unlink()
+            for old_dir in [d for d in output_dir.iterdir() if d.is_dir()]:
+                shutil.rmtree(old_dir)
+
+            # Move all files from temp to output
+            moved_count = 0
+            for item in temp_dir.iterdir():
+                dest = output_dir / item.name
+                if item.is_dir():
+                    shutil.copytree(item, dest)
+                    moved_count += len(list(dest.glob('*.md')))
+                elif item.suffix == '.md':
+                    shutil.copy2(item, dest)
+                    moved_count += 1
+
+            print(f"  ✓ Moved {moved_count} markdown files to {output_dir}")
+
+            print("\n" + "="*80)
+            print("✓ COMPLETE: All pages extracted and enhanced with diagrams")
+            print("="*80)
+
+        except Exception as e:
+            print(f"\n✗ Error: {e}")
+            sys.exit(1)
+
+if __name__ == '__main__':
+    main()
