@@ -1,0 +1,33 @@
+POST /chat/completions HTTP/1.1
+host: api.deepseek.com
+connection: keep-alive
+authorization: Bearer sk-xxx
+content-type: application/json
+user-agent: ai/6.0.158 ai-sdk/provider-utils/4.0.23 runtime/node.js/22
+accept: */*
+accept-language: *
+sec-fetch-mode: cors
+accept-encoding: br, gzip, deflate
+content-length: 937
+
+{"model":"deepseek-chat","messages":[{"role":"user","content":"Check weather in Beijing and provide one travel tip."},{"role":"assistant","content":"","reasoning_content":"I need to get the weather in Beijing first using the getWeather function, then provide a travel tip. Let's do that.","tool_calls":[{"id":"call_00_ONC61PgJfrJ9MfXm0eJayBuK","type":"function","function":{"name":"getWeather","arguments":"{\"city\":\"Beijing\"}"}}]},{"role":"tool","tool_call_id":"call_00_ONC61PgJfrJ9MfXm0eJayBuK","content":"{\"city\":\"Beijing\",\"condition\":\"sunny\",\"temperatureC\":26}"}],"tools":[{"type":"function","function":{"name":"getWeather","description":"Get current weather by city","parameters":{"$schema":"http://json-schema.org/draft-07/schema#","type":"object","properties":{"city":{"type":"string","description":"City name"}},"required":["city"],"additionalProperties":false}}}],"tool_choice":"auto","thinking":{"type":"enabled"}}
+
+HTTP/1.1 200 OK
+Content-Type: application/json
+Transfer-Encoding: chunked
+Connection: keep-alive
+Date: Mon, 13 Apr 2026 20:55:25 GMT
+Server: elb
+vary: origin, access-control-request-method, access-control-request-headers
+access-control-allow-credentials: true
+x-ds-trace-id: 75abb66d8d6944cb99a9596faaa69309
+Strict-Transport-Security: max-age=31536000; includeSubDomains; preload
+X-Content-Type-Options: nosniff
+X-Cache: Miss from cloudfront
+Via: 1.1 e78b50eab333f2c2442984d125a57e28.cloudfront.net (CloudFront)
+X-Amz-Cf-Pop: SIN3-P2
+X-Amz-Cf-Id: JZA5zRcAwedM5y1HAey_q0M-ZRqHcH_q4O7nF0pEnmxGXK2aRuznFw==
+
+480
+{"id":"a0760c1c-c75a-46a2-a79e-a12f2390125b","object":"chat.completion","created":1776113725,"model":"deepseek-reasoner","choices":[{"index":0,"message":{"role":"assistant","content":"Beijing currently has sunny weather with a temperature of 26°C.\n\n**Travel tip:** Since it's sunny and warm, perfect for outdoor sightseeing, consider visiting the Great Wall or Summer Palace. Remember to bring sunscreen, wear a hat, and stay hydrated throughout the day!","reasoning_content":"I have the weather information for Beijing: it's sunny with a temperature of 26°C. Now I need to provide a travel tip. Considering the weather is sunny and warm, a good tip would be to bring sunscreen, stay hydrated, and perhaps visit outdoor attractions like the Great Wall or Forbidden City. I'll craft a response."},"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":438,"completion_tokens":126,"total_tokens":564,"prompt_tokens_details":{"cached_tokens":320},"completion_tokens_details":{"reasoning_tokens":69},"prompt_cache_hit_tokens":320,"prompt_cache_miss_tokens":118},"system_fingerprint":"fp_eaab8d114b_prod0820_fp8_kvcache_new_kvcache_20260410"}
+0

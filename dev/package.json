@@ -9,9 +9,14 @@
   "license": "MIT",
   "packageManager": "pnpm@10.30.3",
   "dependencies": {
+    "@ai-sdk/deepseek": "^2.0.29",
     "@ai-sdk/openai-compatible": "^2.0.41",
     "@github/copilot-sdk": "^0.2.2",
-    "copilot-sdk": "github:github/copilot-sdk"
+    "ai": "^6.0.159",
+    "copilot-sdk": "github:github/copilot-sdk",
+    "dotenv": "^17.4.2",
+    "undici": "^8.1.0",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
