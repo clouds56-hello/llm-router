@@ -1,0 +1,93 @@
+GET /backend-api/wham/usage HTTP/1.1
+user-agent: codex_cli_rs/0.114.0 (Ubuntu 26.4.0; x86_64) WindowsTerminal
+authorization: Bearer xxxx
+chatgpt-account-id: 63b250cc-5398-4f1f-840f-f9065defffb0
+accept: */*
+host: chatgpt.com
+
+
+
+HTTP/1.1 200 OK
+Date: Mon, 13 Apr 2026 21:13:32 GMT
+Content-Type: application/json
+Content-Length: 1496
+Connection: keep-alive
+Server: cloudflare
+x-oai-request-id: 0cf2d7d8-0b8f-48a2-a48a-ae05048ca030
+x-openai-proxy-wasm: v0.1
+cf-cache-status: DYNAMIC
+Cross-Origin-Opener-Policy: same-origin-allow-popups
+Strict-Transport-Security: max-age=31536000; includeSubDomains; preload
+X-Content-Type-Options: nosniff
+Nel: {"report_to":"cf-nel","success_fraction":0.01,"max_age":604800}
+Report-To: {"group":"cf-nel","max_age":604800,"endpoints":[{"url":"https://a.nel.cloudflare.com/report/v4?s=qz98x1OpfYK7FxDZQKRB8IHogUHvr8rmMxb9UuI7WuEF%2F8T7DP1IiZ%2FtBVp%2FKysSdZnjRiqaiP8Ap8u8EyXcVbCIE1DmJM%2FdZkqeorqcbFF1tgNr1tGyCnUciTj4lfqSf0CdJV4GFcHr"}]}
+set-cookie: __cf_bm=aIxqReNUfoRe7HfXwCPUu2tuThVbleEG4scYcSvcrvw-1776114811.9145885-1.0.1.1-IFsMgrHPkpxXuZOo3I_inDz7B2dqAY9av75UIXfL7bfxd7h4v0fwh1zRPqwVlv_liy7oggaE8n5XbYJUW_mNS5UAo6IDc3SyOHXwchf9RKBHMymNavV8RxtcRzQaEuz6; HttpOnly; Secure; Path=/; Domain=chatgpt.com; Expires=Mon, 13 Apr 2026 21:43:32 GMT
+set-cookie: __cflb=0H28vzvP5FJafnkHxisyrUFUAuuJgZWN5UgXzMpjbK1; HttpOnly; SameSite=None; Secure; Path=/; Expires=Mon, 13 Apr 2026 22:13:32 GMT
+Referrer-Policy: strict-origin-when-cross-origin
+CF-RAY: 9ebd79a6795f8552-HKG
+alt-svc: h3=":443"; ma=86400
+
+{
+  "user_id": "user-wL5avyxGUZJeS1cz6Z80zi63",
+  "account_id": "user-wL5avyxGUZJeS1cz6Z80zi63",
+  "email": "hi@trueverse.com",
+  "plan_type": "pro",
+  "rate_limit": {
+    "allowed": true,
+    "limit_reached": false,
+    "primary_window": {
+      "used_percent": 1,
+      "limit_window_seconds": 18000,
+      "reset_after_seconds": 4828,
+      "reset_at": 1776119640
+    },
+    "secondary_window": {
+      "used_percent": 3,
+      "limit_window_seconds": 604800,
+      "reset_after_seconds": 244154,
+      "reset_at": 1776358966
+    }
+  },
+  "code_review_rate_limit": null,
+  "additional_rate_limits": [
+    {
+      "limit_name": "GPT-5.3-Codex-Spark",
+      "metered_feature": "codex_bengalfox",
+      "rate_limit": {
+        "allowed": true,
+        "limit_reached": false,
+        "primary_window": {
+          "used_percent": 0,
+          "limit_window_seconds": 18000,
+          "reset_after_seconds": 18000,
+          "reset_at": 1776132812
+        },
+        "secondary_window": {
+          "used_percent": 0,
+          "limit_window_seconds": 604800,
+          "reset_after_seconds": 604800,
+          "reset_at": 1776719612
+        }
+      }
+    }
+  ],
+  "credits": {
+    "has_credits": false,
+    "unlimited": false,
+    "overage_limit_reached": false,
+    "balance": "0",
+    "approx_local_messages": [
+      0,
+      0
+    ],
+    "approx_cloud_messages": [
+      0,
+      0
+    ]
+  },
+  "spend_control": {
+    "reached": false
+  },
+  "rate_limit_reached_type": null,
+  "promo": null
+}

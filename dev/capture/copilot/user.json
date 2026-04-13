@@ -1,0 +1,38 @@
+GET https://api.github.com/copilot_internal/user HTTP/2.0
+authorization: Bearer gho_xxxx
+accept: application/json
+accept-language: *
+sec-fetch-mode: cors
+user-agent: undici
+accept-encoding: br, gzip, deflate
+
+
+
+HTTP/2.0 200
+date: Mon, 13 Apr 2026 18:57:44 GMT
+content-type: application/json; charset=utf-8
+cache-control: private, max-age=60, s-maxage=60
+vary: Accept, Authorization, Cookie, X-GitHub-OTP,Accept-Encoding, Accept, X-Requested-With
+etag: W/"4b51ffd5ad1d08f43a2c483e870b9a7b8794f60949e0437a489517977cb41553"
+x-oauth-scopes: gist, read:org, read:user, repo
+x-accepted-oauth-scopes:
+x-oauth-client-id: Ov23ctDVkRmgkPke0Mmm
+x-github-media-type: github.v3
+x-ratelimit-limit: 5000
+x-ratelimit-remaining: 4995
+x-ratelimit-reset: 1776110245
+x-ratelimit-used: 5
+x-ratelimit-resource: core
+access-control-expose-headers: ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset
+access-control-allow-origin: *
+strict-transport-security: max-age=31536000; includeSubdomains; preload
+x-frame-options: deny
+x-content-type-options: nosniff
+x-xss-protection: 0
+referrer-policy: origin-when-cross-origin, strict-origin-when-cross-origin
+content-security-policy: default-src 'none'
+server: github.com
+x-github-request-id: CBE0:335802:2B20413:2B35E28:69DD3CA7
+content-length: 1598
+
+{"login":"breezingzhou","access_type_sku":"copilot_for_business_seat_quota","analytics_tracking_id":"a9fa381949e0a528a969133c7670b167","assigned_date":"2026-02-06T19:30:51+08:00","can_signup_for_limited":false,"chat_enabled":true,"copilotignore_enabled":true,"copilot_plan":"business","is_mcp_enabled":true,"organization_login_list":["Entropy-Space"],"organization_list":[{"login":"Entropy-Space","name":"Entropy Space"}],"restricted_telemetry":false,"endpoints":{"api":"https://api.business.githubcopilot.com","origin-tracker":"https://origin-tracker.business.githubcopilot.com","proxy":"https://proxy.business.githubcopilot.com","telemetry":"https://telemetry.business.githubcopilot.com"},"quota_reset_date":"2026-05-01","quota_snapshots":{"chat":{"overage_count":0,"overage_permitted":false,"percent_remaining":100.0,"quota_id":"chat","quota_remaining":0.0,"unlimited":true,"timestamp_utc":"2026-04-13T11:57:25.418-07:00","has_quota":false,"quota_reset_at":0,"remaining":0,"entitlement":0},"completions":{"overage_count":0,"overage_permitted":false,"percent_remaining":100.0,"quota_id":"completions","quota_remaining":0.0,"unlimited":true,"timestamp_utc":"2026-04-13T11:57:25.418-07:00","has_quota":false,"quota_reset_at":0,"remaining":0,"entitlement":0},"premium_interactions":{"overage_count":0,"overage_permitted":false,"percent_remaining":97.7,"quota_id":"premium_interactions","quota_remaining":293.4,"unlimited":false,"timestamp_utc":"2026-04-13T11:57:25.418-07:00","has_quota":false,"quota_reset_at":0,"remaining":293,"entitlement":300}},"quota_reset_date_utc":"2026-05-01T00:00:00.000Z"}

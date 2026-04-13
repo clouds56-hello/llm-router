@@ -1,0 +1,33 @@
+POST /chat/completions HTTP/1.1
+host: api.deepseek.com
+connection: keep-alive
+authorization: Bearer sk-xxx
+content-type: application/json
+user-agent: ai/6.0.158 ai-sdk/provider-utils/4.0.23 runtime/node.js/22
+accept: */*
+accept-language: *
+sec-fetch-mode: cors
+accept-encoding: br, gzip, deflate
+content-length: 475
+
+{"model":"deepseek-chat","messages":[{"role":"user","content":"Check weather in Beijing and provide one travel tip."}],"tools":[{"type":"function","function":{"name":"getWeather","description":"Get current weather by city","parameters":{"$schema":"http://json-schema.org/draft-07/schema#","type":"object","properties":{"city":{"type":"string","description":"City name"}},"required":["city"],"additionalProperties":false}}}],"tool_choice":"auto","thinking":{"type":"enabled"}}
+
+HTTP/1.1 200 OK
+Content-Type: application/json
+Transfer-Encoding: chunked
+Connection: keep-alive
+Date: Mon, 13 Apr 2026 20:55:23 GMT
+Server: elb
+vary: origin, access-control-request-method, access-control-request-headers
+access-control-allow-credentials: true
+x-ds-trace-id: 61313c75dd6139771943972b88fe8a89
+Strict-Transport-Security: max-age=31536000; includeSubDomains; preload
+X-Content-Type-Options: nosniff
+X-Cache: Miss from cloudfront
+Via: 1.1 e78b50eab333f2c2442984d125a57e28.cloudfront.net (CloudFront)
+X-Amz-Cf-Pop: SIN3-P2
+X-Amz-Cf-Id: K9DLowzk2V4vzFBancLxtPs0BKJIy88LnHCzfoyegGkq0zcGprBOBQ==
+
+345
+{"id":"da0d0e15-fc8d-4a5f-95f2-1e4becf078f7","object":"chat.completion","created":1776113723,"model":"deepseek-reasoner","choices":[{"index":0,"message":{"role":"assistant","content":"","reasoning_content":"I need to get the weather in Beijing first using the getWeather function, then provide a travel tip. Let's do that.","tool_calls":[{"index":0,"id":"call_00_ONC61PgJfrJ9MfXm0eJayBuK","type":"function","function":{"name":"getWeather","arguments":"{\"city\": \"Beijing\"}"}}]},"logprobs":null,"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":337,"completion_tokens":70,"total_tokens":407,"prompt_tokens_details":{"cached_tokens":320},"completion_tokens_details":{"reasoning_tokens":26},"prompt_cache_hit_tokens":320,"prompt_cache_miss_tokens":17},"system_fingerprint":"fp_eaab8d114b_prod0820_fp8_kvcache_new_kvcache_20260410"}
+0
