@@ -35,6 +35,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: ImportArgs) -> Result<()> {
         api_token: None,
         api_token_expires_at: None,
         copilot: None,
+        behave_as: None,
     });
     cfg.save(&path)?;
     println!("Saved account '{}' to {}", args.id, path.display());

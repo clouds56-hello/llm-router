@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 mod account;
+mod config_cmd;
 mod headers;
 mod import;
 mod login;
@@ -35,6 +36,8 @@ pub enum Cmd {
     Serve(serve::ServeArgs),
     /// Query usage statistics from the local SQLite log
     Usage(usage::UsageArgs),
+    /// Get/set/list config values (git-style); preserves comments
+    Config(config_cmd::ConfigArgs),
 }
 
 impl Cli {
@@ -47,6 +50,7 @@ impl Cli {
             Cmd::Headers(a) => headers::run(cfg_path, a).await,
             Cmd::Serve(a) => serve::run(cfg_path, a).await,
             Cmd::Usage(a) => usage::run(cfg_path, a).await,
+            Cmd::Config(a) => config_cmd::run(cfg_path, a).await,
         }
     }
 }

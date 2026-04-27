@@ -38,6 +38,12 @@ pub async fn chat_completions(
         None => classify_initiator(&body).into(),
     };
 
+    let behave_as_inbound: Option<String> = inbound
+        .get("x-behave-as")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
     let started = Instant::now();
     let mut last_err: Option<(StatusCode, String)> = None;
 
@@ -50,6 +56,7 @@ pub async fn chat_completions(
             stream,
             initiator: &initiator,
             inbound_headers: &inbound,
+            behave_as: behave_as_inbound.as_deref(),
         };
 
         let resp = match acct.provider.chat(ctx).await {

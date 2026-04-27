@@ -90,6 +90,45 @@ impl CopilotProvider {
         g.expires_at = None;
     }
 
+    /// Apply an inbound `X-Behave-As` persona override on top of the
+    /// account-resolved headers. The user-explicit fields stored on
+    /// `self.headers` continue to win — the inbound override only fills the
+    /// fields that the user did not pin in config.
+    fn headers_for_request(&self, inbound_persona: Option<&str>) -> CopilotHeaders {
+        let Some(persona) = inbound_persona else { return self.headers.clone(); };
+        if Some(persona) == self.headers.behave_as.as_deref() {
+            return self.headers.clone();
+        }
+        let profiles = crate::provider::profiles::Profiles::global();
+        let Some(resolved) = profiles.resolve(persona, super::ID_GITHUB_COPILOT) else {
+            tracing::warn!(persona, "unknown inbound X-Behave-As persona; ignoring");
+            return self.headers.clone();
+        };
+        crate::provider::profiles::warn_if_unverified(persona, super::ID_GITHUB_COPILOT, &resolved);
+
+        // Re-resolve from compile-time defaults so the inbound persona can
+        // displace previously-active persona values; user-explicit fields are
+        // not detectable at this point, so we trust the new persona wholesale
+        // for the known wire-name fields.
+        let mut h = CopilotHeaders {
+            initiator_mode: self.headers.initiator_mode,
+            behave_as: Some(persona.to_string()),
+            extra_headers: self.headers.extra_headers.clone(),
+            ..CopilotHeaders::default()
+        };
+        for (name, val) in &resolved.headers {
+            match name.as_str() {
+                "editor-version" => h.editor_version = val.clone(),
+                "editor-plugin-version" => h.editor_plugin_version = val.clone(),
+                "user-agent" => h.user_agent = val.clone(),
+                "copilot-integration-id" => h.copilot_integration_id = val.clone(),
+                "openai-intent" => h.openai_intent = val.clone(),
+                other => { h.extra_headers.insert(other.to_string(), val.clone()); }
+            }
+        }
+        h
+    }
+
     /// Resolve the X-Initiator value to send.
     /// Precedence: inbound `X-Initiator` header > config mode > auto-classify.
     fn resolve_initiator(&self, body: &Value, inbound: &HeaderMap, fallback: &str) -> String {
@@ -125,7 +164,8 @@ impl Provider for CopilotProvider {
     async fn chat(&self, ctx: ChatCtx<'_>) -> Result<reqwest::Response> {
         let token = self.ensure_api_token(ctx.http).await?;
         let initiator = self.resolve_initiator(ctx.body, ctx.inbound_headers, ctx.initiator);
-        let h = headers::copilot_request_headers(&token, &self.headers, ctx.stream, &initiator)?;
+        let headers = self.headers_for_request(ctx.behave_as);
+        let h = headers::copilot_request_headers(&token, &headers, ctx.stream, &initiator)?;
         let url = format!("{COPILOT_API}/chat/completions");
         let resp = ctx
             .http

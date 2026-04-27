@@ -11,6 +11,7 @@ use serde_json::Value;
 use std::sync::Arc;
 
 pub mod github_copilot;
+pub mod profiles;
 
 pub const ID_GITHUB_COPILOT: &str = "github-copilot";
 
@@ -25,6 +26,9 @@ pub struct ChatCtx<'a> {
     /// Inbound headers from the downstream client. Providers may forward
     /// selected ones (e.g. an explicit `X-Initiator`).
     pub inbound_headers: &'a HeaderMap,
+    /// Persona override from the inbound `X-Behave-As` request header, if any.
+    /// Takes precedence over config-file `behave_as` settings.
+    pub behave_as: Option<&'a str>,
 }
 
 #[async_trait]

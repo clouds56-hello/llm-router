@@ -29,6 +29,18 @@ pub async fn run(cfg_path: Option<PathBuf>, args: HeadersArgs) -> Result<()> {
     println!("copilot-integration-id: {}", headers.copilot_integration_id);
     println!("openai-intent:          {}", headers.openai_intent);
     println!("initiator_mode:         {:?}", headers.initiator_mode);
+    match &headers.behave_as {
+        Some(p) => {
+            let profiles = crate::provider::profiles::Profiles::global();
+            let verified = profiles
+                .resolve(p, crate::provider::ID_GITHUB_COPILOT)
+                .map(|r| r.verified)
+                .unwrap_or(false);
+            let tag = if verified { "verified" } else { "UNVERIFIED" };
+            println!("behave_as:              {p} ({tag})");
+        }
+        None => println!("behave_as:              -"),
+    }
     if !headers.extra_headers.is_empty() {
         println!("extra:");
         for (k, v) in &headers.extra_headers {

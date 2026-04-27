@@ -26,6 +26,62 @@ pub struct Config {
     pub accounts: Vec<Account>,
 }
 
+/// Sparse view of `[copilot]` used during loading to distinguish
+/// user-explicit fields from hardcoded defaults. Any field left as `None` here
+/// is eligible to be filled in by a persona profile overlay.
+#[derive(Debug, Clone, Default, Deserialize)]
+struct CopilotHeadersRaw {
+    #[serde(default)]
+    editor_version: Option<String>,
+    #[serde(default)]
+    editor_plugin_version: Option<String>,
+    #[serde(default)]
+    user_agent: Option<String>,
+    #[serde(default)]
+    copilot_integration_id: Option<String>,
+    #[serde(default)]
+    openai_intent: Option<String>,
+    #[serde(default)]
+    initiator_mode: Option<InitiatorMode>,
+    #[serde(default)]
+    behave_as: Option<String>,
+    #[serde(default)]
+    extra_headers: Option<BTreeMap<String, String>>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct AccountRaw {
+    id: String,
+    #[serde(default = "default_provider")]
+    provider: String,
+    #[serde(default)]
+    github_token: Option<String>,
+    #[serde(default)]
+    api_token: Option<String>,
+    #[serde(default)]
+    api_token_expires_at: Option<i64>,
+    #[serde(default)]
+    copilot: Option<CopilotHeadersRaw>,
+    #[serde(default)]
+    behave_as: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct ConfigRaw {
+    #[serde(default)]
+    server: ServerConfig,
+    #[serde(default)]
+    pool: PoolConfig,
+    #[serde(default)]
+    usage: UsageConfig,
+    #[serde(default)]
+    proxy: ProxyConfig,
+    #[serde(default)]
+    copilot: CopilotHeadersRaw,
+    #[serde(default)]
+    accounts: Vec<AccountRaw>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
     #[serde(default = "default_host")]
@@ -123,6 +179,11 @@ pub struct CopilotHeaders {
     pub openai_intent: String,
     #[serde(default)]
     pub initiator_mode: InitiatorMode,
+    /// Optional persona name (e.g. "copilot", "opencode", "codex", "openclaw").
+    /// Header values from the matching profile in `profiles.toml` are merged
+    /// in before any explicit fields above. Inbound `X-Behave-As` overrides.
+    #[serde(default)]
+    pub behave_as: Option<String>,
     #[serde(default)]
     pub extra_headers: BTreeMap<String, String>,
 }
@@ -135,6 +196,7 @@ impl Default for CopilotHeaders {
             copilot_integration_id: default_integration_id(),
             openai_intent: default_openai_intent(),
             initiator_mode: InitiatorMode::default(),
+            behave_as: None,
             extra_headers: BTreeMap::new(),
         }
     }
@@ -163,6 +225,7 @@ impl CopilotHeaders {
                     copilot_integration_id: o.copilot_integration_id.clone(),
                     openai_intent: o.openai_intent.clone(),
                     initiator_mode: o.initiator_mode,
+                    behave_as: o.behave_as.clone().or_else(|| self.behave_as.clone()),
                     extra_headers: extra,
                 }
             }
@@ -221,9 +284,82 @@ pub struct Account {
     /// Optional per-account header overrides (github-copilot provider only).
     #[serde(default)]
     pub copilot: Option<CopilotHeaders>,
+    /// Per-account persona override. Wins over `[copilot] behave_as`. Inbound
+    /// `X-Behave-As` still overrides this.
+    #[serde(default)]
+    pub behave_as: Option<String>,
 }
 
 fn default_provider() -> String { DEFAULT_PROVIDER.to_string() }
+
+/// Materialise a `CopilotHeaders` from its raw (sparse) form, applying a
+/// persona profile overlay for any field the user did not set explicitly.
+///
+/// Precedence (low -> high):
+///   compile-time defaults  ->  persona overlay  ->  user explicit raw fields.
+fn resolve_copilot(
+    raw: &CopilotHeadersRaw,
+    profiles: &crate::provider::profiles::Profiles,
+    upstream: &str,
+    inherited_persona: Option<&str>,
+) -> CopilotHeaders {
+    let mut out = CopilotHeaders::default();
+
+    // Carry forward initiator_mode and behave_as up front (they don't come
+    // from the profile registry).
+    if let Some(m) = raw.initiator_mode { out.initiator_mode = m; }
+    out.behave_as = raw.behave_as.clone().or_else(|| inherited_persona.map(str::to_string));
+
+    let persona = out.behave_as.clone();
+    if let Some(persona_name) = persona.as_deref() {
+        if let Some(resolved) = profiles.resolve(persona_name, upstream) {
+            crate::provider::profiles::warn_if_unverified(persona_name, upstream, &resolved);
+            for (name, val) in &resolved.headers {
+                match name.as_str() {
+                    "editor-version" => {
+                        if raw.editor_version.is_none() { out.editor_version = val.clone(); }
+                    }
+                    "editor-plugin-version" => {
+                        if raw.editor_plugin_version.is_none() {
+                            out.editor_plugin_version = val.clone();
+                        }
+                    }
+                    "user-agent" => {
+                        if raw.user_agent.is_none() { out.user_agent = val.clone(); }
+                    }
+                    "copilot-integration-id" => {
+                        if raw.copilot_integration_id.is_none() {
+                            out.copilot_integration_id = val.clone();
+                        }
+                    }
+                    "openai-intent" => {
+                        if raw.openai_intent.is_none() { out.openai_intent = val.clone(); }
+                    }
+                    other => {
+                        // Unknown wire-name -> contribute as an extra header
+                        // (user extra_headers still win below).
+                        out.extra_headers.insert(other.to_string(), val.clone());
+                    }
+                }
+            }
+        } else {
+            tracing::warn!(persona = %persona_name, "unknown persona; ignoring behave_as");
+        }
+    }
+
+    // User-explicit fields override both defaults and persona overlay.
+    if let Some(v) = &raw.editor_version { out.editor_version = v.clone(); }
+    if let Some(v) = &raw.editor_plugin_version { out.editor_plugin_version = v.clone(); }
+    if let Some(v) = &raw.user_agent { out.user_agent = v.clone(); }
+    if let Some(v) = &raw.copilot_integration_id { out.copilot_integration_id = v.clone(); }
+    if let Some(v) = &raw.openai_intent { out.openai_intent = v.clone(); }
+    if let Some(extra) = &raw.extra_headers {
+        for (k, v) in extra {
+            out.extra_headers.insert(k.clone(), v.clone());
+        }
+    }
+    out
+}
 
 impl Config {
     pub fn load(explicit: Option<&Path>) -> Result<(Self, PathBuf)> {
@@ -236,8 +372,46 @@ impl Config {
         }
         let raw = std::fs::read_to_string(&path)
             .with_context(|| format!("read config {}", path.display()))?;
-        let cfg: Config = toml::from_str(&raw)
+        let raw_cfg: ConfigRaw = toml::from_str(&raw)
             .with_context(|| format!("parse config {}", path.display()))?;
+
+        // For now we only know one upstream id; once we add more providers the
+        // resolution will become per-account using `account.provider`.
+        let upstream = crate::provider::ID_GITHUB_COPILOT;
+        let profiles = crate::provider::profiles::Profiles::global();
+
+        let copilot = resolve_copilot(&raw_cfg.copilot, profiles, upstream, None);
+
+        let accounts: Vec<Account> = raw_cfg
+            .accounts
+            .into_iter()
+            .map(|a| {
+                let parent_persona = raw_cfg.copilot.behave_as.as_deref();
+                let acct_persona = a.behave_as.as_deref().or(parent_persona);
+                let acct_copilot = a.copilot.as_ref().map(|h| {
+                    resolve_copilot(h, profiles, upstream, acct_persona)
+                });
+                Account {
+                    id: a.id,
+                    provider: a.provider,
+                    github_token: a.github_token,
+                    api_token: a.api_token,
+                    api_token_expires_at: a.api_token_expires_at,
+                    copilot: acct_copilot,
+                    behave_as: a.behave_as,
+                }
+            })
+            .collect();
+
+        let cfg = Config {
+            server: raw_cfg.server,
+            pool: raw_cfg.pool,
+            usage: raw_cfg.usage,
+            proxy: raw_cfg.proxy,
+            copilot,
+            accounts,
+        };
+
         cfg.proxy.validate()?;
         cfg.copilot.validate()?;
         for a in &cfg.accounts {
@@ -261,16 +435,45 @@ impl Config {
                 .with_context(|| format!("create {}", parent.display()))?;
         }
         let toml = toml::to_string_pretty(self)?;
-        let tmp = path.with_extension("toml.tmp");
-        std::fs::write(&tmp, toml)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let perm = std::fs::Permissions::from_mode(0o600);
-            std::fs::set_permissions(&tmp, perm)?;
+        write_atomic(path, &toml)
+    }
+
+    /// Apply an in-place edit to the config TOML, preserving user comments and
+    /// formatting. The closure receives a mutable `toml_edit::DocumentMut`
+    /// loaded from disk (or empty if the file does not exist). After the
+    /// closure returns successfully the document is validated by parsing it
+    /// back through `Config::load`-style validation, then written atomically.
+    pub fn edit_in_place<F>(path: &Path, f: F) -> Result<()>
+    where
+        F: FnOnce(&mut toml_edit::DocumentMut) -> Result<()>,
+    {
+        let raw = if path.exists() {
+            std::fs::read_to_string(path)
+                .with_context(|| format!("read config {}", path.display()))?
+        } else {
+            String::new()
+        };
+        let mut doc: toml_edit::DocumentMut = raw
+            .parse()
+            .with_context(|| format!("parse config {}", path.display()))?;
+        f(&mut doc)?;
+        let serialised = doc.to_string();
+        // Validate by round-tripping through serde + our validators.
+        let cfg: Config = toml::from_str(&serialised)
+            .context("validation failed: edited config no longer parses")?;
+        cfg.proxy.validate().context("validation failed: [proxy]")?;
+        cfg.copilot.validate().context("validation failed: [copilot]")?;
+        for a in &cfg.accounts {
+            if let Some(h) = &a.copilot {
+                h.validate()
+                    .with_context(|| format!("validation failed: account '{}'", a.id))?;
+            }
         }
-        std::fs::rename(&tmp, path)?;
-        Ok(())
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("create {}", parent.display()))?;
+        }
+        write_atomic(path, &serialised)
     }
 
     pub fn upsert_account(&mut self, a: Account) {
@@ -285,4 +488,19 @@ impl Config {
 pub fn project_dirs() -> Result<ProjectDirs> {
     ProjectDirs::from("dev", "llm-router", "llm-router")
         .ok_or_else(|| anyhow!("could not resolve XDG project dirs"))
+}
+
+fn write_atomic(path: &Path, contents: &str) -> Result<()> {
+    let tmp = path.with_extension("toml.tmp");
+    std::fs::write(&tmp, contents)
+        .with_context(|| format!("write {}", tmp.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perm = std::fs::Permissions::from_mode(0o600);
+        std::fs::set_permissions(&tmp, perm)?;
+    }
+    std::fs::rename(&tmp, path)
+        .with_context(|| format!("rename {} -> {}", tmp.display(), path.display()))?;
+    Ok(())
 }

@@ -45,6 +45,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: LoginArgs) -> Result<()> {
         api_token: Some(resp.token),
         api_token_expires_at: Some(resp.expires_at),
         copilot: None,
+        behave_as: None,
     });
     cfg.save(&path)?;
     println!("Saved account '{id}' to {}", path.display());
