@@ -1,0 +1,142 @@
+//! GitHub Copilot provider.
+
+pub mod headers;
+pub mod models;
+pub mod oauth;
+pub mod token;
+
+use crate::config::{Account, CopilotHeaders, InitiatorMode};
+use anyhow::{anyhow, Context, Result};
+use async_trait::async_trait;
+use parking_lot::RwLock;
+use reqwest::header::HeaderMap;
+use serde_json::Value;
+use tokio::sync::Mutex as AsyncMutex;
+
+use super::{ChatCtx, Provider};
+
+#[allow(dead_code)]
+pub const GITHUB_API: &str = "https://api.github.com";
+pub const COPILOT_API: &str = "https://api.githubcopilot.com";
+pub const TOKEN_EXCHANGE_URL: &str = "https://api.github.com/copilot_internal/v2/token";
+
+/// Cached short-lived API token state.
+struct ApiToken {
+    token: Option<String>,
+    expires_at: Option<i64>,
+}
+
+pub struct CopilotProvider {
+    #[allow(dead_code)]
+    pub id: String,
+    pub github_token: String,
+    pub headers: CopilotHeaders,
+    refresh_lock: AsyncMutex<()>,
+    cache: RwLock<ApiToken>,
+}
+
+impl CopilotProvider {
+    pub fn from_account(a: &Account, global: &CopilotHeaders) -> Result<Self> {
+        let gh = a
+            .github_token
+            .clone()
+            .ok_or_else(|| anyhow!("account '{}' missing github_token", a.id))?;
+        Ok(Self {
+            id: format!("github-copilot:{}", a.id),
+            github_token: gh,
+            headers: global.merged(a.copilot.as_ref()),
+            refresh_lock: AsyncMutex::new(()),
+            cache: RwLock::new(ApiToken {
+                token: a.api_token.clone(),
+                expires_at: a.api_token_expires_at,
+            }),
+        })
+    }
+
+    fn snapshot(&self) -> (Option<String>, Option<i64>) {
+        let g = self.cache.read();
+        (g.token.clone(), g.expires_at)
+    }
+
+    /// Ensure we have a non-expired Copilot API token; refresh if needed.
+    pub async fn ensure_api_token(&self, http: &reqwest::Client) -> Result<String> {
+        const SKEW_SECS: i64 = 300;
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        if let (Some(tok), Some(exp)) = self.snapshot() {
+            if exp - SKEW_SECS > now {
+                return Ok(tok);
+            }
+        }
+        let _g = self.refresh_lock.lock().await;
+        if let (Some(tok), Some(exp)) = self.snapshot() {
+            if exp - SKEW_SECS > now {
+                return Ok(tok);
+            }
+        }
+        let resp = token::exchange(http, &self.github_token, &self.headers)
+            .await
+            .context("Copilot token exchange failed")?;
+        {
+            let mut g = self.cache.write();
+            g.token = Some(resp.token.clone());
+            g.expires_at = Some(resp.expires_at);
+        }
+        Ok(resp.token)
+    }
+
+    fn invalidate_api_token(&self) {
+        let mut g = self.cache.write();
+        g.token = None;
+        g.expires_at = None;
+    }
+
+    /// Resolve the X-Initiator value to send.
+    /// Precedence: inbound `X-Initiator` header > config mode > auto-classify.
+    fn resolve_initiator(&self, body: &Value, inbound: &HeaderMap, fallback: &str) -> String {
+        if let Some(v) = inbound.get("x-initiator").and_then(|v| v.to_str().ok()) {
+            let v = v.trim().to_ascii_lowercase();
+            if v == "user" || v == "agent" {
+                return v;
+            }
+        }
+        match self.headers.initiator_mode {
+            InitiatorMode::AlwaysUser => "user".into(),
+            InitiatorMode::AlwaysAgent => "agent".into(),
+            InitiatorMode::Auto => {
+                // If caller already classified, trust it.
+                if fallback == "user" || fallback == "agent" {
+                    return fallback.into();
+                }
+                headers::classify_initiator(body).into()
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl Provider for CopilotProvider {
+    fn id(&self) -> &str { &self.id }
+
+    async fn list_models(&self, http: &reqwest::Client) -> Result<Value> {
+        let token = self.ensure_api_token(http).await?;
+        models::list(http, &token, &self.headers).await
+    }
+
+    async fn chat(&self, ctx: ChatCtx<'_>) -> Result<reqwest::Response> {
+        let token = self.ensure_api_token(ctx.http).await?;
+        let initiator = self.resolve_initiator(ctx.body, ctx.inbound_headers, ctx.initiator);
+        let h = headers::copilot_request_headers(&token, &self.headers, ctx.stream, &initiator)?;
+        let url = format!("{COPILOT_API}/chat/completions");
+        let resp = ctx
+            .http
+            .post(&url)
+            .headers(h)
+            .json(ctx.body)
+            .send()
+            .await
+            .context("upstream chat request failed")?;
+        Ok(resp)
+    }
+
+    fn on_unauthorized(&self) { self.invalidate_api_token(); }
+}

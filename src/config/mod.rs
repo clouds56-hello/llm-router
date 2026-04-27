@@ -8,8 +8,9 @@ pub mod paths;
 
 pub const DEFAULT_PORT: u16 = 4141;
 pub const DEFAULT_HOST: &str = "127.0.0.1";
+pub const DEFAULT_PROVIDER: &str = "github-copilot";
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     #[serde(default)]
     pub server: ServerConfig,
@@ -18,21 +19,11 @@ pub struct Config {
     #[serde(default)]
     pub usage: UsageConfig,
     #[serde(default)]
+    pub proxy: ProxyConfig,
+    #[serde(default)]
     pub copilot: CopilotHeaders,
     #[serde(default)]
     pub accounts: Vec<Account>,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            server: ServerConfig::default(),
-            pool: PoolConfig::default(),
-            usage: UsageConfig::default(),
-            copilot: CopilotHeaders::default(),
-            accounts: Vec::new(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,9 +34,7 @@ pub struct ServerConfig {
     pub port: u16,
 }
 impl Default for ServerConfig {
-    fn default() -> Self {
-        Self { host: default_host(), port: default_port() }
-    }
+    fn default() -> Self { Self { host: default_host(), port: default_port() } }
 }
 fn default_host() -> String { DEFAULT_HOST.to_string() }
 fn default_port() -> u16 { DEFAULT_PORT }
@@ -77,6 +66,49 @@ impl Default for UsageConfig {
 }
 fn default_true() -> bool { true }
 
+/// Outbound HTTP/HTTPS/SOCKS proxy configuration.
+///
+/// Resolution rules:
+/// - If `url` is set, every outbound request goes through it (subject to `no_proxy`).
+/// - Else if `system` is true, defer to reqwest's env-var auto-detection
+///   (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`).
+/// - Else: explicitly disable any ambient env-var proxy (predictable default).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ProxyConfig {
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub no_proxy: Vec<String>,
+    #[serde(default)]
+    pub system: bool,
+}
+
+impl ProxyConfig {
+    pub fn validate(&self) -> Result<()> {
+        if let Some(u) = &self.url {
+            let parsed = reqwest::Url::parse(u)
+                .with_context(|| format!("[proxy].url is not a valid URL: {u}"))?;
+            match parsed.scheme() {
+                "http" | "https" | "socks5" | "socks5h" => {}
+                other => return Err(anyhow!("[proxy].url has unsupported scheme: {other}")),
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum InitiatorMode {
+    /// Auto-classify by inspecting the chat messages array.
+    #[default]
+    Auto,
+    /// Always send X-Initiator: user.
+    AlwaysUser,
+    /// Always send X-Initiator: agent.
+    AlwaysAgent,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CopilotHeaders {
     #[serde(default = "default_editor_version")]
@@ -90,6 +122,8 @@ pub struct CopilotHeaders {
     #[serde(default = "default_openai_intent")]
     pub openai_intent: String,
     #[serde(default)]
+    pub initiator_mode: InitiatorMode,
+    #[serde(default)]
     pub extra_headers: BTreeMap<String, String>,
 }
 impl Default for CopilotHeaders {
@@ -100,6 +134,7 @@ impl Default for CopilotHeaders {
             user_agent: default_user_agent(),
             copilot_integration_id: default_integration_id(),
             openai_intent: default_openai_intent(),
+            initiator_mode: InitiatorMode::default(),
             extra_headers: BTreeMap::new(),
         }
     }
@@ -127,13 +162,13 @@ impl CopilotHeaders {
                     user_agent: o.user_agent.clone(),
                     copilot_integration_id: o.copilot_integration_id.clone(),
                     openai_intent: o.openai_intent.clone(),
+                    initiator_mode: o.initiator_mode,
                     extra_headers: extra,
                 }
             }
         }
     }
 
-    /// Validate header field values and extra header names.
     pub fn validate(&self) -> Result<()> {
         for (name, _) in &self.extra_headers {
             if !is_token(name) {
@@ -171,17 +206,24 @@ fn is_token(s: &str) -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Account {
     pub id: String,
-    pub github_token: String,
+    /// Provider id, e.g. "github-copilot". Defaults to "github-copilot" for backward compat.
+    #[serde(default = "default_provider")]
+    pub provider: String,
+    /// GitHub OAuth token (github-copilot provider only).
+    #[serde(default)]
+    pub github_token: Option<String>,
     /// Cached short-lived Copilot API token; written back by the daemon.
     #[serde(default)]
     pub api_token: Option<String>,
     /// Unix seconds when `api_token` expires.
     #[serde(default)]
     pub api_token_expires_at: Option<i64>,
-    /// Optional per-account header overrides.
+    /// Optional per-account header overrides (github-copilot provider only).
     #[serde(default)]
     pub copilot: Option<CopilotHeaders>,
 }
+
+fn default_provider() -> String { DEFAULT_PROVIDER.to_string() }
 
 impl Config {
     pub fn load(explicit: Option<&Path>) -> Result<(Self, PathBuf)> {
@@ -196,11 +238,18 @@ impl Config {
             .with_context(|| format!("read config {}", path.display()))?;
         let cfg: Config = toml::from_str(&raw)
             .with_context(|| format!("parse config {}", path.display()))?;
+        cfg.proxy.validate()?;
         cfg.copilot.validate()?;
         for a in &cfg.accounts {
             if let Some(h) = &a.copilot {
                 h.validate()
                     .with_context(|| format!("account {}: invalid [copilot] override", a.id))?;
+            }
+            if a.provider == DEFAULT_PROVIDER && a.github_token.is_none() {
+                return Err(anyhow!(
+                    "account '{}': provider 'github-copilot' requires `github_token`",
+                    a.id
+                ));
             }
         }
         Ok((cfg, path))

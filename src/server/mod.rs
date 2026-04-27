@@ -30,7 +30,7 @@ async fn health() -> &'static str { "ok" }
 
 pub fn build_state(cfg: &Config) -> Result<AppState> {
     let pool = AccountPool::from_config(cfg)?;
-    let http = crate::util::http::build_client()?;
+    let http = crate::util::http::build_client(&cfg.proxy)?;
     let usage = if cfg.usage.enabled {
         let path = cfg
             .usage

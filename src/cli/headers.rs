@@ -28,6 +28,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: HeadersArgs) -> Result<()> {
     println!("user-agent:             {}", headers.user_agent);
     println!("copilot-integration-id: {}", headers.copilot_integration_id);
     println!("openai-intent:          {}", headers.openai_intent);
+    println!("initiator_mode:         {:?}", headers.initiator_mode);
     if !headers.extra_headers.is_empty() {
         println!("extra:");
         for (k, v) in &headers.extra_headers {

@@ -30,7 +30,8 @@ pub async fn run(cfg_path: Option<PathBuf>, args: ImportArgs) -> Result<()> {
     let (mut cfg, path) = Config::load(cfg_path.as_deref())?;
     cfg.upsert_account(Account {
         id: args.id.clone(),
-        github_token: token,
+        provider: crate::provider::ID_GITHUB_COPILOT.into(),
+        github_token: Some(token),
         api_token: None,
         api_token_expires_at: None,
         copilot: None,

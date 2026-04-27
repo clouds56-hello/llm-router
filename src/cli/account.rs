@@ -21,14 +21,14 @@ pub async fn run(cfg_path: Option<PathBuf>, cmd: AccountCmd) -> Result<()> {
                 println!("(no accounts)");
                 return Ok(());
             }
-            println!("{:<20}  {:<10}  expires_at", "id", "has_token");
+            println!("{:<20}  {:<16}  {:<10}  expires_at", "id", "provider", "has_token");
             for a in &cfg.accounts {
                 let has = a.api_token.is_some();
                 let exp = a
                     .api_token_expires_at
                     .map(|t| t.to_string())
                     .unwrap_or_else(|| "-".into());
-                println!("{:<20}  {:<10}  {}", a.id, has, exp);
+                println!("{:<20}  {:<16}  {:<10}  {}", a.id, a.provider, has, exp);
             }
         }
         AccountCmd::Remove { id } => {
@@ -47,7 +47,9 @@ pub async fn run(cfg_path: Option<PathBuf>, cmd: AccountCmd) -> Result<()> {
                 .find(|a| a.id == id)
                 .ok_or_else(|| anyhow!("no account with id '{id}'"))?;
             println!("id: {}", a.id);
-            println!("github_token: {}…", &a.github_token[..a.github_token.len().min(7)]);
+            println!("provider: {}", a.provider);
+            let gh = a.github_token.as_deref().unwrap_or("");
+            println!("github_token: {}…", &gh[..gh.len().min(7)]);
             println!("api_token: {}", a.api_token.as_deref().map(mask).unwrap_or("-".into()));
             println!("api_token_expires_at: {:?}", a.api_token_expires_at);
             println!("override_headers: {}", a.copilot.is_some());

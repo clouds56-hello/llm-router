@@ -14,10 +14,16 @@ pub struct ServeArgs {
     /// Allow binding to non-loopback addresses (insecure: there is no client auth in v1).
     #[arg(long)]
     pub allow_remote: bool,
+    /// Skip outbound proxy for this run.
+    #[arg(long)]
+    pub no_proxy: bool,
 }
 
 pub async fn run(cfg_path: Option<PathBuf>, args: ServeArgs) -> Result<()> {
-    let (cfg, _) = Config::load(cfg_path.as_deref())?;
+    let (mut cfg, _) = Config::load(cfg_path.as_deref())?;
+    if args.no_proxy {
+        cfg.proxy = crate::config::ProxyConfig::default();
+    }
 
     let host = args.host.unwrap_or_else(|| cfg.server.host.clone());
     let port = args.port.unwrap_or(cfg.server.port);

@@ -3,8 +3,8 @@ use clap::Parser;
 
 mod cli;
 mod config;
-mod copilot;
 mod pool;
+mod provider;
 mod server;
 mod usage;
 mod util;

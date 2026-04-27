@@ -1,5 +1,5 @@
-use crate::config::{Account, Config};
-use crate::copilot;
+use crate::config::{Account, Config, ProxyConfig};
+use crate::provider::github_copilot as gh;
 use crate::util::http::build_client;
 use anyhow::Result;
 use clap::Args;
@@ -10,24 +10,28 @@ pub struct LoginArgs {
     /// ID to assign to the new account (default: github username)
     #[arg(long)]
     pub id: Option<String>,
+    /// Skip outbound proxy for this command (e.g. captive networks).
+    #[arg(long)]
+    pub no_proxy: bool,
 }
 
 pub async fn run(cfg_path: Option<PathBuf>, args: LoginArgs) -> Result<()> {
     let (mut cfg, path) = Config::load(cfg_path.as_deref())?;
-    let client = build_client()?;
+    let proxy = if args.no_proxy { ProxyConfig::default() } else { cfg.proxy.clone() };
+    let client = build_client(&proxy)?;
 
     println!("Requesting device code from GitHub…");
-    let dc = copilot::oauth::request_device_code(&client).await?;
+    let dc = gh::oauth::request_device_code(&client).await?;
     println!();
     println!("  Open: {}", dc.verification_uri);
     println!("  Code: {}", dc.user_code);
     println!();
     println!("Waiting for authorization (expires in {}s)…", dc.expires_in);
 
-    let gh_token = copilot::oauth::poll_for_token(&client, &dc).await?;
+    let gh_token = gh::oauth::poll_for_token(&client, &dc).await?;
     println!("Got GitHub token. Verifying Copilot access…");
 
-    let resp = copilot::token::exchange(&client, &gh_token, &cfg.copilot).await?;
+    let resp = gh::token::exchange(&client, &gh_token, &cfg.copilot).await?;
 
     let id = match args.id {
         Some(s) => s,
@@ -36,7 +40,8 @@ pub async fn run(cfg_path: Option<PathBuf>, args: LoginArgs) -> Result<()> {
 
     cfg.upsert_account(Account {
         id: id.clone(),
-        github_token: gh_token,
+        provider: crate::provider::ID_GITHUB_COPILOT.into(),
+        github_token: Some(gh_token),
         api_token: Some(resp.token),
         api_token_expires_at: Some(resp.expires_at),
         copilot: None,

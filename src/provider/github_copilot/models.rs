@@ -7,7 +7,7 @@ pub async fn list(
     api_token: &str,
     headers: &CopilotHeaders,
 ) -> Result<Value> {
-    let h = super::headers::copilot_request_headers(api_token, headers, false)?;
+    let h = super::headers::copilot_request_headers(api_token, headers, false, "user")?;
     let resp = client
         .get(format!("{}/models", super::COPILOT_API))
         .headers(h)

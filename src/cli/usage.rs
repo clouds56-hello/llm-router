@@ -35,13 +35,13 @@ pub async fn run(cfg_path: Option<PathBuf>, args: UsageArgs) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{:<16}  {:<24}  {:>6}  {:>10}  {:>12}  {:>10}",
-        "account", "model", "calls", "prompt_tok", "completion_tok", "avg_ms"
+        "{:<16}  {:<24}  {:<7}  {:>6}  {:>10}  {:>12}  {:>10}",
+        "account", "model", "init", "calls", "prompt_tok", "completion_tok", "avg_ms"
     );
     for r in rows {
         println!(
-            "{:<16}  {:<24}  {:>6}  {:>10}  {:>12}  {:>10.0}",
-            r.account, r.model, r.count, r.prompt_tokens, r.completion_tokens, r.avg_latency_ms
+            "{:<16}  {:<24}  {:<7}  {:>6}  {:>10}  {:>12}  {:>10.0}",
+            r.account, r.model, r.initiator, r.count, r.prompt_tokens, r.completion_tokens, r.avg_latency_ms
         );
     }
     Ok(())

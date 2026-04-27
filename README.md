@@ -65,11 +65,31 @@ editor_plugin_version  = "copilot-chat/0.20.0"
 user_agent             = "GitHubCopilotChat/0.20.0"
 copilot_integration_id = "vscode-chat"
 openai_intent          = "conversation-panel"
+# How to populate the `X-Initiator` header on outbound chat requests.
+# - "auto"         (default) classify per request: "user" for a fresh human turn,
+#                  "agent" for tool-result follow-ups. Avoids being billed once
+#                  per tool round-trip on Copilot's premium models.
+# - "always_user"
+# - "always_agent"
+initiator_mode = "auto"
+
+# Optional outbound HTTP/HTTPS/SOCKS5 proxy. Omit the section entirely to make
+# a direct connection. Setting `system = true` defers to the standard
+# HTTP_PROXY / HTTPS_PROXY env vars.
+[proxy]
+# url = "http://user:pass@proxy.example.com:8080"
+# url = "socks5h://127.0.0.1:1080"
+# system = false
+# no_proxy = ["localhost", "127.0.0.1", ".internal"]
 
 [[accounts]]
 id = "personal"
+provider = "github-copilot"   # default; only one provider supported in v1
 github_token = "gho_..."
 ```
+
+The downstream client may also send `X-Initiator: user|agent` per request,
+which overrides the auto-classifier and the config setting.
 
 If Copilot starts rejecting requests with 401/403 + HTML, your editor identity
 headers are likely stale. Bump `[copilot]` to match the current VS Code Copilot
@@ -78,11 +98,11 @@ Chat extension and restart.
 ## Commands
 
 ```
-llm-router login                    # GitHub device flow
+llm-router login [--no-proxy]       # GitHub device flow
 llm-router import --from gh         # or --from copilot-plugin
 llm-router account list|remove ID|show ID
 llm-router headers [--account ID]   # inspect resolved Copilot identity headers
-llm-router serve [--port N]
+llm-router serve [--port N] [--no-proxy] [--allow-remote]
 llm-router usage [--since 24h] [--account ID]
 ```
 

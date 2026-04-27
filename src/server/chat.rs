@@ -1,7 +1,8 @@
 use super::error::ApiError;
 use super::AppState;
-use crate::copilot::{self, COPILOT_API};
 use crate::pool::Account;
+use crate::provider::ChatCtx;
+use crate::provider::github_copilot::headers::classify_initiator;
 use crate::usage::Record;
 use axum::body::Body;
 use axum::extract::State;
@@ -18,6 +19,7 @@ const MAX_RETRIES: usize = 2;
 
 pub async fn chat_completions(
     State(s): State<AppState>,
+    inbound: HeaderMap,
     Json(body): Json<Value>,
 ) -> Result<Response, ApiError> {
     let stream = body.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
@@ -27,31 +29,33 @@ pub async fn chat_completions(
         .unwrap_or("unknown")
         .to_string();
 
+    // Pre-classify; providers may override based on their own config.
+    let initiator: String = match inbound.get("x-initiator").and_then(|v| v.to_str().ok()) {
+        Some(v) => {
+            let lv = v.trim().to_ascii_lowercase();
+            if lv == "user" || lv == "agent" { lv } else { classify_initiator(&body).into() }
+        }
+        None => classify_initiator(&body).into(),
+    };
+
     let started = Instant::now();
     let mut last_err: Option<(StatusCode, String)> = None;
 
     for attempt in 0..=MAX_RETRIES {
-        let acct = s.pool.acquire();
-        let token = match acct.ensure_api_token(&s.http).await {
-            Ok(t) => t,
-            Err(e) => {
-                tracing::warn!(account = %acct.id, attempt, error = %e, "token refresh failed");
-                acct.mark_failure(s.pool.cooldown_base());
-                last_err = Some((StatusCode::BAD_GATEWAY, e.to_string()));
-                continue;
-            }
+        let acct = s.pool.acquire(Some(&model));
+
+        let ctx = ChatCtx {
+            http: &s.http,
+            body: &body,
+            stream,
+            initiator: &initiator,
+            inbound_headers: &inbound,
         };
 
-        let headers = match copilot::headers::copilot_request_headers(&token, &acct.headers, stream) {
-            Ok(h) => h,
-            Err(e) => return Err(ApiError::internal(e.to_string())),
-        };
-
-        let url = format!("{COPILOT_API}/chat/completions");
-        let resp = match s.http.post(&url).headers(headers).json(&body).send().await {
+        let resp = match acct.provider.chat(ctx).await {
             Ok(r) => r,
             Err(e) => {
-                tracing::warn!(account = %acct.id, attempt, error = %e, "upstream send failed");
+                tracing::warn!(account = %acct.id, attempt, error = %e, "provider chat failed");
                 acct.mark_failure(s.pool.cooldown_base());
                 last_err = Some((StatusCode::BAD_GATEWAY, e.to_string()));
                 continue;
@@ -60,11 +64,9 @@ pub async fn chat_completions(
 
         let status = resp.status();
 
-        // Retryable conditions
         if status == StatusCode::UNAUTHORIZED {
-            tracing::warn!(account = %acct.id, attempt, "401 from upstream; refreshing token");
-            acct.invalidate_api_token();
-            // do not cooldown on 401 — token may simply be stale
+            tracing::warn!(account = %acct.id, attempt, "401 from upstream; refreshing creds");
+            acct.invalidate_credentials();
             last_err = Some((status, "unauthorized".into()));
             continue;
         }
@@ -79,13 +81,12 @@ pub async fn chat_completions(
             continue;
         }
 
-        // Success path — handover to streaming or buffered handler.
         acct.mark_success();
 
         if stream {
-            return Ok(stream_response(s.clone(), acct, resp, model, started).await);
+            return Ok(stream_response(s.clone(), acct, resp, model, initiator, started).await);
         } else {
-            return Ok(buffered_response(s.clone(), acct, resp, model, started).await);
+            return Ok(buffered_response(s.clone(), acct, resp, model, initiator, started).await);
         }
     }
 
@@ -98,6 +99,7 @@ async fn buffered_response(
     acct: Arc<Account>,
     resp: reqwest::Response,
     model: String,
+    initiator: String,
     started: Instant,
 ) -> Response {
     let status = resp.status();
@@ -108,9 +110,8 @@ async fn buffered_response(
         }
     };
 
-    // Try to extract token usage from JSON body.
     let (pt, ct) = parse_usage_from_json(&bytes);
-    record_usage(&s, &acct.id, &model, pt, ct, started, status.as_u16(), false);
+    record_usage(&s, &acct.id, &model, &initiator, pt, ct, started, status.as_u16(), false);
 
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -125,15 +126,16 @@ async fn stream_response(
     acct: Arc<Account>,
     resp: reqwest::Response,
     model: String,
+    initiator: String,
     started: Instant,
 ) -> Response {
     let status = resp.status();
 
-    // Capture last data line containing "usage" for accounting.
     let usage_holder = Arc::new(parking_lot::Mutex::new((None::<u64>, None::<u64>)));
     let usage_for_stream = usage_holder.clone();
     let acct_id = acct.id.clone();
     let model_clone = model.clone();
+    let initiator_clone = initiator.clone();
     let s_clone = s.clone();
 
     let upstream = resp.bytes_stream();
@@ -141,7 +143,6 @@ async fn stream_response(
 
     let mapped = upstream.map(move |chunk| match chunk {
         Ok(b) => {
-            // Scan for SSE "data: {...}" lines and try to extract usage.
             buffer.extend_from_slice(&b);
             while let Some(pos) = buffer.iter().position(|&c| c == b'\n') {
                 let line: Vec<u8> = buffer.drain(..=pos).collect();
@@ -168,8 +169,6 @@ async fn stream_response(
         Err(e) => Err(std::io::Error::new(std::io::ErrorKind::Other, e)),
     });
 
-    // Record at the end: spawn a task that drains a oneshot when stream ends.
-    // Simpler: wrap the stream so it records on Drop.
     let recorded = Arc::new(parking_lot::Mutex::new(false));
     let recorded_clone = recorded.clone();
     let on_end = move || {
@@ -178,7 +177,10 @@ async fn stream_response(
         }
         *recorded_clone.lock() = true;
         let (pt, ct) = *usage_holder.lock();
-        record_usage(&s_clone, &acct_id, &model_clone, pt, ct, started, status.as_u16(), true);
+        record_usage(
+            &s_clone, &acct_id, &model_clone, &initiator_clone,
+            pt, ct, started, status.as_u16(), true,
+        );
     };
 
     let stream = StreamWithFinalizer::new(mapped, on_end);
@@ -214,10 +216,12 @@ fn parse_usage_from_json(bytes: &[u8]) -> (Option<u64>, Option<u64>) {
     (pt, ct)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn record_usage(
     s: &AppState,
     account_id: &str,
     model: &str,
+    initiator: &str,
     pt: Option<u64>,
     ct: Option<u64>,
     started: Instant,
@@ -232,6 +236,7 @@ fn record_usage(
     if let Err(e) = db.record(Record {
         account_id,
         model,
+        initiator,
         prompt_tokens: pt,
         completion_tokens: ct,
         latency_ms,
