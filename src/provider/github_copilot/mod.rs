@@ -46,10 +46,11 @@ fn copilot_info() -> &'static ProviderInfo {
         display_name: "GitHub Copilot",
         upstream_url: COPILOT_API.to_string(),
         auth_kind: AuthKind::OAuthDeviceFlow,
-        // Copilot exposes a dynamic upstream model catalogue via /models; we
-        // intentionally leave the static overlay empty rather than baking a
-        // soon-stale list.
-        default_models: Vec::new(),
+        // Copilot's `/models` upstream is the source of truth for model
+        // *identity*; the catalogue below provides metadata overlay for the
+        // ids that models.dev tracks. Unknown ids still pass through
+        // `/v1/models` — they just lack the `x_llm_router` enrichment block.
+        default_models: crate::catalogue::default_models_for(super::ID_GITHUB_COPILOT),
     })
 }
 

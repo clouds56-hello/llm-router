@@ -8,6 +8,7 @@ mod headers;
 mod import;
 mod login;
 mod serve;
+mod update;
 mod usage;
 
 #[derive(Parser, Debug)]
@@ -38,6 +39,8 @@ pub enum Cmd {
     Usage(usage::UsageArgs),
     /// Get/set/list config values (git-style); preserves comments
     Config(config_cmd::ConfigArgs),
+    /// Refresh the on-disk models.dev catalogue cache
+    Update(update::UpdateArgs),
 }
 
 impl Cli {
@@ -51,6 +54,7 @@ impl Cli {
             Cmd::Serve(a) => serve::run(cfg_path, a).await,
             Cmd::Usage(a) => usage::run(cfg_path, a).await,
             Cmd::Config(a) => config_cmd::run(cfg_path, a).await,
+            Cmd::Update(a) => update::run(a).await,
         }
     }
 }

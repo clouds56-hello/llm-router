@@ -62,6 +62,7 @@ pub struct Modalities {
 }
 
 impl Modalities {
+    #[allow(dead_code)]
     pub const TEXT_ONLY: Self = Self {
         text: true,
         audio: false,
@@ -203,6 +204,16 @@ pub trait Provider: Send + Sync {
 
     /// Provider-level metadata (display name, auth kind, model catalogue).
     fn info(&self) -> &ProviderInfo;
+
+    /// models.dev provider key. The default mirrors [`ProviderInfo::id`],
+    /// which already matches the catalogue key for every provider we ship
+    /// (`github-copilot`, `zai`, `zai-coding-plan`, `zhipuai`,
+    /// `zhipuai-coding-plan`). Override only when an internal id diverges
+    /// from the upstream catalogue's spelling.
+    #[allow(dead_code)]
+    fn catalogue_id(&self) -> &str {
+        self.info().id.as_str()
+    }
 
     /// Look up our metadata for a wire-id. Default impl scans
     /// `info().default_models`.
