@@ -64,7 +64,10 @@ pub async fn exchange(
     body: body.clone(),
   })?;
   let span = tracing::Span::current();
-  span.record("api_token_fp", tracing::field::display(token_fingerprint(&parsed.token)));
+  span.record(
+    "api_token_fp",
+    tracing::field::display(token_fingerprint(&parsed.token)),
+  );
   span.record("expires_at", parsed.expires_at);
   debug!("token exchange ok");
   Ok(parsed)

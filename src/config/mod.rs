@@ -19,8 +19,8 @@ pub struct Config {
   pub server: ServerConfig,
   #[serde(default)]
   pub pool: PoolConfig,
-  #[serde(default)]
-  pub usage: UsageConfig,
+  #[serde(default, alias = "usage")]
+  pub db: DbConfig,
   #[serde(default)]
   pub proxy: ProxyConfig,
   #[serde(default)]
@@ -81,8 +81,8 @@ struct ConfigRaw {
   server: ServerConfig,
   #[serde(default)]
   pool: PoolConfig,
-  #[serde(default)]
-  usage: UsageConfig,
+  #[serde(default, alias = "usage")]
+  db: DbConfig,
   #[serde(default)]
   proxy: ProxyConfig,
   #[serde(default)]
@@ -155,22 +155,46 @@ fn default_session_tombstone() -> u64 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UsageConfig {
+pub struct DbConfig {
   #[serde(default = "default_true")]
   pub enabled: bool,
+  #[serde(default, alias = "db_path")]
+  pub usage_db_path: Option<PathBuf>,
   #[serde(default)]
-  pub db_path: Option<PathBuf>,
+  pub sessions_db_path: Option<PathBuf>,
+  #[serde(default)]
+  pub requests_dir: Option<PathBuf>,
+  #[serde(default = "default_true")]
+  pub record_sessions: bool,
+  #[serde(default = "default_true")]
+  pub record_request_bodies: bool,
+  #[serde(default = "default_body_max_bytes")]
+  pub body_max_bytes: usize,
+  #[serde(default = "default_write_queue_capacity")]
+  pub write_queue_capacity: usize,
 }
-impl Default for UsageConfig {
+impl Default for DbConfig {
   fn default() -> Self {
     Self {
       enabled: true,
-      db_path: None,
+      usage_db_path: None,
+      sessions_db_path: None,
+      requests_dir: None,
+      record_sessions: true,
+      record_request_bodies: true,
+      body_max_bytes: default_body_max_bytes(),
+      write_queue_capacity: default_write_queue_capacity(),
     }
   }
 }
 fn default_true() -> bool {
   true
+}
+fn default_body_max_bytes() -> usize {
+  10 * 1024 * 1024
+}
+fn default_write_queue_capacity() -> usize {
+  4096
 }
 
 /// Outbound HTTP/HTTPS/SOCKS proxy configuration.
@@ -199,7 +223,12 @@ impl ProxyConfig {
       })?;
       match parsed.scheme() {
         "http" | "https" | "socks5" | "socks5h" => {}
-        other => return error::ProxySchemeSnafu { scheme: other.to_string() }.fail(),
+        other => {
+          return error::ProxySchemeSnafu {
+            scheme: other.to_string(),
+          }
+          .fail()
+        }
       }
     }
     Ok(())
@@ -573,7 +602,7 @@ impl Config {
     let cfg = Config {
       server: raw_cfg.server,
       pool: raw_cfg.pool,
-      usage: raw_cfg.usage,
+      db: raw_cfg.db,
       proxy: raw_cfg.proxy,
       logging: raw_cfg.logging,
       copilot,
@@ -593,12 +622,7 @@ impl Config {
         return error::MissingGithubTokenSnafu { id: a.id.clone() }.fail();
       }
       if crate::provider::ZAI_ALIASES.contains(&a.provider.as_str())
-        && a
-          .api_key
-          .as_ref()
-          .map(|s| s.expose().trim())
-          .unwrap_or("")
-          .is_empty()
+        && a.api_key.as_ref().map(|s| s.expose().trim()).unwrap_or("").is_empty()
       {
         return error::MissingApiKeySnafu {
           id: a.id.clone(),
@@ -617,7 +641,9 @@ impl Config {
 
   pub fn save(&self, path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
-      std::fs::create_dir_all(parent).context(error::CreateDirSnafu { path: parent.to_path_buf() })?;
+      std::fs::create_dir_all(parent).context(error::CreateDirSnafu {
+        path: parent.to_path_buf(),
+      })?;
     }
     let toml = toml::to_string_pretty(self).context(error::SerializeSnafu)?;
     write_atomic(path, &toml)?;
@@ -635,13 +661,15 @@ impl Config {
     F: FnOnce(&mut toml_edit::DocumentMut) -> Result<()>,
   {
     let raw = if path.exists() {
-      std::fs::read_to_string(path).context(error::ReadSnafu { path: path.to_path_buf() })?
+      std::fs::read_to_string(path).context(error::ReadSnafu {
+        path: path.to_path_buf(),
+      })?
     } else {
       String::new()
     };
-    let mut doc: toml_edit::DocumentMut = raw
-      .parse()
-      .context(error::ParseEditSnafu { path: path.to_path_buf() })?;
+    let mut doc: toml_edit::DocumentMut = raw.parse().context(error::ParseEditSnafu {
+      path: path.to_path_buf(),
+    })?;
     f(&mut doc)?;
     let serialised = doc.to_string();
     // Validate by round-tripping through serde + our validators.
@@ -663,7 +691,9 @@ impl Config {
       }
     }
     if let Some(parent) = path.parent() {
-      std::fs::create_dir_all(parent).context(error::CreateDirSnafu { path: parent.to_path_buf() })?;
+      std::fs::create_dir_all(parent).context(error::CreateDirSnafu {
+        path: parent.to_path_buf(),
+      })?;
     }
     write_atomic(path, &serialised)
   }

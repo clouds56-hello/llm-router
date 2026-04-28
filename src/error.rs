@@ -1,7 +1,7 @@
 //! Crate-wide error type.
 //!
 //! Each subsystem owns its own `snafu::Snafu` enum (see `pool::Error`,
-//! `usage::Error`, `catalogue::Error`, `config::Error`, `provider::Error`,
+//! `db::Error`, `catalogue::Error`, `config::Error`, `provider::Error`,
 //! `server::Error`, `cli::Error`). Those compose into the top-level
 //! [`Error`] via `#[snafu(source)]`.
 //!
@@ -34,33 +34,35 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 #[snafu(visibility(pub(crate)))]
 #[allow(dead_code)]
 pub enum Error {
-    #[snafu(display("pool"), context(false))]
-    Pool { source: crate::pool::Error },
+  #[snafu(display("pool"), context(false))]
+  Pool { source: crate::pool::Error },
 
-    #[snafu(display("usage"), context(false))]
-    Usage { source: crate::usage::Error },
+  #[snafu(display("db"), context(false))]
+  Db { source: crate::db::Error },
 
-    #[snafu(display("catalogue"), context(false))]
-    Catalogue { source: crate::catalogue::loader::Error },
+  #[snafu(display("catalogue"), context(false))]
+  Catalogue { source: crate::catalogue::loader::Error },
 
-    #[snafu(display("config"), context(false))]
-    Config { source: crate::config::Error },
+  #[snafu(display("config"), context(false))]
+  Config { source: crate::config::Error },
 
-    #[snafu(display("provider"), context(false))]
-    Provider { source: crate::provider::Error },
+  #[snafu(display("provider"), context(false))]
+  Provider { source: crate::provider::Error },
 
-    #[snafu(display("cli"), context(false))]
-    Cli { source: crate::cli::Error },
+  #[snafu(display("cli"), context(false))]
+  Cli { source: crate::cli::Error },
 
-    // Subsystem variants are added as each module migrates off anyhow.
-    // During the transition we keep an `Other` adapter so partially-migrated
-    // call paths still compile.
-    #[snafu(display("{message}"))]
-    Other { message: String },
+  // Subsystem variants are added as each module migrates off anyhow.
+  // During the transition we keep an `Other` adapter so partially-migrated
+  // call paths still compile.
+  #[snafu(display("{message}"))]
+  Other { message: String },
 }
 
 impl From<anyhow::Error> for Error {
-    fn from(e: anyhow::Error) -> Self {
-        Error::Other { message: format!("{e:#}") }
+  fn from(e: anyhow::Error) -> Self {
+    Error::Other {
+      message: format!("{e:#}"),
     }
+  }
 }

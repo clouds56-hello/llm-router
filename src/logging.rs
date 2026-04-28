@@ -17,12 +17,7 @@
 use crate::config::{LogFormat, LogTarget, LoggingConfig};
 use std::path::PathBuf;
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::{
-  fmt,
-  layer::SubscriberExt,
-  util::SubscriberInitExt,
-  EnvFilter, Layer,
-};
+use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
 
 /// Determines the default log filter applied when neither env nor config
 /// provide one — also lets read-only CLI subcommands suppress info-level
@@ -102,8 +97,7 @@ pub fn init(cfg: &LoggingConfig, mode: RunMode) -> Guard {
 /// Minimal stderr-only subscriber for early-startup diagnostics (before
 /// the config is loaded). Honors `RUST_LOG`; never panics.
 pub fn init_basic() {
-  let filter =
-    EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,llm_router=info"));
+  let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,llm_router=info"));
   let _ = tracing_subscriber::fmt()
     .with_writer(std::io::stderr)
     .with_env_filter(filter)

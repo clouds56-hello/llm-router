@@ -8,8 +8,8 @@ use crate::config::Config;
 use crate::pool::affinity::{Affinity, Lookup};
 use crate::provider::{self, Endpoint, Provider};
 use parking_lot::RwLock;
-use std::collections::BTreeMap;
 use snafu::{ResultExt, Snafu};
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -23,16 +23,11 @@ use tracing::{debug, info, warn};
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum Error {
-  #[snafu(display(
-    "no accounts configured. Run `llm-router login` or `llm-router import` first."
-  ))]
+  #[snafu(display("no accounts configured. Run `llm-router login` or `llm-router import` first."))]
   NoAccounts,
 
   #[snafu(display("failed to build provider for account `{id}`"))]
-  BuildAccount {
-    id: String,
-    source: crate::provider::Error,
-  },
+  BuildAccount { id: String, source: crate::provider::Error },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -114,8 +109,7 @@ impl AccountPool {
     let mut accounts = Vec::with_capacity(cfg.accounts.len());
     let mut buckets: BTreeMap<String, ProviderBucket> = BTreeMap::new();
     for a in &cfg.accounts {
-      let p = provider::build_for_account(a, &cfg.copilot)
-        .context(BuildAccountSnafu { id: a.id.clone() })?;
+      let p = provider::build_for_account(a, &cfg.copilot).context(BuildAccountSnafu { id: a.id.clone() })?;
       debug!(account = %a.id, provider = %p.info().id, "pool: built account");
       let acct = Arc::new(Account {
         id: a.id.clone(),
@@ -333,10 +327,7 @@ mod tests {
         interleaved: Interleaved::Disabled(false),
       },
       cost: None,
-      limit: Limits {
-        context: 1,
-        output: 1,
-      },
+      limit: Limits { context: 1, output: 1 },
       release_date: None,
     }
   }
@@ -409,11 +400,13 @@ mod tests {
   #[test]
   fn session_affinity_reuses_recorded_account() {
     let p = pool();
-    let SessionAcquire::Account(first) = p.acquire_for_session(Some("s1"), Some("model-a"), Endpoint::ChatCompletions) else {
+    let SessionAcquire::Account(first) = p.acquire_for_session(Some("s1"), Some("model-a"), Endpoint::ChatCompletions)
+    else {
       panic!("expected account");
     };
     for _ in 0..4 {
-      let SessionAcquire::Account(next) = p.acquire_for_session(Some("s1"), Some("model-a"), Endpoint::ChatCompletions) else {
+      let SessionAcquire::Account(next) = p.acquire_for_session(Some("s1"), Some("model-a"), Endpoint::ChatCompletions)
+      else {
         panic!("expected account");
       };
       assert_eq!(next.id, first.id);

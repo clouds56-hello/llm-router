@@ -107,7 +107,9 @@ pub async fn poll_for_token(client: &reqwest::Client, dc: &DeviceCode) -> Result
       ])
       .send()
       .await
-      .context(error::HttpSnafu { what: "access_token poll" })?;
+      .context(error::HttpSnafu {
+        what: "access_token poll",
+      })?;
     let body = resp.text().await.unwrap_or_default();
 
     if let Ok(ok) = serde_json::from_str::<TokenOk>(&body) {

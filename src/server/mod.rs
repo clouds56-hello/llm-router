@@ -7,8 +7,8 @@ pub mod models;
 pub mod responses;
 
 use crate::config::Config;
+use crate::db::{DbOptions, DbPaths, DbStore};
 use crate::pool::AccountPool;
-use crate::usage::UsageDb;
 use anyhow::Result;
 use axum::http::{HeaderName, Request, Response};
 use axum::middleware::{self, Next};
@@ -25,8 +25,7 @@ use tracing::{Level, Span};
 pub struct AppState {
   pub pool: Arc<AccountPool>,
   pub http: reqwest::Client,
-  pub usage: Option<Arc<UsageDb>>,
-  pub usage_enabled: bool,
+  pub db: Option<Arc<DbStore>>,
 }
 
 /// Header name used for request ids. Honors inbound `x-request-id` if present.
@@ -152,23 +151,40 @@ async fn health() -> &'static str {
 pub fn build_state(cfg: &Config) -> Result<AppState> {
   let pool = AccountPool::from_config(cfg)?;
   let http = crate::util::http::build_client(&cfg.proxy)?;
-  let usage = if cfg.usage.enabled {
-    let path = cfg
-      .usage
-      .db_path
+  let db = if cfg.db.enabled {
+    let data_dir = crate::config::paths::data_dir()?;
+    let usage_db = cfg
+      .db
+      .usage_db_path
       .clone()
       .map(Ok)
       .unwrap_or_else(crate::config::paths::default_usage_db)?;
-    Some(Arc::new(UsageDb::open(&path)?))
+    let sessions_db = cfg
+      .db
+      .sessions_db_path
+      .clone()
+      .map(Ok)
+      .unwrap_or_else(crate::config::paths::default_sessions_db)?;
+    let requests_dir = cfg
+      .db
+      .requests_dir
+      .clone()
+      .map(Ok)
+      .unwrap_or_else(crate::config::paths::default_requests_dir)?;
+    Some(Arc::new(DbStore::spawn(DbOptions {
+      paths: DbPaths {
+        data_dir,
+        usage_db,
+        sessions_db,
+        requests_dir,
+      },
+      queue_capacity: cfg.db.write_queue_capacity,
+      body_max_bytes: cfg.db.body_max_bytes,
+    })?))
   } else {
     None
   };
-  Ok(AppState {
-    pool,
-    http,
-    usage,
-    usage_enabled: cfg.usage.enabled,
-  })
+  Ok(AppState { pool, http, db })
 }
 
 #[cfg(test)]

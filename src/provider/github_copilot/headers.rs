@@ -36,8 +36,7 @@ pub fn copilot_request_headers(
   let mut m = HeaderMap::new();
   m.insert(
     AUTHORIZATION,
-    HeaderValue::from_str(&format!("Bearer {api_token}"))
-      .context(error::HeaderValueSnafu { name: "authorization" })?,
+    HeaderValue::from_str(&format!("Bearer {api_token}")).context(error::HeaderValueSnafu { name: "authorization" })?,
   );
   m.insert(
     ACCEPT,

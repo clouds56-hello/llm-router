@@ -5,12 +5,12 @@ use std::process::ExitCode;
 mod catalogue;
 mod cli;
 mod config;
+mod db;
 mod error;
 mod logging;
 mod pool;
 mod provider;
 mod server;
-mod usage;
 mod util;
 
 #[tokio::main]

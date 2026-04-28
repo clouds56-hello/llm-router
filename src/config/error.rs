@@ -13,7 +13,10 @@ pub enum Error {
   Parse { path: PathBuf, source: toml::de::Error },
 
   #[snafu(display("parse config `{}` as editable document", path.display()))]
-  ParseEdit { path: PathBuf, source: toml_edit::TomlError },
+  ParseEdit {
+    path: PathBuf,
+    source: toml_edit::TomlError,
+  },
 
   #[snafu(display("serialize config to TOML"))]
   Serialize { source: toml::ser::Error },
@@ -28,7 +31,11 @@ pub enum Error {
   SetPermissions { path: PathBuf, source: std::io::Error },
 
   #[snafu(display("rename `{}` -> `{}`", from.display(), to.display()))]
-  Rename { from: PathBuf, to: PathBuf, source: std::io::Error },
+  Rename {
+    from: PathBuf,
+    to: PathBuf,
+    source: std::io::Error,
+  },
 
   #[snafu(display("could not resolve XDG project dirs"))]
   NoProjectDirs,
@@ -51,9 +58,7 @@ pub enum Error {
   #[snafu(display("account `{id}`: provider 'github-copilot' requires `github_token`"))]
   MissingGithubToken { id: String },
 
-  #[snafu(display(
-    "account `{id}`: provider '{provider}' requires `api_key` (Z.ai dashboard API key)"
-  ))]
+  #[snafu(display("account `{id}`: provider '{provider}' requires `api_key` (Z.ai dashboard API key)"))]
   MissingApiKey { id: String, provider: String },
 
   #[snafu(display("account `{id}`: invalid [copilot] override"))]
@@ -74,7 +79,9 @@ pub enum Error {
 
 impl From<anyhow::Error> for Error {
   fn from(e: anyhow::Error) -> Self {
-    Error::Other { message: format!("{e:#}") }
+    Error::Other {
+      message: format!("{e:#}"),
+    }
   }
 }
 

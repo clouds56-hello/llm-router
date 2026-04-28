@@ -34,6 +34,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: ServeArgs) -> Result<()> {
 
   let state = server::build_state(&cfg)?;
   let n = state.pool.len();
+  let db = state.db.clone();
   let app = server::router(state);
 
   let addr: SocketAddr = format!("{host}:{port}")
@@ -45,7 +46,14 @@ pub async fn run(cfg_path: Option<PathBuf>, args: ServeArgs) -> Result<()> {
 
   tracing::info!(%addr, accounts = n, "llm-router listening");
 
-  axum::serve(listener, app).await?;
+  axum::serve(listener, app)
+    .with_graceful_shutdown(async {
+      let _ = tokio::signal::ctrl_c().await;
+    })
+    .await?;
+  if let Some(db) = db {
+    db.shutdown().await?;
+  }
   Ok(())
 }
 

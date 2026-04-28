@@ -118,7 +118,6 @@ impl Affinity {
       },
     );
   }
-
 }
 
 #[cfg(test)]

@@ -154,10 +154,7 @@ mod tests {
       Error::upstream(StatusCode::TOO_MANY_REQUESTS, "x").status(),
       StatusCode::TOO_MANY_REQUESTS
     );
-    assert_eq!(
-      Error::not_implemented("e", "m").status(),
-      StatusCode::NOT_IMPLEMENTED
-    );
+    assert_eq!(Error::not_implemented("e", "m").status(), StatusCode::NOT_IMPLEMENTED);
     assert_eq!(Error::session_expired("s").status(), StatusCode::GONE);
     assert_eq!(Error::bad_gateway("x").status(), StatusCode::BAD_GATEWAY);
     assert_eq!(Error::internal("x").status(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -166,10 +163,7 @@ mod tests {
   #[test]
   fn kind_names_are_stable() {
     assert_eq!(Error::bad_request("x").kind(), "bad_request");
-    assert_eq!(
-      Error::upstream(StatusCode::BAD_GATEWAY, "x").kind(),
-      "upstream_error"
-    );
+    assert_eq!(Error::upstream(StatusCode::BAD_GATEWAY, "x").kind(), "upstream_error");
     assert_eq!(Error::not_implemented("e", "m").kind(), "not_implemented_error");
     assert_eq!(Error::session_expired("s").kind(), "session_expired");
     assert_eq!(Error::bad_gateway("x").kind(), "bad_gateway");

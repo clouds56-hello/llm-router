@@ -78,7 +78,9 @@ pub async fn fetch(client: &reqwest::Client, github_token: &str, headers: &Copil
     .headers(h)
     .send()
     .await
-    .context(error::HttpSnafu { what: "copilot user-info" })?;
+    .context(error::HttpSnafu {
+      what: "copilot user-info",
+    })?;
   let status = resp.status();
   tracing::Span::current().record("status", status.as_u16());
   let body = resp.text().await.unwrap_or_default();

@@ -83,6 +83,8 @@ pub async fn responses(
 
   let started = Instant::now();
 
+  let req_body = body.clone();
+  let req_headers = inbound.clone();
   let body = Arc::new(body);
   let inbound = Arc::new(inbound);
   let initiator_arc = Arc::new(initiator.clone());
@@ -112,8 +114,36 @@ pub async fn responses(
   };
 
   if stream {
-    Ok(stream_response(s.clone(), acct, resp, model, initiator, session_id, started).await)
+    Ok(
+      stream_response(
+        s.clone(),
+        acct,
+        resp,
+        Endpoint::Responses,
+        model,
+        initiator,
+        session_id,
+        req_headers,
+        req_body,
+        started,
+      )
+      .await,
+    )
   } else {
-    Ok(buffered_response(s.clone(), acct, resp, model, initiator, session_id, started).await)
+    Ok(
+      buffered_response(
+        s.clone(),
+        acct,
+        resp,
+        Endpoint::Responses,
+        model,
+        initiator,
+        session_id,
+        req_headers,
+        req_body,
+        started,
+      )
+      .await,
+    )
   }
 }

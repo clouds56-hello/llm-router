@@ -148,15 +148,15 @@ pub async fn fetch_and_persist(http: &reqwest::Client, url: &str) -> Result<Upda
     .context(FetchSnafu { url: url.to_string() })?;
   let status = resp.status();
   tracing::Span::current().record("status", status.as_u16());
-  let body = resp
-    .bytes()
-    .await
-    .context(ReadBodySnafu { url: url.to_string() })?;
+  let body = resp.bytes().await.context(ReadBodySnafu { url: url.to_string() })?;
   if !status.is_success() {
-    return HttpStatusSnafu { url: url.to_string(), status }.fail();
+    return HttpStatusSnafu {
+      url: url.to_string(),
+      status,
+    }
+    .fail();
   }
-  let parsed: Catalogue =
-    serde_json::from_slice(&body).context(ParseSnafu { url: url.to_string() })?;
+  let parsed: Catalogue = serde_json::from_slice(&body).context(ParseSnafu { url: url.to_string() })?;
   if parsed.is_empty() {
     return EmptyCatalogueSnafu { url: url.to_string() }.fail();
   }
@@ -168,7 +168,9 @@ pub async fn fetch_and_persist(http: &reqwest::Client, url: &str) -> Result<Upda
 
   let path = cache_path().ok_or(Error::NoCacheDir)?;
   if let Some(parent) = path.parent() {
-    std::fs::create_dir_all(parent).context(CreateCacheDirSnafu { path: parent.to_path_buf() })?;
+    std::fs::create_dir_all(parent).context(CreateCacheDirSnafu {
+      path: parent.to_path_buf(),
+    })?;
   }
 
   // Atomic rename: write a sibling `.tmp` then rename onto the final path.

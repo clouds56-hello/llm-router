@@ -47,7 +47,10 @@ impl From<anyhow::Error> for Error {
       let msg = s.to_string();
       // Skip duplicates that anyhow sometimes produces when the
       // outer Display already includes the source.
-      if !parts.last().is_some_and(|prev| prev.contains(&msg) || msg.contains(prev)) {
+      if !parts
+        .last()
+        .is_some_and(|prev| prev.contains(&msg) || msg.contains(prev))
+      {
         parts.push(msg);
       }
       last_kind = Some(format!("{s:?}").split_whitespace().next().unwrap_or("").to_string());

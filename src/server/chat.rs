@@ -78,37 +78,73 @@ pub async fn chat_completions(
   // Wrap inputs in Arc so the per-attempt closure can clone cheaply
   // without borrowing from the surrounding scope (which would force
   // higher-ranked lifetime bounds on the dispatch closure type).
+  let req_body = body.clone();
+  let req_headers = inbound.clone();
   let body = Arc::new(body);
   let inbound = Arc::new(inbound);
   let initiator_arc = Arc::new(initiator.clone());
 
   let DispatchOk { acct, resp } = {
     let s_for_closure = s.clone();
-    dispatch(&s, session_id.as_deref(), &model, Endpoint::ChatCompletions, move |acct| {
-      let body = body.clone();
-      let inbound = inbound.clone();
-      let initiator_arc = initiator_arc.clone();
-      let behave_as = behave_as_inbound.clone();
-      let http = s_for_closure.http.clone();
-      async move {
-        let ctx = RequestCtx {
-          endpoint: Endpoint::ChatCompletions,
-          http: &http,
-          body: &body,
-          stream,
-          initiator: initiator_arc.as_str(),
-          inbound_headers: &inbound,
-          behave_as: behave_as.as_deref().map(|s| s.as_str()),
-        };
-        acct.provider.chat(ctx).await
-      }
-    })
+    dispatch(
+      &s,
+      session_id.as_deref(),
+      &model,
+      Endpoint::ChatCompletions,
+      move |acct| {
+        let body = body.clone();
+        let inbound = inbound.clone();
+        let initiator_arc = initiator_arc.clone();
+        let behave_as = behave_as_inbound.clone();
+        let http = s_for_closure.http.clone();
+        async move {
+          let ctx = RequestCtx {
+            endpoint: Endpoint::ChatCompletions,
+            http: &http,
+            body: &body,
+            stream,
+            initiator: initiator_arc.as_str(),
+            inbound_headers: &inbound,
+            behave_as: behave_as.as_deref().map(|s| s.as_str()),
+          };
+          acct.provider.chat(ctx).await
+        }
+      },
+    )
     .await?
   };
 
   if stream {
-    Ok(stream_response(s.clone(), acct, resp, model, initiator, session_id, started).await)
+    Ok(
+      stream_response(
+        s.clone(),
+        acct,
+        resp,
+        Endpoint::ChatCompletions,
+        model,
+        initiator,
+        session_id,
+        req_headers,
+        req_body,
+        started,
+      )
+      .await,
+    )
   } else {
-    Ok(buffered_response(s.clone(), acct, resp, model, initiator, session_id, started).await)
+    Ok(
+      buffered_response(
+        s.clone(),
+        acct,
+        resp,
+        Endpoint::ChatCompletions,
+        model,
+        initiator,
+        session_id,
+        req_headers,
+        req_body,
+        started,
+      )
+      .await,
+    )
   }
 }

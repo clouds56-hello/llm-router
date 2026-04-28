@@ -12,7 +12,15 @@ pub fn data_dir() -> Result<PathBuf> {
 }
 
 pub fn default_usage_db() -> Result<PathBuf> {
-  Ok(data_dir()?.join("usage.sqlite"))
+  Ok(data_dir()?.join("usage.db"))
+}
+
+pub fn default_sessions_db() -> Result<PathBuf> {
+  Ok(data_dir()?.join("sessions.db"))
+}
+
+pub fn default_requests_dir() -> Result<PathBuf> {
+  Ok(data_dir()?.join("requests"))
 }
 
 pub fn default_logs_dir() -> Result<PathBuf> {
