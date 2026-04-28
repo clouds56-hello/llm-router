@@ -181,7 +181,7 @@ async fn fetch_quota(http: reqwest::Client, account: Account, timeout: Duration)
   QuotaResult::None
 }
 
-fn short_err(e: &anyhow::Error) -> String {
+fn short_err<E: std::fmt::Display>(e: &E) -> String {
   let s = e.to_string();
   if s.len() > 80 {
     format!("{}…", &s[..80])

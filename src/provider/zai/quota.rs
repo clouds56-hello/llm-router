@@ -13,8 +13,9 @@
 //! is informational only — the caller should render `"quota unavailable"`
 //! rather than aborting the whole `account list`.
 
-use anyhow::{anyhow, Context, Result};
+use crate::provider::{error, Result};
 use serde::Deserialize;
+use snafu::ResultExt;
 use std::time::Duration;
 
 const PATH: &str = "/api/monitor/usage/quota/limit";
@@ -113,18 +114,26 @@ pub async fn fetch(http: &reqwest::Client, provider_id: &str, api_key: &str) -> 
     .header("Content-Type", "application/json")
     .send()
     .await
-    .with_context(|| format!("zai quota GET {url} failed"))?;
+    .context(error::HttpSnafu { what: "zai quota" })?;
 
   let status = resp.status();
   let body = resp.text().await.unwrap_or_default();
   if !status.is_success() {
-    return Err(anyhow!("zai quota returned {status}: {body}"));
+    return error::HttpStatusSnafu {
+      what: "zai quota",
+      status,
+      body,
+    }
+    .fail();
   }
 
   // Most deployments wrap as `{ data: {...} }`; some return bare data.
   let raw: RawData = match serde_json::from_str::<Envelope>(&body) {
     Ok(env) => env.data.unwrap_or_default(),
-    Err(_) => serde_json::from_str::<RawData>(&body).with_context(|| format!("parse zai quota json: {body}"))?,
+    Err(_) => serde_json::from_str::<RawData>(&body).context(error::JsonSnafu {
+      what: "zai quota",
+      body: body.clone(),
+    })?,
   };
 
   Ok(classify(raw))

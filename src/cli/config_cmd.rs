@@ -188,7 +188,7 @@ fn cmd_unset(path: &std::path::Path, args: UnsetArgs) -> Result<()> {
   Config::edit_in_place(path, |doc| {
     let segments = key_segments(args.account.as_deref(), &args.key);
     if !remove(doc, &segments) {
-      bail!("key not found: {}", args.key);
+      return Err(anyhow::anyhow!("key not found: {}", args.key).into());
     }
     Ok(())
   })?;

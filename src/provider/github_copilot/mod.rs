@@ -7,15 +7,15 @@ pub mod token;
 pub mod user;
 
 use crate::config::{Account, CopilotHeaders, InitiatorMode};
-use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use parking_lot::RwLock;
 use reqwest::header::HeaderMap;
 use serde_json::Value;
+use snafu::ResultExt;
 use std::sync::OnceLock;
 use tokio::sync::Mutex as AsyncMutex;
 
-use super::{AuthKind, Endpoint, Provider, ProviderInfo, RequestCtx};
+use super::{error, AuthKind, Endpoint, Provider, ProviderInfo, RequestCtx, Result};
 
 #[allow(dead_code)]
 pub const GITHUB_API: &str = "https://api.github.com";
@@ -56,10 +56,10 @@ fn copilot_info() -> &'static ProviderInfo {
 
 impl CopilotProvider {
   pub fn from_account(a: &Account, global: &CopilotHeaders) -> Result<Self> {
-    let gh = a
-      .github_token
-      .clone()
-      .ok_or_else(|| anyhow!("account '{}' missing github_token", a.id))?;
+    let gh = a.github_token.clone().ok_or(error::Error::MissingCredential {
+      account: a.id.clone(),
+      what: "github_token",
+    })?;
     Ok(Self {
       id: format!("github-copilot:{}", a.id),
       github_token: gh,
@@ -93,9 +93,7 @@ impl CopilotProvider {
         return Ok(tok);
       }
     }
-    let resp = token::exchange(http, &self.github_token, &self.headers)
-      .await
-      .context("Copilot token exchange failed")?;
+    let resp = token::exchange(http, &self.github_token, &self.headers).await?;
     {
       let mut g = self.cache.write();
       g.token = Some(resp.token.clone());
@@ -213,21 +211,15 @@ impl Provider for CopilotProvider {
   }
 
   async fn chat(&self, ctx: RequestCtx<'_>) -> Result<reqwest::Response> {
-    self
-      .upstream_post(ctx, "/chat/completions", "upstream chat request failed")
-      .await
+    self.upstream_post(ctx, "/chat/completions", "chat").await
   }
 
   async fn responses(&self, ctx: RequestCtx<'_>) -> Result<reqwest::Response> {
-    self
-      .upstream_post(ctx, "/responses", "upstream responses request failed")
-      .await
+    self.upstream_post(ctx, "/responses", "responses").await
   }
 
   async fn messages(&self, ctx: RequestCtx<'_>) -> Result<reqwest::Response> {
-    self
-      .upstream_post(ctx, "/v1/messages", "upstream messages request failed")
-      .await
+    self.upstream_post(ctx, "/v1/messages", "messages").await
   }
 
   fn on_unauthorized(&self) {
@@ -241,7 +233,7 @@ impl CopilotProvider {
   /// context — auth, header construction, persona, and initiator handling
   /// are identical because Copilot proxies all three on the same host with
   /// the same auth scheme.
-  async fn upstream_post(&self, ctx: RequestCtx<'_>, path: &str, err_ctx: &'static str) -> Result<reqwest::Response> {
+  async fn upstream_post(&self, ctx: RequestCtx<'_>, path: &str, what: &'static str) -> Result<reqwest::Response> {
     let token = self.ensure_api_token(ctx.http).await?;
     let initiator = match ctx.endpoint {
       // For /v1/responses the inbound body uses `input`, not `messages`,
@@ -260,7 +252,7 @@ impl CopilotProvider {
       .json(ctx.body)
       .send()
       .await
-      .context(err_ctx)?;
+      .context(error::HttpSnafu { what })?;
     Ok(resp)
   }
 

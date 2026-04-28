@@ -3,11 +3,33 @@
 
 use crate::config::Config;
 use crate::provider::{self, Endpoint, Provider};
-use anyhow::{anyhow, Result};
 use parking_lot::RwLock;
+use snafu::{ResultExt, Snafu};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+/// Errors that can occur while constructing or querying an [`AccountPool`].
+///
+/// Runtime acquisition (`AccountPool::acquire`) signals "no supporting
+/// account" via `Option::None` rather than an error variant — that case is
+/// load-bearing for the dispatcher's 501 mapping and not a failure.
+#[derive(Debug, Snafu)]
+#[snafu(visibility(pub(crate)))]
+pub enum Error {
+  #[snafu(display(
+    "no accounts configured. Run `llm-router login` or `llm-router import` first."
+  ))]
+  NoAccounts,
+
+  #[snafu(display("failed to build provider for account `{id}`"))]
+  BuildAccount {
+    id: String,
+    source: crate::provider::Error,
+  },
+}
+
+pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 pub struct Account {
   pub id: String,
@@ -59,13 +81,12 @@ pub struct AccountPool {
 impl AccountPool {
   pub fn from_config(cfg: &Config) -> Result<Arc<Self>> {
     if cfg.accounts.is_empty() {
-      return Err(anyhow!(
-        "no accounts configured. Run `llm-router login` or `llm-router import` first."
-      ));
+      return NoAccountsSnafu.fail();
     }
     let mut accounts = Vec::with_capacity(cfg.accounts.len());
     for a in &cfg.accounts {
-      let p = provider::build_for_account(a, &cfg.copilot)?;
+      let p = provider::build_for_account(a, &cfg.copilot)
+        .context(BuildAccountSnafu { id: a.id.clone() })?;
       accounts.push(Arc::new(Account {
         id: a.id.clone(),
         provider: p,

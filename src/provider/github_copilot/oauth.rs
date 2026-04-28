@@ -2,8 +2,9 @@
 //!
 //! Reference: https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow
 
-use anyhow::{anyhow, Context, Result};
+use crate::provider::{error, Result};
 use serde::Deserialize;
+use snafu::ResultExt;
 use std::time::Duration;
 
 /// VS Code Copilot Chat client ID. Public, well-known.
@@ -43,13 +44,21 @@ pub async fn request_device_code(client: &reqwest::Client) -> Result<DeviceCode>
     .form(&[("client_id", COPILOT_CLIENT_ID), ("scope", "read:user")])
     .send()
     .await
-    .context("device code request failed")?;
+    .context(error::HttpSnafu { what: "device code" })?;
   let status = resp.status();
   let body = resp.text().await.unwrap_or_default();
   if !status.is_success() {
-    return Err(anyhow!("device code request returned {status}: {body}"));
+    return error::HttpStatusSnafu {
+      what: "device code",
+      status,
+      body,
+    }
+    .fail();
   }
-  serde_json::from_str(&body).with_context(|| format!("parse device code: {body}"))
+  serde_json::from_str(&body).context(error::JsonSnafu {
+    what: "device code",
+    body: body.clone(),
+  })
 }
 
 pub async fn poll_for_token(client: &reqwest::Client, dc: &DeviceCode) -> Result<String> {
@@ -58,7 +67,7 @@ pub async fn poll_for_token(client: &reqwest::Client, dc: &DeviceCode) -> Result
 
   loop {
     if std::time::Instant::now() >= deadline {
-      return Err(anyhow!("device code expired before authorization"));
+      return error::DeviceCodeExpiredSnafu.fail();
     }
     tokio::time::sleep(interval).await;
 
@@ -72,7 +81,7 @@ pub async fn poll_for_token(client: &reqwest::Client, dc: &DeviceCode) -> Result
       ])
       .send()
       .await
-      .context("access_token poll failed")?;
+      .context(error::HttpSnafu { what: "access_token poll" })?;
     let body = resp.text().await.unwrap_or_default();
 
     if let Ok(ok) = serde_json::from_str::<TokenOk>(&body) {
@@ -89,12 +98,18 @@ pub async fn poll_for_token(client: &reqwest::Client, dc: &DeviceCode) -> Result
         "slow_down" => {
           interval = Duration::from_secs(p.interval.unwrap_or(interval.as_secs() + 5));
         }
-        "expired_token" => return Err(anyhow!("device code expired")),
-        "access_denied" => return Err(anyhow!("user denied authorization")),
-        other => return Err(anyhow!("oauth error: {other}: {body}")),
+        "expired_token" => return error::DeviceCodeExpiredSnafu.fail(),
+        "access_denied" => return error::AccessDeniedSnafu.fail(),
+        other => {
+          return error::OAuthSnafu {
+            code: other.to_string(),
+            body,
+          }
+          .fail()
+        }
       }
       continue;
     }
-    return Err(anyhow!("unexpected token response: {body}"));
+    return error::OAuthUnexpectedSnafu { body }.fail();
   }
 }

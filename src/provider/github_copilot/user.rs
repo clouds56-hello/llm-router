@@ -7,8 +7,9 @@
 //! `account list` quota probe — not from the request hot path.
 
 use crate::config::CopilotHeaders;
-use anyhow::{anyhow, Context, Result};
+use crate::provider::{error, Result};
 use serde::Deserialize;
+use snafu::ResultExt;
 use std::collections::BTreeMap;
 
 const USER_INFO_URL: &str = "https://api.github.com/copilot_internal/user";
@@ -64,11 +65,19 @@ pub async fn fetch(client: &reqwest::Client, github_token: &str, headers: &Copil
     .headers(h)
     .send()
     .await
-    .context("copilot user-info request failed")?;
+    .context(error::HttpSnafu { what: "copilot user-info" })?;
   let status = resp.status();
   let body = resp.text().await.unwrap_or_default();
   if !status.is_success() {
-    return Err(anyhow!("user-info returned {status}: {body}"));
+    return error::HttpStatusSnafu {
+      what: "copilot user-info",
+      status,
+      body,
+    }
+    .fail();
   }
-  serde_json::from_str(&body).with_context(|| format!("parse copilot user-info response: {body}"))
+  serde_json::from_str(&body).context(error::JsonSnafu {
+    what: "copilot user-info",
+    body: body.clone(),
+  })
 }

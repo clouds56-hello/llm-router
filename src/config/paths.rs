@@ -1,4 +1,4 @@
-use anyhow::Result;
+use super::Result;
 use std::path::PathBuf;
 
 pub fn config_path() -> Result<PathBuf> {
@@ -13,4 +13,8 @@ pub fn data_dir() -> Result<PathBuf> {
 
 pub fn default_usage_db() -> Result<PathBuf> {
   Ok(data_dir()?.join("usage.sqlite"))
+}
+
+pub fn default_logs_dir() -> Result<PathBuf> {
+  Ok(data_dir()?.join("logs"))
 }

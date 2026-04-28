@@ -1,10 +1,13 @@
-use anyhow::{anyhow, Context, Result};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
+use snafu::ResultExt;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+pub mod error;
 pub mod paths;
+
+pub use error::{Error, Result};
 
 pub const DEFAULT_PORT: u16 = 4141;
 pub const DEFAULT_HOST: &str = "127.0.0.1";
@@ -20,6 +23,8 @@ pub struct Config {
   pub usage: UsageConfig,
   #[serde(default)]
   pub proxy: ProxyConfig,
+  #[serde(default)]
+  pub logging: LoggingConfig,
   #[serde(default)]
   pub copilot: CopilotHeaders,
   #[serde(default)]
@@ -80,6 +85,8 @@ struct ConfigRaw {
   usage: UsageConfig,
   #[serde(default)]
   proxy: ProxyConfig,
+  #[serde(default)]
+  logging: LoggingConfig,
   #[serde(default)]
   copilot: CopilotHeadersRaw,
   #[serde(default)]
@@ -169,14 +176,80 @@ pub struct ProxyConfig {
 impl ProxyConfig {
   pub fn validate(&self) -> Result<()> {
     if let Some(u) = &self.url {
-      let parsed = reqwest::Url::parse(u).with_context(|| format!("[proxy].url is not a valid URL: {u}"))?;
+      let parsed = reqwest::Url::parse(u).map_err(|e| Error::ProxyUrl {
+        url: u.clone(),
+        message: e.to_string(),
+      })?;
       match parsed.scheme() {
         "http" | "https" | "socks5" | "socks5h" => {}
-        other => return Err(anyhow!("[proxy].url has unsupported scheme: {other}")),
+        other => return error::ProxySchemeSnafu { scheme: other.to_string() }.fail(),
       }
     }
     Ok(())
   }
+}
+
+/// Logging / tracing settings.
+///
+/// Resolution precedence (high → low): CLI flag > env var > this config > defaults.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoggingConfig {
+  /// `tracing-subscriber::EnvFilter` directive (e.g. `info,llm_router=debug`).
+  /// Overridden by `RUST_LOG` if set.
+  #[serde(default = "default_log_level")]
+  pub level: String,
+  /// Output format for log records.
+  #[serde(default)]
+  pub format: LogFormat,
+  /// Where to write logs.
+  #[serde(default)]
+  pub target: LogTarget,
+  /// Override directory for the rotating file sink.
+  /// Defaults to `<state-dir>/logs`.
+  #[serde(default)]
+  pub dir: Option<PathBuf>,
+  /// Use ANSI colors on terminal output.
+  #[serde(default = "default_true")]
+  pub ansi: bool,
+  /// Emit span open/close events (verbose).
+  #[serde(default)]
+  pub include_spans: bool,
+}
+
+impl Default for LoggingConfig {
+  fn default() -> Self {
+    Self {
+      level: default_log_level(),
+      format: LogFormat::default(),
+      target: LogTarget::default(),
+      dir: None,
+      ansi: true,
+      include_spans: false,
+    }
+  }
+}
+
+fn default_log_level() -> String {
+  "info,llm_router=info".into()
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum LogFormat {
+  Pretty,
+  #[default]
+  Compact,
+  Json,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum LogTarget {
+  Stderr,
+  File,
+  /// Both stderr and a rotating file (recommended default).
+  #[default]
+  Both,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -271,16 +344,14 @@ impl CopilotHeaders {
   pub fn validate(&self) -> Result<()> {
     for name in self.extra_headers.keys() {
       if !is_token(name) {
-        return Err(anyhow!("invalid header name in [copilot.extra_headers]: {name:?}"));
+        return error::InvalidHeaderNameSnafu { name: name.clone() }.fail();
       }
       let lower = name.to_ascii_lowercase();
       if matches!(
         lower.as_str(),
         "authorization" | "host" | "content-length" | "content-type"
       ) {
-        return Err(anyhow!(
-          "header {name:?} is reserved and cannot be set via extra_headers"
-        ));
+        return error::ReservedHeaderSnafu { name: name.clone() }.fail();
       }
     }
     for (label, val) in [
@@ -291,7 +362,7 @@ impl CopilotHeaders {
       ("openai_intent", &self.openai_intent),
     ] {
       if val.trim().is_empty() {
-        return Err(anyhow!("[copilot].{label} must be non-empty"));
+        return error::EmptyFieldSnafu { field: label }.fail();
       }
     }
     Ok(())
@@ -448,8 +519,8 @@ impl Config {
     if !path.exists() {
       return Ok((Config::default(), path));
     }
-    let raw = std::fs::read_to_string(&path).with_context(|| format!("read config {}", path.display()))?;
-    let raw_cfg: ConfigRaw = toml::from_str(&raw).with_context(|| format!("parse config {}", path.display()))?;
+    let raw = std::fs::read_to_string(&path).context(error::ReadSnafu { path: path.clone() })?;
+    let raw_cfg: ConfigRaw = toml::from_str(&raw).context(error::ParseSnafu { path: path.clone() })?;
 
     // For now we only know one upstream id; once we add more providers the
     // resolution will become per-account using `account.provider`.
@@ -487,6 +558,7 @@ impl Config {
       pool: raw_cfg.pool,
       usage: raw_cfg.usage,
       proxy: raw_cfg.proxy,
+      logging: raw_cfg.logging,
       copilot,
       accounts,
     };
@@ -495,23 +567,22 @@ impl Config {
     cfg.copilot.validate()?;
     for a in &cfg.accounts {
       if let Some(h) = &a.copilot {
-        h.validate()
-          .with_context(|| format!("account {}: invalid [copilot] override", a.id))?;
+        h.validate().map_err(|e| Error::AccountOverride {
+          id: a.id.clone(),
+          source: Box::new(e),
+        })?;
       }
       if a.provider == DEFAULT_PROVIDER && a.github_token.is_none() {
-        return Err(anyhow!(
-          "account '{}': provider 'github-copilot' requires `github_token`",
-          a.id
-        ));
+        return error::MissingGithubTokenSnafu { id: a.id.clone() }.fail();
       }
       if crate::provider::ZAI_ALIASES.contains(&a.provider.as_str())
         && a.api_key.as_deref().map(str::trim).unwrap_or("").is_empty()
       {
-        return Err(anyhow!(
-          "account '{}': provider '{}' requires `api_key` (Z.ai dashboard API key)",
-          a.id,
-          a.provider
-        ));
+        return error::MissingApiKeySnafu {
+          id: a.id.clone(),
+          provider: a.provider.clone(),
+        }
+        .fail();
       }
     }
     Ok((cfg, path))
@@ -519,9 +590,9 @@ impl Config {
 
   pub fn save(&self, path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
-      std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+      std::fs::create_dir_all(parent).context(error::CreateDirSnafu { path: parent.to_path_buf() })?;
     }
-    let toml = toml::to_string_pretty(self)?;
+    let toml = toml::to_string_pretty(self).context(error::SerializeSnafu)?;
     write_atomic(path, &toml)
   }
 
@@ -535,27 +606,35 @@ impl Config {
     F: FnOnce(&mut toml_edit::DocumentMut) -> Result<()>,
   {
     let raw = if path.exists() {
-      std::fs::read_to_string(path).with_context(|| format!("read config {}", path.display()))?
+      std::fs::read_to_string(path).context(error::ReadSnafu { path: path.to_path_buf() })?
     } else {
       String::new()
     };
     let mut doc: toml_edit::DocumentMut = raw
       .parse()
-      .with_context(|| format!("parse config {}", path.display()))?;
+      .context(error::ParseEditSnafu { path: path.to_path_buf() })?;
     f(&mut doc)?;
     let serialised = doc.to_string();
     // Validate by round-tripping through serde + our validators.
-    let cfg: Config = toml::from_str(&serialised).context("validation failed: edited config no longer parses")?;
-    cfg.proxy.validate().context("validation failed: [proxy]")?;
-    cfg.copilot.validate().context("validation failed: [copilot]")?;
+    let cfg: Config = toml::from_str(&serialised).context(error::EditValidateSnafu)?;
+    cfg.proxy.validate().map_err(|e| Error::EditValidateSection {
+      section: "[proxy]",
+      source: Box::new(e),
+    })?;
+    cfg.copilot.validate().map_err(|e| Error::EditValidateSection {
+      section: "[copilot]",
+      source: Box::new(e),
+    })?;
     for a in &cfg.accounts {
       if let Some(h) = &a.copilot {
-        h.validate()
-          .with_context(|| format!("validation failed: account '{}'", a.id))?;
+        h.validate().map_err(|e| Error::AccountOverride {
+          id: a.id.clone(),
+          source: Box::new(e),
+        })?;
       }
     }
     if let Some(parent) = path.parent() {
-      std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+      std::fs::create_dir_all(parent).context(error::CreateDirSnafu { path: parent.to_path_buf() })?;
     }
     write_atomic(path, &serialised)
   }
@@ -570,18 +649,21 @@ impl Config {
 }
 
 pub fn project_dirs() -> Result<ProjectDirs> {
-  ProjectDirs::from("dev", "llm-router", "llm-router").ok_or_else(|| anyhow!("could not resolve XDG project dirs"))
+  ProjectDirs::from("dev", "llm-router", "llm-router").ok_or(Error::NoProjectDirs)
 }
 
 fn write_atomic(path: &Path, contents: &str) -> Result<()> {
   let tmp = path.with_extension("toml.tmp");
-  std::fs::write(&tmp, contents).with_context(|| format!("write {}", tmp.display()))?;
+  std::fs::write(&tmp, contents).context(error::WriteSnafu { path: tmp.clone() })?;
   #[cfg(unix)]
   {
     use std::os::unix::fs::PermissionsExt;
     let perm = std::fs::Permissions::from_mode(0o600);
-    std::fs::set_permissions(&tmp, perm)?;
+    std::fs::set_permissions(&tmp, perm).context(error::SetPermissionsSnafu { path: tmp.clone() })?;
   }
-  std::fs::rename(&tmp, path).with_context(|| format!("rename {} -> {}", tmp.display(), path.display()))?;
+  std::fs::rename(&tmp, path).context(error::RenameSnafu {
+    from: tmp.clone(),
+    to: path.to_path_buf(),
+  })?;
   Ok(())
 }

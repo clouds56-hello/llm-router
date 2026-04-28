@@ -19,12 +19,12 @@ pub mod quota;
 pub mod transform;
 
 use crate::config::Account;
-use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use serde_json::Value;
+use snafu::ResultExt;
 
-use super::{AuthKind, ModelInfo, Provider, ProviderInfo, RequestCtx, ZAI_ALIASES};
+use super::{error, AuthKind, ModelInfo, Provider, ProviderInfo, RequestCtx, Result, ZAI_ALIASES};
 
 /// Default upstream for the coding plan. Override per-account via
 /// `[accounts.<id>.zai] base_url = "..."`.
@@ -52,13 +52,20 @@ impl std::fmt::Debug for ZaiProvider {
 impl ZaiProvider {
   pub fn from_account(a: &Account) -> Result<Self> {
     if !ZAI_ALIASES.contains(&a.provider.as_str()) {
-      return Err(anyhow!("ZaiProvider built with non-zai provider id '{}'", a.provider));
+      return error::ProviderMismatchSnafu {
+        expected: "zai-coding-plan|zai|zhipuai-coding-plan|zhipuai",
+        got: a.provider.clone(),
+      }
+      .fail();
     }
     let key = a
       .api_key
       .clone()
       .filter(|s| !s.trim().is_empty())
-      .ok_or_else(|| anyhow!("account '{}' missing api_key", a.id))?;
+      .ok_or(error::Error::MissingCredential {
+        account: a.id.clone(),
+        what: "api_key",
+      })?;
     let base_url = a
       .zai
       .as_ref()
@@ -85,7 +92,8 @@ impl ZaiProvider {
     let mut m = HeaderMap::new();
     m.insert(
       AUTHORIZATION,
-      HeaderValue::from_str(&format!("Bearer {}", self.api_key)).context("invalid api_key for Authorization header")?,
+      HeaderValue::from_str(&format!("Bearer {}", self.api_key))
+        .context(error::HeaderValueSnafu { name: "authorization" })?,
     );
     m.insert(
       ACCEPT,
@@ -121,15 +129,23 @@ impl Provider for ZaiProvider {
       .headers(self.auth_headers(false)?)
       .send()
       .await
-      .context("zai /models request failed")?;
+      .context(error::HttpSnafu { what: "zai /models" })?;
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
     if !status.is_success() {
-      return Err(anyhow!("zai /models returned {status}: {body}"));
+      return error::HttpStatusSnafu {
+        what: "zai /models",
+        status,
+        body,
+      }
+      .fail();
     }
     // Some Z.ai deployments return `{ data: [...] }`, others return a bare
     // array. Normalise either way.
-    let v: Value = serde_json::from_str(&body).with_context(|| format!("parse zai /models JSON: {body}"))?;
+    let v: Value = serde_json::from_str(&body).context(error::JsonSnafu {
+      what: "zai /models",
+      body: body.clone(),
+    })?;
     let data: Vec<Value> = match &v {
       Value::Object(_) => v.get("data").and_then(|d| d.as_array()).cloned().unwrap_or_default(),
       Value::Array(a) => a.clone(),
@@ -157,7 +173,7 @@ impl Provider for ZaiProvider {
       .json(&body)
       .send()
       .await
-      .context("zai chat request failed")?;
+      .context(error::HttpSnafu { what: "zai chat" })?;
     Ok(resp)
   }
 
@@ -193,19 +209,19 @@ mod tests {
   #[test]
   fn rejects_missing_api_key() {
     let err = ZaiProvider::from_account(&acct("zai-coding-plan", None)).unwrap_err();
-    assert!(err.to_string().contains("missing api_key"), "{err}");
+    assert!(err.to_string().contains("api_key"), "{err}");
   }
 
   #[test]
   fn rejects_blank_api_key() {
     let err = ZaiProvider::from_account(&acct("zai-coding-plan", Some("   "))).unwrap_err();
-    assert!(err.to_string().contains("missing api_key"), "{err}");
+    assert!(err.to_string().contains("api_key"), "{err}");
   }
 
   #[test]
   fn rejects_non_zai_provider_id() {
     let err = ZaiProvider::from_account(&acct("github-copilot", Some("sk-x"))).unwrap_err();
-    assert!(err.to_string().contains("non-zai provider id"), "{err}");
+    assert!(err.to_string().contains("provider mismatch"), "{err}");
   }
 
   #[test]

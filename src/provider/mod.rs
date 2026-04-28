@@ -10,16 +10,18 @@
 //! drive request shaping (e.g. injecting a `thinking` block for reasoning
 //! models).
 
-use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use reqwest::header::HeaderMap;
 use serde::Serialize;
 use serde_json::Value;
 use std::sync::Arc;
 
+pub mod error;
 pub mod github_copilot;
 pub mod profiles;
 pub mod zai;
+
+pub use error::{Error, Result};
 
 pub const ID_GITHUB_COPILOT: &str = "github-copilot";
 
@@ -230,16 +232,21 @@ pub trait Provider: Send + Sync {
   /// Default impl returns an error — providers that natively support the
   /// surface override.
   async fn responses(&self, _ctx: RequestCtx<'_>) -> Result<reqwest::Response> {
-    Err(anyhow!(
-      "provider '{}' does not implement /v1/responses",
-      self.info().id
-    ))
+    error::UnsupportedEndpointSnafu {
+      provider: self.info().id.clone(),
+      endpoint: "/v1/responses",
+    }
+    .fail()
   }
 
   /// Execute an Anthropic Messages-API request (`POST /v1/messages`
   /// upstream). Default impl returns an error.
   async fn messages(&self, _ctx: RequestCtx<'_>) -> Result<reqwest::Response> {
-    Err(anyhow!("provider '{}' does not implement /v1/messages", self.info().id))
+    error::UnsupportedEndpointSnafu {
+      provider: self.info().id.clone(),
+      endpoint: "/v1/messages",
+    }
+    .fail()
   }
 
   /// Called by the pool when an upstream 401 occurs, so the provider may
@@ -261,11 +268,10 @@ pub fn build_for_account(
       let p = zai::ZaiProvider::from_account(a)?;
       Ok(Arc::new(p))
     }
-    other => Err(anyhow!(
-      "unknown provider '{other}' for account '{}'. Known: {} | {}",
-      a.id,
-      ID_GITHUB_COPILOT,
-      ZAI_ALIASES.join(" | ")
-    )),
+    other => error::UnknownProviderSnafu {
+      id: other.to_string(),
+      account: a.id.clone(),
+    }
+    .fail(),
   }
 }

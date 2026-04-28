@@ -1,6 +1,7 @@
 use crate::config::CopilotHeaders;
-use anyhow::{anyhow, Context, Result};
+use crate::provider::{error, Result};
 use serde::Deserialize;
+use snafu::ResultExt;
 
 /// Subset of the `/copilot_internal/v2/token` response that we actually use.
 ///
@@ -33,13 +34,20 @@ pub async fn exchange(
     .headers(h)
     .send()
     .await
-    .context("token exchange request failed")?;
+    .context(error::HttpSnafu { what: "token exchange" })?;
   let status = resp.status();
   let body = resp.text().await.unwrap_or_default();
   if !status.is_success() {
-    return Err(anyhow!("token exchange returned {status}: {body}"));
+    return error::HttpStatusSnafu {
+      what: "token exchange",
+      status,
+      body,
+    }
+    .fail();
   }
-  let parsed: CopilotTokenResp =
-    serde_json::from_str(&body).with_context(|| format!("parse token exchange response: {body}"))?;
+  let parsed: CopilotTokenResp = serde_json::from_str(&body).context(error::JsonSnafu {
+    what: "token exchange",
+    body: body.clone(),
+  })?;
   Ok(parsed)
 }

@@ -11,7 +11,7 @@ use super::AppState;
 use crate::pool::Account;
 use crate::usage::Record;
 use axum::body::Body;
-use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::http::{HeaderMap, HeaderValue};
 use axum::response::{IntoResponse, Response};
 use bytes::Bytes;
 use futures_util::Stream;
@@ -36,7 +36,7 @@ pub(crate) async fn buffered_response(
   let bytes = match resp.bytes().await {
     Ok(b) => b,
     Err(e) => {
-      return ApiError::upstream(StatusCode::BAD_GATEWAY, e.to_string()).into_response();
+      return ApiError::bad_gateway(format!("reading upstream body: {e}")).into_response();
     }
   };
 

@@ -5,12 +5,45 @@
 //! embedded at build time. There is no auto-refresh — the explicit `update`
 //! subcommand is the only way to grow the cached copy.
 
-use anyhow::{Context, Result};
+use snafu::{ResultExt, Snafu};
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::Instant;
 
 use super::schema::Catalogue;
+
+#[derive(Debug, Snafu)]
+#[snafu(visibility(pub(crate)))]
+pub enum Error {
+  #[snafu(display("HTTP GET {url} failed"))]
+  Fetch { url: String, source: reqwest::Error },
+
+  #[snafu(display("read response body from {url}"))]
+  ReadBody { url: String, source: reqwest::Error },
+
+  #[snafu(display("{url} returned HTTP {status}"))]
+  HttpStatus { url: String, status: reqwest::StatusCode },
+
+  #[snafu(display("parse {url} as models.dev catalogue"))]
+  Parse { url: String, source: serde_json::Error },
+
+  #[snafu(display("{url} returned an empty catalogue"))]
+  EmptyCatalogue { url: String },
+
+  #[snafu(display("could not resolve a cache directory"))]
+  NoCacheDir,
+
+  #[snafu(display("create cache dir `{}`", path.display()))]
+  CreateCacheDir { path: PathBuf, source: std::io::Error },
+
+  #[snafu(display("write `{}`", path.display()))]
+  Write { path: PathBuf, source: std::io::Error },
+
+  #[snafu(display("atomic rename to `{}`", path.display()))]
+  Rename { path: PathBuf, source: std::io::Error },
+}
+
+pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 /// Where the loaded catalogue came from. Surfaced by `update --status`.
 #[derive(Debug, Clone)]
@@ -93,28 +126,35 @@ pub struct UpdateReport {
 ///   * contain at least one provider (defends against silent empty payloads).
 pub async fn fetch_and_persist(http: &reqwest::Client, url: &str) -> Result<UpdateReport> {
   let started = Instant::now();
-  let resp = http.get(url).send().await.context("HTTP GET failed")?;
+  let resp = http
+    .get(url)
+    .send()
+    .await
+    .context(FetchSnafu { url: url.to_string() })?;
   let status = resp.status();
-  let body = resp.bytes().await.context("read response body")?;
+  let body = resp
+    .bytes()
+    .await
+    .context(ReadBodySnafu { url: url.to_string() })?;
   if !status.is_success() {
-    anyhow::bail!("{url} returned HTTP {status}");
+    return HttpStatusSnafu { url: url.to_string(), status }.fail();
   }
   let parsed: Catalogue =
-    serde_json::from_slice(&body).with_context(|| format!("parse {url} as models.dev catalogue"))?;
+    serde_json::from_slice(&body).context(ParseSnafu { url: url.to_string() })?;
   if parsed.is_empty() {
-    anyhow::bail!("{url} returned an empty catalogue");
+    return EmptyCatalogueSnafu { url: url.to_string() }.fail();
   }
   let models: usize = parsed.values().map(|p| p.models.len()).sum();
 
-  let path = cache_path().context("could not resolve a cache directory")?;
+  let path = cache_path().ok_or(Error::NoCacheDir)?;
   if let Some(parent) = path.parent() {
-    std::fs::create_dir_all(parent).with_context(|| format!("create cache dir {}", parent.display()))?;
+    std::fs::create_dir_all(parent).context(CreateCacheDirSnafu { path: parent.to_path_buf() })?;
   }
 
   // Atomic rename: write a sibling `.tmp` then rename onto the final path.
   let tmp = path.with_extension("json.tmp");
-  std::fs::write(&tmp, &body).with_context(|| format!("write {}", tmp.display()))?;
-  std::fs::rename(&tmp, &path).with_context(|| format!("atomic rename to {}", path.display()))?;
+  std::fs::write(&tmp, &body).context(WriteSnafu { path: tmp.clone() })?;
+  std::fs::rename(&tmp, &path).context(RenameSnafu { path: path.clone() })?;
 
   Ok(UpdateReport {
     providers: parsed.len(),

@@ -1,0 +1,168 @@
+//! Tracing subscriber wiring.
+//!
+//! Resolution precedence for filter directive (high → low):
+//! 1. `RUST_LOG` env var
+//! 2. `[logging].level` from config
+//! 3. Per-[`RunMode`] default
+//!
+//! Output composition is config-driven via [`crate::config::LoggingConfig`]:
+//! - `target = stderr`: pretty/compact/json layer to stderr
+//! - `target = file`: rotating daily file in `dir` (or `<state>/logs/`)
+//! - `target = both` *(default)*: stderr + rotating file
+//!
+//! File output uses [`tracing_appender::rolling::daily`] with names like
+//! `llm-router.log.2026-04-28`. The returned [`Guard`] must outlive the
+//! process-wide subscriber; drop it during shutdown to flush.
+
+use crate::config::{LogFormat, LogTarget, LoggingConfig};
+use std::path::PathBuf;
+use tracing_appender::non_blocking::WorkerGuard;
+use tracing_subscriber::{
+  fmt,
+  layer::SubscriberExt,
+  util::SubscriberInitExt,
+  EnvFilter, Layer,
+};
+
+/// Determines the default log filter applied when neither env nor config
+/// provide one — also lets read-only CLI subcommands suppress info-level
+/// noise from `llm_router`.
+#[derive(Copy, Clone, Debug)]
+pub enum RunMode {
+  /// Long-running server process: full info-level logging.
+  Server,
+  /// Read-only CLI subcommand (account ls, usage stats, config get).
+  /// Suppresses our own info-level chatter to keep stdout clean.
+  ReadOnlyCli,
+  /// Mutating CLI subcommand (login, import, config set).
+  MutatingCli,
+}
+
+impl RunMode {
+  fn default_directive(self) -> &'static str {
+    match self {
+      RunMode::Server => "info,llm_router=info",
+      RunMode::ReadOnlyCli => "warn,llm_router=warn",
+      RunMode::MutatingCli => "warn,llm_router=info",
+    }
+  }
+}
+
+/// Opaque flush guard for the rolling-file appender. Drop on shutdown.
+pub struct Guard {
+  _file: Option<WorkerGuard>,
+  _stderr: Option<WorkerGuard>,
+}
+
+/// Initialize the global tracing subscriber from config + run-mode.
+///
+/// Safe to call exactly once per process; subsequent calls return a no-op
+/// guard because [`SubscriberInitExt::init`] panics on second use.
+pub fn init(cfg: &LoggingConfig, mode: RunMode) -> Guard {
+  let filter = build_filter(cfg, mode);
+
+  let stderr_layer = match cfg.target {
+    LogTarget::Stderr | LogTarget::Both => Some(make_layer(cfg, std::io::stderr)),
+    LogTarget::File => None,
+  };
+
+  let (file_layer, file_guard) = match cfg.target {
+    LogTarget::File | LogTarget::Both => match resolve_logs_dir(cfg) {
+      Ok(dir) => match std::fs::create_dir_all(&dir) {
+        Ok(()) => {
+          let appender = tracing_appender::rolling::daily(&dir, "llm-router.log");
+          let (nb, g) = tracing_appender::non_blocking(appender);
+          (Some(make_layer(cfg, nb)), Some(g))
+        }
+        Err(e) => {
+          eprintln!("warning: failed to create log dir {dir:?}: {e} (file logging disabled)");
+          (None, None)
+        }
+      },
+      Err(e) => {
+        eprintln!("warning: cannot resolve log dir: {e} (file logging disabled)");
+        (None, None)
+      }
+    },
+    LogTarget::Stderr => (None, None),
+  };
+
+  tracing_subscriber::registry()
+    .with(filter)
+    .with(stderr_layer)
+    .with(file_layer)
+    .init();
+
+  Guard {
+    _file: file_guard,
+    _stderr: None,
+  }
+}
+
+/// Minimal stderr-only subscriber for early-startup diagnostics (before
+/// the config is loaded). Honors `RUST_LOG`; never panics.
+pub fn init_basic() {
+  let filter =
+    EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,llm_router=info"));
+  let _ = tracing_subscriber::fmt()
+    .with_writer(std::io::stderr)
+    .with_env_filter(filter)
+    .try_init();
+}
+
+fn build_filter(cfg: &LoggingConfig, mode: RunMode) -> EnvFilter {
+  if let Ok(env) = std::env::var("RUST_LOG") {
+    if !env.is_empty() {
+      if let Ok(f) = EnvFilter::try_new(&env) {
+        return f;
+      }
+    }
+  }
+  if !cfg.level.is_empty() {
+    if let Ok(f) = EnvFilter::try_new(&cfg.level) {
+      return f;
+    }
+  }
+  EnvFilter::new(mode.default_directive())
+}
+
+fn make_layer<S, W>(cfg: &LoggingConfig, writer: W) -> Box<dyn Layer<S> + Send + Sync + 'static>
+where
+  S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+  W: for<'a> fmt::MakeWriter<'a> + Send + Sync + 'static,
+{
+  // Span events: closed by default for low overhead, open+close if requested.
+  let span_events = if cfg.include_spans {
+    fmt::format::FmtSpan::NEW | fmt::format::FmtSpan::CLOSE
+  } else {
+    fmt::format::FmtSpan::NONE
+  };
+
+  match cfg.format {
+    LogFormat::Pretty => fmt::layer()
+      .with_writer(writer)
+      .with_ansi(cfg.ansi)
+      .with_span_events(span_events)
+      .pretty()
+      .boxed(),
+    LogFormat::Compact => fmt::layer()
+      .with_writer(writer)
+      .with_ansi(cfg.ansi)
+      .with_span_events(span_events)
+      .compact()
+      .boxed(),
+    LogFormat::Json => fmt::layer()
+      .with_writer(writer)
+      .with_ansi(false)
+      .with_span_events(span_events)
+      .json()
+      .boxed(),
+  }
+}
+
+fn resolve_logs_dir(cfg: &LoggingConfig) -> Result<PathBuf, String> {
+  if let Some(d) = &cfg.dir {
+    return Ok(d.clone());
+  }
+  crate::config::paths::default_logs_dir().map_err(|e| e.to_string())
+}

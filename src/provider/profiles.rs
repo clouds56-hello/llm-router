@@ -14,7 +14,7 @@
 //! and `Profiles::resolve(persona, upstream)` to compute the ordered list of
 //! `(header_name, value)` pairs to apply for a given outbound request.
 
-use anyhow::{anyhow, Context, Result};
+use super::{error, Result};
 use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
@@ -64,11 +64,17 @@ impl Profiles {
   }
 
   fn load() -> Result<Self> {
-    let mut p = Self::parse(EMBEDDED).context("parse embedded profiles.toml")?;
+    let mut p = Self::parse(EMBEDDED).map_err(|e| error::Error::Profiles {
+      message: format!("parse embedded profiles.toml: {e}"),
+    })?;
     if let Some(path) = user_profiles_path() {
       if path.exists() {
-        let raw = std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-        let user = Self::parse(&raw).with_context(|| format!("parse {}", path.display()))?;
+        let raw = std::fs::read_to_string(&path).map_err(|e| error::Error::Profiles {
+          message: format!("read {}: {e}", path.display()),
+        })?;
+        let user = Self::parse(&raw).map_err(|e| error::Error::Profiles {
+          message: format!("parse {}: {e}", path.display()),
+        })?;
         p.merge(user);
       }
     }
@@ -76,26 +82,30 @@ impl Profiles {
   }
 
   pub fn parse(raw: &str) -> Result<Self> {
-    let v: toml::Value = toml::from_str(raw).context("invalid profiles TOML")?;
-    let map = v.as_table().ok_or_else(|| anyhow!("expected top-level table"))?;
+    let v: toml::Value = toml::from_str(raw).map_err(|e| error::Error::Profiles {
+      message: format!("invalid profiles TOML: {e}"),
+    })?;
+    let map = v.as_table().ok_or_else(|| error::Error::Profiles {
+      message: "expected top-level table".into(),
+    })?;
     let mut out = Profiles::default();
     for (persona, scopes) in map {
-      let scopes = scopes
-        .as_table()
-        .ok_or_else(|| anyhow!("[{persona}] must be a table"))?;
+      let scopes = scopes.as_table().ok_or_else(|| error::Error::Profiles {
+        message: format!("[{persona}] must be a table"),
+      })?;
       for (scope, section) in scopes {
-        let tbl = section
-          .as_table()
-          .ok_or_else(|| anyhow!("[{persona}.{scope}] must be a table"))?;
+        let tbl = section.as_table().ok_or_else(|| error::Error::Profiles {
+          message: format!("[{persona}.{scope}] must be a table"),
+        })?;
         let mut sec = ProfileSection::default();
         for (k, v) in tbl {
           if k == "verified" {
             sec.verified = v.as_bool().unwrap_or(false);
             continue;
           }
-          let val = v
-            .as_str()
-            .ok_or_else(|| anyhow!("[{persona}.{scope}].{k} must be a string"))?;
+          let val = v.as_str().ok_or_else(|| error::Error::Profiles {
+            message: format!("[{persona}.{scope}].{k} must be a string"),
+          })?;
           sec.headers.insert(k.to_ascii_lowercase(), val.to_string());
         }
         out.table.entry(persona.clone()).or_default().insert(scope.clone(), sec);

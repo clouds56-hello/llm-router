@@ -42,7 +42,7 @@ pub(crate) async fn dispatch<F, Fut>(
 ) -> Result<DispatchOk, ApiError>
 where
   F: Fn(Arc<Account>) -> Fut,
-  Fut: Future<Output = anyhow::Result<reqwest::Response>>,
+  Fut: Future<Output = crate::provider::Result<reqwest::Response>>,
 {
   let mut last_err: Option<(StatusCode, String)> = None;
 
@@ -51,10 +51,7 @@ where
       // No account in the pool advertises this endpoint at all — this
       // is a configuration / capability mismatch, not a transient
       // failure, so don't retry.
-      return Err(ApiError::upstream(
-        StatusCode::NOT_IMPLEMENTED,
-        format!("no configured account supports endpoint '{endpoint}' for model '{model}'"),
-      ));
+      return Err(ApiError::not_implemented(endpoint.to_string(), model.to_string()));
     };
 
     let resp = match send(acct.clone()).await {
