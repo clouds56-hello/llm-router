@@ -20,6 +20,14 @@ pub async fn run(cfg_path: Option<PathBuf>, args: HeadersArgs) -> Result<()> {
                 .iter()
                 .find(|a| a.id == id)
                 .ok_or_else(|| anyhow!("no account with id '{id}'"))?;
+            if a.provider != crate::provider::ID_GITHUB_COPILOT {
+                println!(
+                    "Account '{id}' uses provider '{}', which does not send Copilot identity headers.",
+                    a.provider
+                );
+                println!("(headers are only relevant for the github-copilot provider)");
+                return Ok(());
+            }
             cfg.copilot.merged(a.copilot.as_ref())
         }
     };

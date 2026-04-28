@@ -90,7 +90,7 @@ initiator_mode = "auto"
 
 [[accounts]]
 id = "personal"
-provider = "github-copilot"   # default; only one provider supported in v1
+provider = "github-copilot"   # default — see "Providers" below for others
 github_token = "gho_..."
 ```
 
@@ -104,8 +104,8 @@ Chat extension and restart.
 ## Commands
 
 ```
-llm-router login [--no-proxy]       # GitHub device flow
-llm-router import --from gh         # or --from copilot-plugin
+llm-router login [--provider PROVIDER] [--no-proxy]
+llm-router import --from gh|copilot-plugin|env [--provider PROVIDER] [--env-var NAME]
 llm-router account list|remove ID|show ID
 llm-router headers [--account ID]   # inspect resolved Copilot identity headers
 llm-router serve [--port N] [--no-proxy] [--allow-remote]
@@ -113,6 +113,42 @@ llm-router usage [--since 24h] [--account ID]
 llm-router config get|set|unset KEY [--account ID] [--add]
 llm-router config list | edit | edit-profiles | path [--profiles] | list-profiles
 ```
+
+## Providers
+
+| id | auth | notes |
+|---|---|---|
+| `github-copilot` (default) | GitHub OAuth device flow → short-lived API token | identity headers + persona overlay; auto-classified `X-Initiator` |
+| `zai-coding-plan` / `zai` / `zhipuai-coding-plan` / `zhipuai` | static API key (`Authorization: Bearer ...`) | OpenAI-compatible upstream; auto-injects `thinking: { type: "enabled", clear_thinking: false }` for any model whose static catalogue entry has `capabilities.reasoning = true` (and for any unknown `glm-*` id) |
+
+The four Z.ai aliases all route to the same backend implementation but
+preserve their alias verbatim on the saved account so usage logs and
+`/v1/models` reflect the operator's chosen ID. The default upstream is
+`https://api.z.ai/api/coding/paas/v4`; override per-account for the
+China-mainland endpoint:
+
+```toml
+[[accounts]]
+id = "coding-plan"
+provider = "zai-coding-plan"
+api_key = "sk-..."
+
+[accounts.zai]                   # optional
+base_url = "https://open.bigmodel.cn/api/paas/v4"
+```
+
+Add a Z.ai account interactively (key is read with hidden input and verified
+against `/models`):
+
+```sh
+llm-router login --provider zai-coding-plan
+# or non-interactively from the environment
+ZAI_API_KEY=sk-... llm-router import --from env --provider zai --id work
+```
+
+`/v1/models` returns the upstream OpenAI-shape entries unchanged; each entry
+gains an `x_llm_router` block with the resolved provider id, display name,
+auth kind, and (when known) static capabilities/cost/limit metadata.
 
 ### Personas (`behave_as`)
 

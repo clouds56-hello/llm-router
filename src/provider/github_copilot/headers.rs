@@ -85,7 +85,7 @@ pub fn classify_initiator(body: &Value) -> &'static str {
             Some("tool") => return "agent",
             Some("assistant") => return "agent",
             Some("user") => return "user",
-            _ => return "user",
+            _ => return "agent",
         }
     }
     "user"

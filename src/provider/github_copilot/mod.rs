@@ -11,9 +11,10 @@ use async_trait::async_trait;
 use parking_lot::RwLock;
 use reqwest::header::HeaderMap;
 use serde_json::Value;
+use std::sync::OnceLock;
 use tokio::sync::Mutex as AsyncMutex;
 
-use super::{ChatCtx, Provider};
+use super::{AuthKind, ChatCtx, Provider, ProviderInfo};
 
 #[allow(dead_code)]
 pub const GITHUB_API: &str = "https://api.github.com";
@@ -33,6 +34,22 @@ pub struct CopilotProvider {
     pub headers: CopilotHeaders,
     refresh_lock: AsyncMutex<()>,
     cache: RwLock<ApiToken>,
+    info: ProviderInfo,
+}
+
+fn copilot_info() -> &'static ProviderInfo {
+    static CELL: OnceLock<ProviderInfo> = OnceLock::new();
+    CELL.get_or_init(|| ProviderInfo {
+        id: super::ID_GITHUB_COPILOT.to_string(),
+        aliases: &[super::ID_GITHUB_COPILOT],
+        display_name: "GitHub Copilot",
+        upstream_url: COPILOT_API.to_string(),
+        auth_kind: AuthKind::OAuthDeviceFlow,
+        // Copilot exposes a dynamic upstream model catalogue via /models; we
+        // intentionally leave the static overlay empty rather than baking a
+        // soon-stale list.
+        default_models: Vec::new(),
+    })
 }
 
 impl CopilotProvider {
@@ -50,6 +67,7 @@ impl CopilotProvider {
                 token: a.api_token.clone(),
                 expires_at: a.api_token_expires_at,
             }),
+            info: copilot_info().clone(),
         })
     }
 
@@ -155,6 +173,8 @@ impl CopilotProvider {
 #[async_trait]
 impl Provider for CopilotProvider {
     fn id(&self) -> &str { &self.id }
+
+    fn info(&self) -> &ProviderInfo { &self.info }
 
     async fn list_models(&self, http: &reqwest::Client) -> Result<Value> {
         let token = self.ensure_api_token(http).await?;

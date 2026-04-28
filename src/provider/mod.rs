@@ -3,17 +3,149 @@
 //! A provider knows how to authenticate, list models, and execute a chat
 //! completion request. The gateway pool stores providers behind a trait object
 //! so adding new upstreams (Anthropic, Gemini, …) is purely additive.
+//!
+//! Providers also publish a [`ProviderInfo`] describing themselves and a
+//! catalogue of well-known models with capability/cost/limit metadata. The
+//! server uses this to enrich `/v1/models` and providers themselves use it to
+//! drive request shaping (e.g. injecting a `thinking` block for reasoning
+//! models).
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use reqwest::header::HeaderMap;
+use serde::Serialize;
 use serde_json::Value;
 use std::sync::Arc;
 
 pub mod github_copilot;
 pub mod profiles;
+pub mod zai;
 
 pub const ID_GITHUB_COPILOT: &str = "github-copilot";
+
+/// Canonical Z.ai provider id. The four wire-aliases below all resolve to the
+/// same backend implementation; the user-chosen alias is preserved verbatim on
+/// the resulting [`ProviderInfo`] so usage logs reflect what the operator
+/// configured.
+pub const ID_ZAI_CODING_PLAN: &str = "zai-coding-plan";
+pub const ID_ZAI: &str = "zai";
+pub const ID_ZHIPUAI_CODING_PLAN: &str = "zhipuai-coding-plan";
+pub const ID_ZHIPUAI: &str = "zhipuai";
+
+/// All accepted Z.ai aliases (canonical first).
+pub const ZAI_ALIASES: &[&str] = &[
+    ID_ZAI_CODING_PLAN,
+    ID_ZAI,
+    ID_ZHIPUAI_CODING_PLAN,
+    ID_ZHIPUAI,
+];
+
+/// How a provider authenticates. Used by the CLI to pick the right login flow.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthKind {
+    /// GitHub-style device flow yielding an OAuth token, exchanged for a
+    /// short-lived API token.
+    OAuthDeviceFlow,
+    /// Static long-lived API key pasted by the user.
+    StaticApiKey,
+}
+
+/// Per-modality flags for `Capabilities::input` / `Capabilities::output`.
+#[derive(Debug, Clone, Serialize)]
+pub struct Modalities {
+    pub text: bool,
+    pub audio: bool,
+    pub image: bool,
+    pub video: bool,
+    pub pdf: bool,
+}
+
+impl Modalities {
+    pub const TEXT_ONLY: Self = Self {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        pdf: false,
+    };
+    #[allow(dead_code)]
+    pub const TEXT_IMAGE: Self = Self {
+        text: true,
+        audio: false,
+        image: true,
+        video: false,
+        pdf: false,
+    };
+}
+
+/// Whether the model supports interleaved reasoning content. `false` for most
+/// providers; some OpenAI-compatible upstreams (DeepSeek, GLM) ship reasoning
+/// alongside tool-calls in a side-channel field.
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub enum Interleaved {
+    Disabled(bool), // serialised as `false`
+    Field { field: String },
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Capabilities {
+    pub temperature: bool,
+    pub reasoning: bool,
+    pub attachment: bool,
+    pub toolcall: bool,
+    pub input: Modalities,
+    pub output: Modalities,
+    pub interleaved: Interleaved,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Cost {
+    /// USD per 1K input tokens.
+    pub input: f64,
+    /// USD per 1K output tokens.
+    pub output: f64,
+    pub cache: Option<CacheCost>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CacheCost {
+    pub read: f64,
+    pub write: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Limits {
+    pub context: u32,
+    pub output: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ModelInfo {
+    /// Wire id (what the model reports as `id` and what callers send).
+    pub id: String,
+    pub name: String,
+    pub capabilities: Capabilities,
+    pub cost: Option<Cost>,
+    pub limit: Limits,
+    pub release_date: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProviderInfo {
+    /// User-facing canonical id. For aliased providers (e.g. Z.ai) this is
+    /// whichever alias the operator wrote in `[[accounts]] provider = "..."`.
+    pub id: String,
+    /// All ids that resolve to this provider impl (for documentation only).
+    pub aliases: &'static [&'static str],
+    pub display_name: &'static str,
+    pub upstream_url: String,
+    pub auth_kind: AuthKind,
+    /// Built-in model catalogue. Used as a metadata overlay on `/v1/models`
+    /// and as the source-of-truth for capability-driven request shaping.
+    pub default_models: Vec<ModelInfo>,
+}
 
 /// Per-request context handed to a provider.
 pub struct ChatCtx<'a> {
@@ -33,9 +165,18 @@ pub struct ChatCtx<'a> {
 
 #[async_trait]
 pub trait Provider: Send + Sync {
-    /// Stable id, e.g. "github-copilot".
+    /// Stable id, e.g. "github-copilot:personal" or "zai-coding-plan:work".
     #[allow(dead_code)]
     fn id(&self) -> &str;
+
+    /// Provider-level metadata (display name, auth kind, model catalogue).
+    fn info(&self) -> &ProviderInfo;
+
+    /// Look up our metadata for a wire-id. Default impl scans
+    /// `info().default_models`.
+    fn model_info(&self, model: &str) -> Option<&ModelInfo> {
+        self.info().default_models.iter().find(|m| m.id == model)
+    }
 
     /// Model routing hint. For providers that don't know their model list
     /// upfront, return `true` to accept everything.
@@ -65,9 +206,15 @@ pub fn build_for_account(
             let p = github_copilot::CopilotProvider::from_account(a, global_headers)?;
             Ok(Arc::new(p))
         }
+        id if ZAI_ALIASES.contains(&id) => {
+            let p = zai::ZaiProvider::from_account(a)?;
+            Ok(Arc::new(p))
+        }
         other => Err(anyhow!(
-            "unknown provider '{other}' for account '{}'. Known: {ID_GITHUB_COPILOT}",
-            a.id
+            "unknown provider '{other}' for account '{}'. Known: {} | {}",
+            a.id,
+            ID_GITHUB_COPILOT,
+            ZAI_ALIASES.join(" | ")
         )),
     }
 }

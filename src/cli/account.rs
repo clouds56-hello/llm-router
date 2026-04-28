@@ -21,14 +21,18 @@ pub async fn run(cfg_path: Option<PathBuf>, cmd: AccountCmd) -> Result<()> {
                 println!("(no accounts)");
                 return Ok(());
             }
-            println!("{:<20}  {:<16}  {:<10}  expires_at", "id", "provider", "has_token");
+            println!("{:<20}  {:<22}  {:<10}  expires_at", "id", "provider", "has_creds");
             for a in &cfg.accounts {
-                let has = a.api_token.is_some();
+                // For OAuth providers we report on the cached short-lived
+                // api_token; for static-key providers we report on api_key.
+                // "-" expires_at is correct for static keys (never expires
+                // from the daemon's perspective).
+                let has = a.api_token.is_some() || a.api_key.is_some();
                 let exp = a
                     .api_token_expires_at
                     .map(|t| t.to_string())
                     .unwrap_or_else(|| "-".into());
-                println!("{:<20}  {:<16}  {:<10}  {}", a.id, a.provider, has, exp);
+                println!("{:<20}  {:<22}  {:<10}  {}", a.id, a.provider, has, exp);
             }
         }
         AccountCmd::Remove { id } => {
@@ -48,11 +52,22 @@ pub async fn run(cfg_path: Option<PathBuf>, cmd: AccountCmd) -> Result<()> {
                 .ok_or_else(|| anyhow!("no account with id '{id}'"))?;
             println!("id: {}", a.id);
             println!("provider: {}", a.provider);
-            let gh = a.github_token.as_deref().unwrap_or("");
-            println!("github_token: {}…", &gh[..gh.len().min(7)]);
-            println!("api_token: {}", a.api_token.as_deref().map(mask).unwrap_or("-".into()));
-            println!("api_token_expires_at: {:?}", a.api_token_expires_at);
+            if let Some(gh) = a.github_token.as_deref() {
+                println!("github_token: {}…", &gh[..gh.len().min(7)]);
+            }
+            if let Some(k) = a.api_key.as_deref() {
+                println!("api_key: {}", mask(k));
+            }
+            if a.api_token.is_some() || a.api_token_expires_at.is_some() {
+                println!("api_token: {}", a.api_token.as_deref().map(mask).unwrap_or("-".into()));
+                println!("api_token_expires_at: {:?}", a.api_token_expires_at);
+            }
             println!("override_headers: {}", a.copilot.is_some());
+            if let Some(z) = &a.zai {
+                if let Some(b) = &z.base_url {
+                    println!("zai.base_url: {b}");
+                }
+            }
         }
     }
     Ok(())

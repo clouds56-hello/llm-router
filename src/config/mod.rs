@@ -61,7 +61,11 @@ struct AccountRaw {
     #[serde(default)]
     api_token_expires_at: Option<i64>,
     #[serde(default)]
+    api_key: Option<String>,
+    #[serde(default)]
     copilot: Option<CopilotHeadersRaw>,
+    #[serde(default)]
+    zai: Option<ZaiAccountConfig>,
     #[serde(default)]
     behave_as: Option<String>,
 }
@@ -281,13 +285,29 @@ pub struct Account {
     /// Unix seconds when `api_token` expires.
     #[serde(default)]
     pub api_token_expires_at: Option<i64>,
+    /// Static long-lived API key (zai/zhipuai providers).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
     /// Optional per-account header overrides (github-copilot provider only).
     #[serde(default)]
     pub copilot: Option<CopilotHeaders>,
+    /// Optional Z.ai-specific account config.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zai: Option<ZaiAccountConfig>,
     /// Per-account persona override. Wins over `[copilot] behave_as`. Inbound
     /// `X-Behave-As` still overrides this.
     #[serde(default)]
     pub behave_as: Option<String>,
+}
+
+/// Z.ai-specific per-account knobs.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ZaiAccountConfig {
+    /// Override the upstream base URL. Defaults to
+    /// `https://api.z.ai/api/coding/paas/v4`. Use
+    /// `https://open.bigmodel.cn/api/paas/v4` for the China-mainland endpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
 }
 
 fn default_provider() -> String { DEFAULT_PROVIDER.to_string() }
@@ -397,7 +417,9 @@ impl Config {
                     github_token: a.github_token,
                     api_token: a.api_token,
                     api_token_expires_at: a.api_token_expires_at,
+                    api_key: a.api_key,
                     copilot: acct_copilot,
+                    zai: a.zai,
                     behave_as: a.behave_as,
                 }
             })
@@ -423,6 +445,15 @@ impl Config {
                 return Err(anyhow!(
                     "account '{}': provider 'github-copilot' requires `github_token`",
                     a.id
+                ));
+            }
+            if crate::provider::ZAI_ALIASES.contains(&a.provider.as_str())
+                && a.api_key.as_deref().map(str::trim).unwrap_or("").is_empty()
+            {
+                return Err(anyhow!(
+                    "account '{}': provider '{}' requires `api_key` (Z.ai dashboard API key)",
+                    a.id,
+                    a.provider
                 ));
             }
         }
