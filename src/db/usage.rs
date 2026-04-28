@@ -1,33 +1,37 @@
-use super::{CallRecord, Result};
+use super::{migrate, CallRecord, Result};
 use rusqlite::{params, Connection};
+use std::path::Path;
+
+const BOOTSTRAP: &str = include_str!("../../scripts/migrations/usage/000_bootstrap.sql");
+const MIGRATIONS: &[migrate::Migration] = &[migrate::Migration {
+  version: 1,
+  name: "initial",
+  sql: include_str!("../../scripts/migrations/usage/001_initial.sql"),
+}];
+
+pub fn latest_version() -> u32 {
+  migrate::latest_version(MIGRATIONS)
+}
 
 pub struct UsageDb {
   conn: Connection,
 }
 
 impl UsageDb {
-  pub fn open(conn: Connection) -> Result<Self> {
-    conn.execute_batch(
-      r#"
-      CREATE TABLE IF NOT EXISTS requests (
-        id INTEGER PRIMARY KEY,
-        ts INTEGER NOT NULL,
-        account_id TEXT NOT NULL,
-        provider_id TEXT NOT NULL DEFAULT '',
-        model TEXT NOT NULL,
-        prompt_tok INTEGER,
-        completion_tok INTEGER,
-        latency_ms INTEGER NOT NULL,
-        status INTEGER NOT NULL,
-        stream INTEGER NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS idx_requests_ts ON requests(ts);
-      CREATE INDEX IF NOT EXISTS idx_requests_account ON requests(account_id);
-      PRAGMA user_version = 2;
-      "#,
+  /// Open `usage.db` at `path`, applying any pending migrations. Pass the
+  /// canonical filesystem path so `migrate::apply` can stage a `.bak`.
+  pub fn open(path: &Path) -> Result<Self> {
+    if let Some(parent) = path.parent() {
+      std::fs::create_dir_all(parent)?;
+    }
+    let mut conn = Connection::open(path)?;
+    migrate::apply(
+      &mut conn,
+      path,
+      "usage",
+      migrate::Bootstrap { sql: BOOTSTRAP },
+      MIGRATIONS,
     )?;
-    add_column_if_missing(&conn, "provider_id", "TEXT NOT NULL DEFAULT ''")?;
-    add_column_if_missing(&conn, "initiator", "TEXT NOT NULL DEFAULT 'user'")?;
     Ok(Self { conn })
   }
 
@@ -105,16 +109,6 @@ impl UsageDb {
     };
     Ok(rows)
   }
-}
-
-pub fn add_column_if_missing(conn: &Connection, column: &str, definition: &str) -> rusqlite::Result<()> {
-  let exists = conn
-    .prepare("SELECT 1 FROM pragma_table_info('requests') WHERE name = ?1")?
-    .exists(params![column])?;
-  if !exists {
-    conn.execute_batch(&format!("ALTER TABLE requests ADD COLUMN {column} {definition};"))?;
-  }
-  Ok(())
 }
 
 #[derive(Debug)]

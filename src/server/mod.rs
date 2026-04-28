@@ -152,7 +152,6 @@ pub fn build_state(cfg: &Config) -> Result<AppState> {
   let pool = AccountPool::from_config(cfg)?;
   let http = crate::util::http::build_client(&cfg.proxy)?;
   let db = if cfg.db.enabled {
-    let data_dir = crate::config::paths::data_dir()?;
     let usage_db = cfg
       .db
       .usage_db_path
@@ -173,7 +172,6 @@ pub fn build_state(cfg: &Config) -> Result<AppState> {
       .unwrap_or_else(crate::config::paths::default_requests_dir)?;
     Some(Arc::new(DbStore::spawn(DbOptions {
       paths: DbPaths {
-        data_dir,
         usage_db,
         sessions_db,
         requests_dir,

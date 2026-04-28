@@ -2,7 +2,6 @@ use crate::config::{paths, Config};
 use crate::db::UsageDb;
 use anyhow::Result;
 use clap::Args;
-use rusqlite::Connection;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -29,8 +28,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: UsageArgs) -> Result<()> {
     .clone()
     .map(Ok)
     .unwrap_or_else(paths::default_usage_db)?;
-  let conn = Connection::open(&path)?;
-  let db = UsageDb::open(conn)?;
+  let db = UsageDb::open(&path)?;
 
   let since: Duration = humantime::parse_duration(&args.since)?;
   let since_ts = time::OffsetDateTime::now_utc().unix_timestamp() - since.as_secs() as i64;

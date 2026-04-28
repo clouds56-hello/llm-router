@@ -10,6 +10,7 @@ mod error;
 mod headers;
 mod import;
 mod login;
+mod migration;
 mod serve;
 mod update;
 mod usage;
@@ -46,6 +47,8 @@ pub enum Cmd {
   Config(config_cmd::ConfigArgs),
   /// Refresh the on-disk models.dev catalogue cache
   Update(update::UpdateArgs),
+  /// Apply pending DB migrations (or restore from `.bak` with --rollback)
+  Migration(migration::MigrationArgs),
 }
 
 impl Cli {
@@ -74,6 +77,7 @@ impl Cli {
       Cmd::Usage(a) => usage::run(cfg_path, a).await,
       Cmd::Config(a) => config_cmd::run(cfg_path, a).await,
       Cmd::Update(a) => update::run(a).await,
+      Cmd::Migration(a) => migration::run(cfg_path, a).await,
     };
     r.map_err(Error::from)
   }
@@ -86,7 +90,7 @@ fn run_mode_for(cmd: &Cmd) -> RunMode {
   use config_cmd::ConfigCmd::*;
   match cmd {
     Cmd::Serve(_) => RunMode::Server,
-    Cmd::Login(_) | Cmd::Import(_) | Cmd::Update(_) => RunMode::MutatingCli,
+    Cmd::Login(_) | Cmd::Import(_) | Cmd::Update(_) | Cmd::Migration(_) => RunMode::MutatingCli,
     Cmd::Config(args) => match args.cmd {
       Set(_) | Unset(_) | Edit | EditProfiles => RunMode::MutatingCli,
       _ => RunMode::ReadOnlyCli,

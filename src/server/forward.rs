@@ -644,10 +644,9 @@ mod tests {
     let raw_count: i64 = conn
       .query_row(
         "SELECT COUNT(*)
-         FROM messages m
-         JOIN message_part_refs r ON r.message_id = m.id
-         JOIN message_parts p ON p.hash = r.part_hash
-         WHERE m.role = 'assistant' AND p.part_type = 'raw' AND p.content = ?1",
+         FROM session_parts sp
+         JOIN part_blobs pb ON pb.hash = sp.part_hash
+         WHERE sp.role = 'assistant' AND pb.part_type = 'raw' AND pb.content = ?1",
         [resp_body.as_ref()],
         |r| r.get(0),
       )

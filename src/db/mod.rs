@@ -1,10 +1,9 @@
-pub mod migration;
+pub mod migrate;
 pub mod requests;
 pub mod sessions;
 pub mod usage;
 
 use bytes::Bytes;
-use rusqlite::Connection;
 use snafu::Snafu;
 use std::path::PathBuf;
 use tokio::sync::{mpsc, oneshot};
@@ -68,12 +67,10 @@ pub struct DbStore {
 }
 
 pub struct DbPaths {
-  pub data_dir: PathBuf,
   pub usage_db: PathBuf,
   pub sessions_db: PathBuf,
   pub requests_dir: PathBuf,
 }
-
 pub struct DbOptions {
   pub paths: DbPaths,
   pub queue_capacity: usize,
@@ -169,8 +166,6 @@ pub type OutboundSnapshot = HttpSnapshot;
 
 impl DbStore {
   pub fn spawn(options: DbOptions) -> Result<Self> {
-    migration::migrate_legacy_usage(&options.paths.data_dir, &options.paths.usage_db)?;
-
     let capacity = options.queue_capacity.max(1);
     let (tx, rx) = mpsc::channel(capacity);
     let body_max_bytes = options.body_max_bytes;
@@ -207,8 +202,7 @@ impl DbStore {
 }
 
 fn writer_loop(paths: DbPaths, mut rx: mpsc::Receiver<WriteOp>) -> Result<()> {
-  let usage_conn = Connection::open(&paths.usage_db)?;
-  let mut usage = usage::UsageDb::open(usage_conn)?;
+  let mut usage = usage::UsageDb::open(&paths.usage_db)?;
   let mut requests = requests::RequestsDb::new(paths.requests_dir)?;
   let mut sessions = match sessions::SessionsDb::open(&paths.sessions_db) {
     Ok(s) => Some(s),
