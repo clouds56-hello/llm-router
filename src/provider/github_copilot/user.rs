@@ -15,65 +15,60 @@ const USER_INFO_URL: &str = "https://api.github.com/copilot_internal/user";
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct CopilotUserInfo {
-    /// Marketing plan name, e.g. `"individual_pro"`, `"business"`, `"free"`.
-    #[serde(default)]
-    pub copilot_plan: Option<String>,
+  /// Marketing plan name, e.g. `"individual_pro"`, `"business"`, `"free"`.
+  #[serde(default)]
+  pub copilot_plan: Option<String>,
 
-    /// ISO-8601 date when the monthly quotas reset (anchor day of billing
-    /// cycle), e.g. `"2026-05-01"`.
-    #[serde(default)]
-    pub quota_reset_date: Option<String>,
+  /// ISO-8601 date when the monthly quotas reset (anchor day of billing
+  /// cycle), e.g. `"2026-05-01"`.
+  #[serde(default)]
+  pub quota_reset_date: Option<String>,
 
-    /// Per-feature snapshots, keyed by `quota_id` (`"chat"`,
-    /// `"completions"`, `"premium_interactions"`, …). Always present on
-    /// paid plans; may be empty / absent on free.
-    #[serde(default)]
-    pub quota_snapshots: BTreeMap<String, QuotaSnapshot>,
+  /// Per-feature snapshots, keyed by `quota_id` (`"chat"`,
+  /// `"completions"`, `"premium_interactions"`, …). Always present on
+  /// paid plans; may be empty / absent on free.
+  #[serde(default)]
+  pub quota_snapshots: BTreeMap<String, QuotaSnapshot>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct QuotaSnapshot {
-    /// Numeric `quota_id` echo, e.g. `"premium_interactions"`.
-    #[serde(default)]
-    #[allow(dead_code)]
-    pub quota_id: Option<String>,
-    /// `true` when this feature is unmetered for the plan (e.g. chat on Plus).
-    #[serde(default)]
-    pub unlimited: bool,
-    /// Remaining count for the current cycle (integer; e.g. `1244`).
-    #[serde(default)]
-    pub remaining: Option<u64>,
-    /// Monthly entitlement, e.g. `1500` premium interactions.
-    #[serde(default)]
-    pub entitlement: Option<u64>,
-    /// 0–100 (server-computed); useful for unlimited plans where
-    /// `remaining` / `entitlement` are both 0.
-    #[serde(default)]
-    #[allow(dead_code)]
-    pub percent_remaining: Option<f64>,
+  /// Numeric `quota_id` echo, e.g. `"premium_interactions"`.
+  #[serde(default)]
+  #[allow(dead_code)]
+  pub quota_id: Option<String>,
+  /// `true` when this feature is unmetered for the plan (e.g. chat on Plus).
+  #[serde(default)]
+  pub unlimited: bool,
+  /// Remaining count for the current cycle (integer; e.g. `1244`).
+  #[serde(default)]
+  pub remaining: Option<u64>,
+  /// Monthly entitlement, e.g. `1500` premium interactions.
+  #[serde(default)]
+  pub entitlement: Option<u64>,
+  /// 0–100 (server-computed); useful for unlimited plans where
+  /// `remaining` / `entitlement` are both 0.
+  #[serde(default)]
+  #[allow(dead_code)]
+  pub percent_remaining: Option<f64>,
 }
 
 /// Fetch the live user info + quota snapshots.
 ///
 /// Auth uses the long-lived `github_token` (same credential as
 /// `token::exchange`), not a short-lived api_token.
-pub async fn fetch(
-    client: &reqwest::Client,
-    github_token: &str,
-    headers: &CopilotHeaders,
-) -> Result<CopilotUserInfo> {
-    let h = super::headers::token_exchange_headers(github_token, headers)?;
-    let resp = client
-        .get(USER_INFO_URL)
-        .headers(h)
-        .send()
-        .await
-        .context("copilot user-info request failed")?;
-    let status = resp.status();
-    let body = resp.text().await.unwrap_or_default();
-    if !status.is_success() {
-        return Err(anyhow!("user-info returned {status}: {body}"));
-    }
-    serde_json::from_str(&body)
-        .with_context(|| format!("parse copilot user-info response: {body}"))
+pub async fn fetch(client: &reqwest::Client, github_token: &str, headers: &CopilotHeaders) -> Result<CopilotUserInfo> {
+  let h = super::headers::token_exchange_headers(github_token, headers)?;
+  let resp = client
+    .get(USER_INFO_URL)
+    .headers(h)
+    .send()
+    .await
+    .context("copilot user-info request failed")?;
+  let status = resp.status();
+  let body = resp.text().await.unwrap_or_default();
+  if !status.is_success() {
+    return Err(anyhow!("user-info returned {status}: {body}"));
+  }
+  serde_json::from_str(&body).with_context(|| format!("parse copilot user-info response: {body}"))
 }

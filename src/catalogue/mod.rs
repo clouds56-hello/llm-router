@@ -17,11 +17,11 @@ use crate::provider::ModelInfo;
 /// id changed in models.dev or the embedded snapshot is older than the
 /// caller). Providers should treat this as best-effort metadata.
 pub fn default_models_for(provider_id: &str) -> Vec<ModelInfo> {
-    let cat = loader::global();
-    let Some(p) = cat.get(provider_id) else {
-        return Vec::new();
-    };
-    p.models.values().map(mapping::to_model_info).collect()
+  let cat = loader::global();
+  let Some(p) = cat.get(provider_id) else {
+    return Vec::new();
+  };
+  p.models.values().map(mapping::to_model_info).collect()
 }
 
 /// Look up one model by `(provider_id, model_id)` and convert. None if either
@@ -29,39 +29,39 @@ pub fn default_models_for(provider_id: &str) -> Vec<ModelInfo> {
 /// source of truth for *identity* and we just want to overlay our metadata.
 #[allow(dead_code)]
 pub fn model_info_for(provider_id: &str, model_id: &str) -> Option<ModelInfo> {
-    loader::global()
-        .get(provider_id)?
-        .models
-        .get(model_id)
-        .map(mapping::to_model_info)
+  loader::global()
+    .get(provider_id)?
+    .models
+    .get(model_id)
+    .map(mapping::to_model_info)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+  use super::*;
 
-    #[test]
-    fn copilot_model_count_is_nontrivial() {
-        let v = default_models_for("github-copilot");
-        assert!(v.len() >= 5, "got only {} copilot models", v.len());
-    }
+  #[test]
+  fn copilot_model_count_is_nontrivial() {
+    let v = default_models_for("github-copilot");
+    assert!(v.len() >= 5, "got only {} copilot models", v.len());
+  }
 
-    #[test]
-    fn zai_coding_plan_models_present() {
-        let v = default_models_for("zai-coding-plan");
-        assert!(!v.is_empty(), "zai-coding-plan should expose models");
-        assert!(v.iter().any(|m| m.id.starts_with("glm-")));
-    }
+  #[test]
+  fn zai_coding_plan_models_present() {
+    let v = default_models_for("zai-coding-plan");
+    assert!(!v.is_empty(), "zai-coding-plan should expose models");
+    assert!(v.iter().any(|m| m.id.starts_with("glm-")));
+  }
 
-    #[test]
-    fn unknown_provider_yields_empty() {
-        assert!(default_models_for("does-not-exist").is_empty());
-    }
+  #[test]
+  fn unknown_provider_yields_empty() {
+    assert!(default_models_for("does-not-exist").is_empty());
+  }
 
-    #[test]
-    fn lookup_specific_model() {
-        // Pick a model id that's stable in models.dev: glm-4.5-air on zai.
-        let mi = model_info_for("zai", "glm-4.5-air");
-        assert!(mi.is_some(), "expected glm-4.5-air on zai");
-    }
+  #[test]
+  fn lookup_specific_model() {
+    // Pick a model id that's stable in models.dev: glm-4.5-air on zai.
+    let mi = model_info_for("zai", "glm-4.5-air");
+    assert!(mi.is_some(), "expected glm-4.5-air on zai");
+  }
 }

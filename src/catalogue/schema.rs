@@ -18,62 +18,62 @@ pub type Catalogue = BTreeMap<String, Provider>;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Provider {
-    #[allow(dead_code)]
-    pub id: String,
-    #[allow(dead_code)]
-    pub name: String,
-    #[serde(default)]
-    pub models: BTreeMap<String, Model>,
+  #[allow(dead_code)]
+  pub id: String,
+  #[allow(dead_code)]
+  pub name: String,
+  #[serde(default)]
+  pub models: BTreeMap<String, Model>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Model {
-    pub id: String,
-    #[serde(default)]
-    pub name: String,
-    #[serde(default)]
-    pub attachment: bool,
-    #[serde(default)]
-    pub reasoning: bool,
-    #[serde(default)]
-    pub tool_call: bool,
-    #[serde(default)]
-    pub temperature: bool,
-    #[serde(default)]
-    pub modalities: Modalities,
-    #[serde(default)]
-    pub cost: Option<Cost>,
-    #[serde(default)]
-    pub limit: Limits,
-    #[serde(default)]
-    pub release_date: Option<String>,
+  pub id: String,
+  #[serde(default)]
+  pub name: String,
+  #[serde(default)]
+  pub attachment: bool,
+  #[serde(default)]
+  pub reasoning: bool,
+  #[serde(default)]
+  pub tool_call: bool,
+  #[serde(default)]
+  pub temperature: bool,
+  #[serde(default)]
+  pub modalities: Modalities,
+  #[serde(default)]
+  pub cost: Option<Cost>,
+  #[serde(default)]
+  pub limit: Limits,
+  #[serde(default)]
+  pub release_date: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Modalities {
-    #[serde(default)]
-    pub input: Vec<String>,
-    #[serde(default)]
-    pub output: Vec<String>,
+  #[serde(default)]
+  pub input: Vec<String>,
+  #[serde(default)]
+  pub output: Vec<String>,
 }
 
 /// USD per **1M** tokens.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Cost {
-    #[serde(default)]
-    pub input: f64,
-    #[serde(default)]
-    pub output: f64,
-    #[serde(default)]
-    pub cache_read: Option<f64>,
-    #[serde(default)]
-    pub cache_write: Option<f64>,
+  #[serde(default)]
+  pub input: f64,
+  #[serde(default)]
+  pub output: f64,
+  #[serde(default)]
+  pub cache_read: Option<f64>,
+  #[serde(default)]
+  pub cache_write: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Limits {
-    #[serde(default)]
-    pub context: u32,
-    #[serde(default)]
-    pub output: u32,
+  #[serde(default)]
+  pub context: u32,
+  #[serde(default)]
+  pub output: u32,
 }

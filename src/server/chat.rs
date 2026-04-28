@@ -13,69 +13,73 @@ use std::sync::Arc;
 use std::time::Instant;
 
 pub async fn chat_completions(
-    State(s): State<AppState>,
-    inbound: HeaderMap,
-    Json(body): Json<Value>,
+  State(s): State<AppState>,
+  inbound: HeaderMap,
+  Json(body): Json<Value>,
 ) -> Result<Response, ApiError> {
-    let stream = body.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
-    let model = body
-        .get("model")
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown")
-        .to_string();
+  let stream = body.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
+  let model = body
+    .get("model")
+    .and_then(|v| v.as_str())
+    .unwrap_or("unknown")
+    .to_string();
 
-    // Pre-classify; providers may override based on their own config.
-    let initiator: String = match inbound.get("x-initiator").and_then(|v| v.to_str().ok()) {
-        Some(v) => {
-            let lv = v.trim().to_ascii_lowercase();
-            if lv == "user" || lv == "agent" { lv } else { classify_initiator(&body).into() }
-        }
-        None => classify_initiator(&body).into(),
-    };
-
-    let behave_as_inbound: Option<Arc<String>> = inbound
-        .get("x-behave-as")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .map(Arc::new);
-
-    let started = Instant::now();
-
-    // Wrap inputs in Arc so the per-attempt closure can clone cheaply
-    // without borrowing from the surrounding scope (which would force
-    // higher-ranked lifetime bounds on the dispatch closure type).
-    let body = Arc::new(body);
-    let inbound = Arc::new(inbound);
-    let initiator_arc = Arc::new(initiator.clone());
-
-    let DispatchOk { acct, resp } = {
-        let s_for_closure = s.clone();
-        dispatch(&s, &model, Endpoint::ChatCompletions, move |acct| {
-            let body = body.clone();
-            let inbound = inbound.clone();
-            let initiator_arc = initiator_arc.clone();
-            let behave_as = behave_as_inbound.clone();
-            let http = s_for_closure.http.clone();
-            async move {
-                let ctx = RequestCtx {
-                    endpoint: Endpoint::ChatCompletions,
-                    http: &http,
-                    body: &body,
-                    stream,
-                    initiator: initiator_arc.as_str(),
-                    inbound_headers: &inbound,
-                    behave_as: behave_as.as_deref().map(|s| s.as_str()),
-                };
-                acct.provider.chat(ctx).await
-            }
-        })
-        .await?
-    };
-
-    if stream {
-        Ok(stream_response(s.clone(), acct, resp, model, initiator, started).await)
-    } else {
-        Ok(buffered_response(s.clone(), acct, resp, model, initiator, started).await)
+  // Pre-classify; providers may override based on their own config.
+  let initiator: String = match inbound.get("x-initiator").and_then(|v| v.to_str().ok()) {
+    Some(v) => {
+      let lv = v.trim().to_ascii_lowercase();
+      if lv == "user" || lv == "agent" {
+        lv
+      } else {
+        classify_initiator(&body).into()
+      }
     }
+    None => classify_initiator(&body).into(),
+  };
+
+  let behave_as_inbound: Option<Arc<String>> = inbound
+    .get("x-behave-as")
+    .and_then(|v| v.to_str().ok())
+    .map(|s| s.trim().to_string())
+    .filter(|s| !s.is_empty())
+    .map(Arc::new);
+
+  let started = Instant::now();
+
+  // Wrap inputs in Arc so the per-attempt closure can clone cheaply
+  // without borrowing from the surrounding scope (which would force
+  // higher-ranked lifetime bounds on the dispatch closure type).
+  let body = Arc::new(body);
+  let inbound = Arc::new(inbound);
+  let initiator_arc = Arc::new(initiator.clone());
+
+  let DispatchOk { acct, resp } = {
+    let s_for_closure = s.clone();
+    dispatch(&s, &model, Endpoint::ChatCompletions, move |acct| {
+      let body = body.clone();
+      let inbound = inbound.clone();
+      let initiator_arc = initiator_arc.clone();
+      let behave_as = behave_as_inbound.clone();
+      let http = s_for_closure.http.clone();
+      async move {
+        let ctx = RequestCtx {
+          endpoint: Endpoint::ChatCompletions,
+          http: &http,
+          body: &body,
+          stream,
+          initiator: initiator_arc.as_str(),
+          inbound_headers: &inbound,
+          behave_as: behave_as.as_deref().map(|s| s.as_str()),
+        };
+        acct.provider.chat(ctx).await
+      }
+    })
+    .await?
+  };
+
+  if stream {
+    Ok(stream_response(s.clone(), acct, resp, model, initiator, started).await)
+  } else {
+    Ok(buffered_response(s.clone(), acct, resp, model, initiator, started).await)
+  }
 }

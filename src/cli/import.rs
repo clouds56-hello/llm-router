@@ -7,168 +7,166 @@ use std::path::PathBuf;
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
 pub enum Source {
-    /// Use `gh auth token` (github-copilot only).
-    Gh,
-    /// Read ~/.config/github-copilot/{hosts,apps}.json (github-copilot only).
-    CopilotPlugin,
-    /// Read the API key from an environment variable. Use with `--env-var
-    /// <NAME>`. Compatible with any static-API-key provider (zai*, zhipuai*).
-    Env,
+  /// Use `gh auth token` (github-copilot only).
+  Gh,
+  /// Read ~/.config/github-copilot/{hosts,apps}.json (github-copilot only).
+  CopilotPlugin,
+  /// Read the API key from an environment variable. Use with `--env-var
+  /// <NAME>`. Compatible with any static-API-key provider (zai*, zhipuai*).
+  Env,
 }
 
 #[derive(Args, Debug)]
 pub struct ImportArgs {
-    #[arg(long, value_enum, default_value_t = Source::Gh)]
-    pub from: Source,
+  #[arg(long, value_enum, default_value_t = Source::Gh)]
+  pub from: Source,
 
-    /// Provider to associate the imported credential with.
-    #[arg(long, default_value = ID_GITHUB_COPILOT)]
-    pub provider: String,
+  /// Provider to associate the imported credential with.
+  #[arg(long, default_value = ID_GITHUB_COPILOT)]
+  pub provider: String,
 
-    /// Environment variable name for `--from env`. Defaults to `ZAI_API_KEY`.
-    #[arg(long, default_value = "ZAI_API_KEY")]
-    pub env_var: String,
+  /// Environment variable name for `--from env`. Defaults to `ZAI_API_KEY`.
+  #[arg(long, default_value = "ZAI_API_KEY")]
+  pub env_var: String,
 
-    /// ID for the imported account.
-    #[arg(long, default_value = "imported")]
-    pub id: String,
+  /// ID for the imported account.
+  #[arg(long, default_value = "imported")]
+  pub id: String,
 }
 
 pub async fn run(cfg_path: Option<PathBuf>, args: ImportArgs) -> Result<()> {
-    let is_zai = ZAI_ALIASES.contains(&args.provider.as_str());
-    let is_copilot = args.provider == ID_GITHUB_COPILOT;
+  let is_zai = ZAI_ALIASES.contains(&args.provider.as_str());
+  let is_copilot = args.provider == ID_GITHUB_COPILOT;
 
-    if !is_copilot && !is_zai {
-        return Err(anyhow!(
-            "unknown provider '{}'. Try one of: {ID_GITHUB_COPILOT}, {}",
-            args.provider,
-            ZAI_ALIASES.join(" | ")
-        ));
-    }
+  if !is_copilot && !is_zai {
+    return Err(anyhow!(
+      "unknown provider '{}'. Try one of: {ID_GITHUB_COPILOT}, {}",
+      args.provider,
+      ZAI_ALIASES.join(" | ")
+    ));
+  }
 
-    let account = match (args.from, is_copilot, is_zai) {
-        (Source::Gh, true, _) => copilot_account(args.id.clone(), from_gh()?),
-        (Source::CopilotPlugin, true, _) => {
-            copilot_account(args.id.clone(), from_copilot_plugin()?)
-        }
-        (Source::Env, _, true) => zai_account(args.id.clone(), &args.provider, from_env(&args.env_var)?),
-        (Source::Env, true, _) => {
-            return Err(anyhow!(
+  let account = match (args.from, is_copilot, is_zai) {
+    (Source::Gh, true, _) => copilot_account(args.id.clone(), from_gh()?),
+    (Source::CopilotPlugin, true, _) => copilot_account(args.id.clone(), from_copilot_plugin()?),
+    (Source::Env, _, true) => zai_account(args.id.clone(), &args.provider, from_env(&args.env_var)?),
+    (Source::Env, true, _) => {
+      return Err(anyhow!(
                 "`--from env` is not supported for github-copilot (it needs a long-lived OAuth token, not an API key). Use `llm-router login` instead."
             ));
-        }
-        (Source::Gh, _, true) | (Source::CopilotPlugin, _, true) => {
-            return Err(anyhow!(
+    }
+    (Source::Gh, _, true) | (Source::CopilotPlugin, _, true) => {
+      return Err(anyhow!(
                 "provider '{}' is a static-API-key provider. Use `--from env --env-var <NAME>` or `llm-router login --provider {}`.",
                 args.provider, args.provider
             ));
-        }
-        // Should be unreachable given the early provider check above.
-        _ => return Err(anyhow!("unsupported provider/source combination")),
-    };
+    }
+    // Should be unreachable given the early provider check above.
+    _ => return Err(anyhow!("unsupported provider/source combination")),
+  };
 
-    let (mut cfg, path) = Config::load(cfg_path.as_deref())?;
-    cfg.upsert_account(account);
-    cfg.save(&path)?;
-    println!("Saved account '{}' to {}", args.id, path.display());
-    Ok(())
+  let (mut cfg, path) = Config::load(cfg_path.as_deref())?;
+  cfg.upsert_account(account);
+  cfg.save(&path)?;
+  println!("Saved account '{}' to {}", args.id, path.display());
+  Ok(())
 }
 
 fn copilot_account(id: String, token: String) -> Account {
-    Account {
-        id,
-        provider: ID_GITHUB_COPILOT.into(),
-        github_token: Some(token),
-        api_token: None,
-        api_token_expires_at: None,
-        api_key: None,
-        copilot: None,
-        zai: None,
-        behave_as: None,
-    }
+  Account {
+    id,
+    provider: ID_GITHUB_COPILOT.into(),
+    github_token: Some(token),
+    api_token: None,
+    api_token_expires_at: None,
+    api_key: None,
+    copilot: None,
+    zai: None,
+    behave_as: None,
+  }
 }
 
 fn zai_account(id: String, provider: &str, key: String) -> Account {
-    Account {
-        id,
-        provider: provider.into(),
-        github_token: None,
-        api_token: None,
-        api_token_expires_at: None,
-        api_key: Some(key),
-        copilot: None,
-        zai: None,
-        behave_as: None,
-    }
+  Account {
+    id,
+    provider: provider.into(),
+    github_token: None,
+    api_token: None,
+    api_token_expires_at: None,
+    api_key: Some(key),
+    copilot: None,
+    zai: None,
+    behave_as: None,
+  }
 }
 
 fn from_env(name: &str) -> Result<String> {
-    let v = std::env::var(name)
-        .with_context(|| format!("environment variable `{name}` is not set"))?;
-    let v = v.trim().to_string();
-    if v.is_empty() {
-        return Err(anyhow!("environment variable `{name}` is empty"));
-    }
-    Ok(v)
+  let v = std::env::var(name).with_context(|| format!("environment variable `{name}` is not set"))?;
+  let v = v.trim().to_string();
+  if v.is_empty() {
+    return Err(anyhow!("environment variable `{name}` is empty"));
+  }
+  Ok(v)
 }
 
 fn from_gh() -> Result<String> {
-    let out = std::process::Command::new("gh")
-        .args(["auth", "token"])
-        .output()
-        .context("running `gh auth token` (is the GitHub CLI installed?)")?;
-    if !out.status.success() {
-        return Err(anyhow!(
-            "`gh auth token` failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        ));
-    }
-    let token = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if token.is_empty() {
-        return Err(anyhow!("`gh auth token` returned an empty token"));
-    }
-    Ok(token)
+  let out = std::process::Command::new("gh")
+    .args(["auth", "token"])
+    .output()
+    .context("running `gh auth token` (is the GitHub CLI installed?)")?;
+  if !out.status.success() {
+    return Err(anyhow!(
+      "`gh auth token` failed: {}",
+      String::from_utf8_lossy(&out.stderr)
+    ));
+  }
+  let token = String::from_utf8_lossy(&out.stdout).trim().to_string();
+  if token.is_empty() {
+    return Err(anyhow!("`gh auth token` returned an empty token"));
+  }
+  Ok(token)
 }
 
 fn from_copilot_plugin() -> Result<String> {
-    let home = directories::BaseDirs::new()
-        .ok_or_else(|| anyhow!("cannot resolve home dir"))?
-        .home_dir()
-        .to_path_buf();
-    let candidates = [
-        home.join(".config/github-copilot/apps.json"),
-        home.join(".config/github-copilot/hosts.json"),
-    ];
-    for path in &candidates {
-        if !path.exists() {
-            continue;
-        }
-        let raw = std::fs::read_to_string(path)?;
-        let v: Value = serde_json::from_str(&raw)
-            .with_context(|| format!("parse {}", path.display()))?;
-        if let Some(t) = scan_token(&v) {
-            return Ok(t);
-        }
+  let home = directories::BaseDirs::new()
+    .ok_or_else(|| anyhow!("cannot resolve home dir"))?
+    .home_dir()
+    .to_path_buf();
+  let candidates = [
+    home.join(".config/github-copilot/apps.json"),
+    home.join(".config/github-copilot/hosts.json"),
+  ];
+  for path in &candidates {
+    if !path.exists() {
+      continue;
     }
-    Err(anyhow!(
-        "no Copilot plugin token found in ~/.config/github-copilot/"
-    ))
+    let raw = std::fs::read_to_string(path)?;
+    let v: Value = serde_json::from_str(&raw).with_context(|| format!("parse {}", path.display()))?;
+    if let Some(t) = scan_token(&v) {
+      return Ok(t);
+    }
+  }
+  Err(anyhow!("no Copilot plugin token found in ~/.config/github-copilot/"))
 }
 
 fn scan_token(v: &Value) -> Option<String> {
-    match v {
-        Value::Object(m) => {
-            for (k, val) in m {
-                if k == "oauth_token" || k == "token" {
-                    if let Some(s) = val.as_str() {
-                        if !s.is_empty() { return Some(s.to_string()); }
-                    }
-                }
-                if let Some(found) = scan_token(val) { return Some(found); }
+  match v {
+    Value::Object(m) => {
+      for (k, val) in m {
+        if k == "oauth_token" || k == "token" {
+          if let Some(s) = val.as_str() {
+            if !s.is_empty() {
+              return Some(s.to_string());
             }
-            None
+          }
         }
-        Value::Array(a) => a.iter().find_map(scan_token),
-        _ => None,
+        if let Some(found) = scan_token(val) {
+          return Some(found);
+        }
+      }
+      None
     }
+    Value::Array(a) => a.iter().find_map(scan_token),
+    _ => None,
+  }
 }

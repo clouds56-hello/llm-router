@@ -23,8 +23,8 @@ use std::sync::Arc;
 const MAX_RETRIES: usize = 2;
 
 pub(crate) struct DispatchOk {
-    pub acct: Arc<Account>,
-    pub resp: reqwest::Response,
+  pub acct: Arc<Account>,
+  pub resp: reqwest::Response,
 }
 
 /// Run up to `MAX_RETRIES + 1` attempts of `send` against accounts the pool
@@ -35,73 +35,67 @@ pub(crate) struct DispatchOk {
 /// supports `(model, endpoint)`, or `502 + last upstream message` if every
 /// attempt failed.
 pub(crate) async fn dispatch<F, Fut>(
-    state: &AppState,
-    model: &str,
-    endpoint: Endpoint,
-    send: F,
+  state: &AppState,
+  model: &str,
+  endpoint: Endpoint,
+  send: F,
 ) -> Result<DispatchOk, ApiError>
 where
-    F: Fn(Arc<Account>) -> Fut,
-    Fut: Future<Output = anyhow::Result<reqwest::Response>>,
+  F: Fn(Arc<Account>) -> Fut,
+  Fut: Future<Output = anyhow::Result<reqwest::Response>>,
 {
-    let mut last_err: Option<(StatusCode, String)> = None;
+  let mut last_err: Option<(StatusCode, String)> = None;
 
-    for attempt in 0..=MAX_RETRIES {
-        let Some(acct) = state.pool.acquire(Some(model), endpoint) else {
-            // No account in the pool advertises this endpoint at all — this
-            // is a configuration / capability mismatch, not a transient
-            // failure, so don't retry.
-            return Err(ApiError::upstream(
-                StatusCode::NOT_IMPLEMENTED,
-                format!(
-                    "no configured account supports endpoint '{endpoint}' for model '{model}'"
-                ),
-            ));
-        };
+  for attempt in 0..=MAX_RETRIES {
+    let Some(acct) = state.pool.acquire(Some(model), endpoint) else {
+      // No account in the pool advertises this endpoint at all — this
+      // is a configuration / capability mismatch, not a transient
+      // failure, so don't retry.
+      return Err(ApiError::upstream(
+        StatusCode::NOT_IMPLEMENTED,
+        format!("no configured account supports endpoint '{endpoint}' for model '{model}'"),
+      ));
+    };
 
-        let resp = match send(acct.clone()).await {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::warn!(
-                    account = %acct.id, attempt, %endpoint, error = %e,
-                    "provider request failed"
-                );
-                acct.mark_failure(state.pool.cooldown_base());
-                last_err = Some((StatusCode::BAD_GATEWAY, e.to_string()));
-                continue;
-            }
-        };
+    let resp = match send(acct.clone()).await {
+      Ok(r) => r,
+      Err(e) => {
+        tracing::warn!(
+            account = %acct.id, attempt, %endpoint, error = %e,
+            "provider request failed"
+        );
+        acct.mark_failure(state.pool.cooldown_base());
+        last_err = Some((StatusCode::BAD_GATEWAY, e.to_string()));
+        continue;
+      }
+    };
 
-        let status = resp.status();
+    let status = resp.status();
 
-        if status == StatusCode::UNAUTHORIZED {
-            tracing::warn!(
-                account = %acct.id, attempt, %endpoint,
-                "401 from upstream; refreshing creds"
-            );
-            acct.invalidate_credentials();
-            last_err = Some((status, "unauthorized".into()));
-            continue;
-        }
-        if status == StatusCode::TOO_MANY_REQUESTS
-            || status == StatusCode::FORBIDDEN
-            || status.is_server_error()
-        {
-            let body_text = resp.text().await.unwrap_or_default();
-            tracing::warn!(
-                account = %acct.id, attempt, %endpoint, %status, body = %body_text,
-                "upstream error; cooldown"
-            );
-            acct.mark_failure(state.pool.cooldown_base());
-            last_err = Some((status, body_text));
-            continue;
-        }
-
-        acct.mark_success();
-        return Ok(DispatchOk { acct, resp });
+    if status == StatusCode::UNAUTHORIZED {
+      tracing::warn!(
+          account = %acct.id, attempt, %endpoint,
+          "401 from upstream; refreshing creds"
+      );
+      acct.invalidate_credentials();
+      last_err = Some((status, "unauthorized".into()));
+      continue;
+    }
+    if status == StatusCode::TOO_MANY_REQUESTS || status == StatusCode::FORBIDDEN || status.is_server_error() {
+      let body_text = resp.text().await.unwrap_or_default();
+      tracing::warn!(
+          account = %acct.id, attempt, %endpoint, %status, body = %body_text,
+          "upstream error; cooldown"
+      );
+      acct.mark_failure(state.pool.cooldown_base());
+      last_err = Some((status, body_text));
+      continue;
     }
 
-    let (status, msg) =
-        last_err.unwrap_or((StatusCode::BAD_GATEWAY, "all attempts failed".into()));
-    Err(ApiError::upstream(status, msg))
+    acct.mark_success();
+    return Ok(DispatchOk { acct, resp });
+  }
+
+  let (status, msg) = last_err.unwrap_or((StatusCode::BAD_GATEWAY, "all attempts failed".into()));
+  Err(ApiError::upstream(status, msg))
 }
