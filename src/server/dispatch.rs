@@ -14,7 +14,7 @@
 
 use super::error::ApiError;
 use super::AppState;
-use crate::pool::Account;
+use crate::pool::{Account, SessionAcquire};
 use crate::provider::Endpoint;
 use axum::http::StatusCode;
 use std::future::Future;
@@ -37,6 +37,7 @@ pub(crate) struct DispatchOk {
 /// attempt failed.
 pub(crate) async fn dispatch<F, Fut>(
   state: &AppState,
+  session_id: Option<&str>,
   model: &str,
   endpoint: Endpoint,
   send: F,
@@ -48,13 +49,22 @@ where
   let mut last_err: Option<(StatusCode, String)> = None;
 
   for attempt in 0..=MAX_RETRIES {
-    let Some(acct) = state.pool.acquire(Some(model), endpoint) else {
-      // No account in the pool advertises this endpoint at all — this
-      // is a configuration / capability mismatch, not a transient
-      // failure, so don't retry.
-      warn!(%endpoint, %model, attempt, "no account supports endpoint/model");
-      return Err(ApiError::not_implemented(endpoint.to_string(), model.to_string()));
+    let acct = match state.pool.acquire_for_session(session_id, Some(model), endpoint) {
+      SessionAcquire::Account(acct) => acct,
+      SessionAcquire::SessionExpired => {
+        let id = session_id.unwrap_or_default();
+        warn!(%endpoint, %model, session_id = %id, attempt, "session expired");
+        return Err(ApiError::session_expired(id));
+      }
+      SessionAcquire::None => {
+        // No account in the pool advertises this endpoint at all — this
+        // is a configuration / capability mismatch, not a transient
+        // failure, so don't retry.
+        warn!(%endpoint, %model, attempt, "no account supports endpoint/model");
+        return Err(ApiError::not_implemented(endpoint.to_string(), model.to_string()));
+      }
     };
+    super::record_last_account(&acct.id);
 
     let attempt_span = info_span!(
       "attempt",
@@ -102,6 +112,9 @@ where
 
     debug!(parent: &attempt_span, "upstream accepted");
     acct.mark_success();
+    if let Some(id) = session_id {
+      state.pool.record_session(id, &acct.id);
+    }
     return Ok(DispatchOk { acct, resp });
   }
 

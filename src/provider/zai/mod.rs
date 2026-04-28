@@ -132,6 +132,7 @@ impl Provider for ZaiProvider {
   )]
   async fn list_models(&self, http: &reqwest::Client) -> Result<Value> {
     let url = format!("{}/models", self.base_url.trim_end_matches('/'));
+    crate::server::record_upstream_url(&url);
     debug!(%url, "GET zai models");
     let resp = http
       .get(&url)
@@ -192,6 +193,7 @@ impl Provider for ZaiProvider {
     let body = transform::shape_request(ctx.body, reasoning);
 
     let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
+    crate::server::record_upstream_url(&url);
     debug!(%url, "POST zai chat");
     let resp = ctx
       .http

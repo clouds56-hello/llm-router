@@ -39,6 +39,12 @@ pub async fn chat_completions(
   let span = tracing::Span::current();
   span.record("model", model.as_str());
   span.record("stream", stream);
+  let session_id = inbound
+    .get(super::SESSION_ID_HEADER)
+    .and_then(|v| v.to_str().ok())
+    .map(str::trim)
+    .filter(|s| !s.is_empty())
+    .map(str::to_string);
 
   // Pre-classify; providers may override based on their own config.
   let initiator: String = match inbound.get("x-initiator").and_then(|v| v.to_str().ok()) {
@@ -78,7 +84,7 @@ pub async fn chat_completions(
 
   let DispatchOk { acct, resp } = {
     let s_for_closure = s.clone();
-    dispatch(&s, &model, Endpoint::ChatCompletions, move |acct| {
+    dispatch(&s, session_id.as_deref(), &model, Endpoint::ChatCompletions, move |acct| {
       let body = body.clone();
       let inbound = inbound.clone();
       let initiator_arc = initiator_arc.clone();
@@ -101,8 +107,8 @@ pub async fn chat_completions(
   };
 
   if stream {
-    Ok(stream_response(s.clone(), acct, resp, model, initiator, started).await)
+    Ok(stream_response(s.clone(), acct, resp, model, initiator, session_id, started).await)
   } else {
-    Ok(buffered_response(s.clone(), acct, resp, model, initiator, started).await)
+    Ok(buffered_response(s.clone(), acct, resp, model, initiator, session_id, started).await)
   }
 }

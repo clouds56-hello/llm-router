@@ -30,6 +30,7 @@ pub(crate) async fn buffered_response(
   resp: reqwest::Response,
   model: String,
   initiator: String,
+  session_id: Option<String>,
   started: Instant,
 ) -> Response {
   let status = resp.status();
@@ -58,6 +59,11 @@ pub(crate) async fn buffered_response(
     axum::http::header::CONTENT_TYPE,
     HeaderValue::from_static("application/json"),
   );
+  if let Some(id) = session_id.as_deref() {
+    if let Ok(value) = HeaderValue::from_str(id) {
+      headers.insert(super::SESSION_ID_HEADER, value);
+    }
+  }
   (status, headers, bytes).into_response()
 }
 
@@ -70,6 +76,7 @@ pub(crate) async fn stream_response(
   resp: reqwest::Response,
   model: String,
   initiator: String,
+  session_id: Option<String>,
   started: Instant,
 ) -> Response {
   let status = resp.status();
@@ -150,6 +157,11 @@ pub(crate) async fn stream_response(
     axum::http::header::CONTENT_TYPE,
     HeaderValue::from_static("text/event-stream"),
   );
+  if let Some(id) = session_id.as_deref() {
+    if let Ok(value) = HeaderValue::from_str(id) {
+      headers.insert(super::SESSION_ID_HEADER, value);
+    }
+  }
   headers.insert(axum::http::header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
   headers.insert(axum::http::header::CONNECTION, HeaderValue::from_static("keep-alive"));
   (status, headers, body).into_response()

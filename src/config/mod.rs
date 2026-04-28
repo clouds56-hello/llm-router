@@ -121,12 +121,23 @@ pub struct PoolConfig {
   pub strategy: String,
   #[serde(default = "default_cooldown")]
   pub failure_cooldown_secs: u64,
+  /// How long a session id stays bound to its chosen account.
+  /// Sliding window: refreshed on every successful use.
+  #[serde(default = "default_session_ttl")]
+  pub session_ttl_secs: u64,
+  /// After eviction, remember the session id as a tombstone for this long
+  /// so subsequent requests get an explicit `session expired` error
+  /// instead of being silently re-bound to a different account.
+  #[serde(default = "default_session_tombstone")]
+  pub session_tombstone_secs: u64,
 }
 impl Default for PoolConfig {
   fn default() -> Self {
     Self {
       strategy: default_strategy(),
       failure_cooldown_secs: default_cooldown(),
+      session_ttl_secs: default_session_ttl(),
+      session_tombstone_secs: default_session_tombstone(),
     }
   }
 }
@@ -135,6 +146,12 @@ fn default_strategy() -> String {
 }
 fn default_cooldown() -> u64 {
   60
+}
+fn default_session_ttl() -> u64 {
+  1800 // 30 min
+}
+fn default_session_tombstone() -> u64 {
+  7200 // 2 h
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

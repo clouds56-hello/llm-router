@@ -11,8 +11,10 @@ use crate::pool::AccountPool;
 use crate::usage::UsageDb;
 use anyhow::Result;
 use axum::http::{HeaderName, Request, Response};
+use axum::middleware::{self, Next};
 use axum::routing::{get, post};
 use axum::Router;
+use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::Duration;
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
@@ -29,6 +31,47 @@ pub struct AppState {
 
 /// Header name used for request ids. Honors inbound `x-request-id` if present.
 pub const REQUEST_ID_HEADER: &str = "x-request-id";
+pub const SESSION_ID_HEADER: &str = "x-session-id";
+
+tokio::task_local! {
+  static REQUEST_TRACKING: Mutex<RequestTracking>;
+}
+
+#[derive(Default)]
+struct RequestTracking {
+  account: Option<Arc<str>>,
+  upstream_url: Option<Arc<str>>,
+}
+
+pub(crate) fn record_last_account(account: &str) {
+  let _ = REQUEST_TRACKING.try_with(|state| {
+    state.lock().account = Some(Arc::from(account));
+  });
+}
+
+pub(crate) fn record_upstream_url(url: &str) {
+  let _ = REQUEST_TRACKING.try_with(|state| {
+    state.lock().upstream_url = Some(Arc::from(url));
+  });
+}
+
+fn tracking_snapshot() -> (String, String) {
+  REQUEST_TRACKING
+    .try_with(|state| {
+      let g = state.lock();
+      (
+        g.account.as_deref().unwrap_or("-").to_string(),
+        g.upstream_url.as_deref().unwrap_or("-").to_string(),
+      )
+    })
+    .unwrap_or_else(|_| ("-".into(), "-".into()))
+}
+
+async fn track_request(req: Request<axum::body::Body>, next: Next) -> Response<axum::body::Body> {
+  REQUEST_TRACKING
+    .scope(Mutex::new(RequestTracking::default()), next.run(req))
+    .await
+}
 
 pub fn router(state: AppState) -> Router {
   let request_id_header = HeaderName::from_static(REQUEST_ID_HEADER);
@@ -49,6 +92,8 @@ pub fn router(state: AppState) -> Router {
         method = %req.method(),
         uri = %req.uri(),
         request_id = %request_id,
+        account = tracing::field::Empty,
+        upstream_url = tracing::field::Empty,
         status = tracing::field::Empty,
         latency_ms = tracing::field::Empty,
       )
@@ -64,17 +109,21 @@ pub fn router(state: AppState) -> Router {
     .on_response(|resp: &Response<_>, latency: Duration, span: &Span| {
       let status = resp.status();
       let ms = latency.as_millis() as u64;
+      let (account, upstream_url) = tracking_snapshot();
       span.record("status", status.as_u16());
       span.record("latency_ms", ms);
+      span.record("account", account.as_str());
+      span.record("upstream_url", upstream_url.as_str());
       if status.is_server_error() || status.is_client_error() {
-        tracing::event!(Level::WARN, status = %status, latency_ms = ms, "request finished with error");
+        tracing::event!(Level::WARN, status = %status, latency_ms = ms, account = %account, upstream_url = %upstream_url, "request finished with error");
       } else {
-        tracing::event!(Level::INFO, status = %status, latency_ms = ms, "request finished");
+        tracing::event!(Level::INFO, status = %status, latency_ms = ms, account = %account, upstream_url = %upstream_url, "request finished");
       }
     })
     .on_failure(
       |err: tower_http::classify::ServerErrorsFailureClass, latency: Duration, _span: &Span| {
-        tracing::warn!(error = %err, latency_ms = latency.as_millis() as u64, "request failed");
+        let (account, upstream_url) = tracking_snapshot();
+        tracing::warn!(error = %err, latency_ms = latency.as_millis() as u64, account = %account, upstream_url = %upstream_url, "request failed");
       },
     );
 
@@ -93,6 +142,7 @@ pub fn router(state: AppState) -> Router {
     .layer(PropagateRequestIdLayer::new(request_id_header.clone()))
     .layer(trace)
     .layer(SetRequestIdLayer::new(request_id_header, MakeRequestUuid))
+    .layer(middleware::from_fn(track_request))
 }
 
 async fn health() -> &'static str {

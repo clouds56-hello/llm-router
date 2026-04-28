@@ -44,6 +44,11 @@ pub enum Error {
   #[snafu(display("no configured account supports endpoint '{endpoint}' for model '{model}'"))]
   NotImplemented { endpoint: String, model: String },
 
+  /// A supplied `x-session-id` was known but its in-memory binding expired.
+  /// Maps to 410 so clients replay with a fresh session id.
+  #[snafu(display("session expired"))]
+  SessionExpired { session_id: String },
+
   /// Transport failure, body-read failure, or "all attempts failed" summary
   /// from the dispatcher. Maps to 502.
   #[snafu(display("{message}"))]
@@ -79,12 +84,18 @@ impl Error {
       model: model.into(),
     }
   }
+  pub fn session_expired(session_id: impl Into<String>) -> Self {
+    Error::SessionExpired {
+      session_id: session_id.into(),
+    }
+  }
 
   fn status(&self) -> StatusCode {
     match self {
       Error::BadRequest { .. } => StatusCode::BAD_REQUEST,
       Error::Upstream { status, .. } => *status,
       Error::NotImplemented { .. } => StatusCode::NOT_IMPLEMENTED,
+      Error::SessionExpired { .. } => StatusCode::GONE,
       Error::BadGateway { .. } => StatusCode::BAD_GATEWAY,
       Error::Internal { .. } => StatusCode::INTERNAL_SERVER_ERROR,
     }
@@ -95,6 +106,7 @@ impl Error {
       Error::BadRequest { .. } => "bad_request",
       Error::Upstream { .. } => "upstream_error",
       Error::NotImplemented { .. } => "not_implemented_error",
+      Error::SessionExpired { .. } => "session_expired",
       Error::BadGateway { .. } => "bad_gateway",
       Error::Internal { .. } => "internal_error",
     }
@@ -107,6 +119,7 @@ impl Error {
       Error::NotImplemented { endpoint, model } => {
         format!("no configured account supports endpoint '{endpoint}' for model '{model}'")
       }
+      Error::SessionExpired { .. } => "session expired".into(),
       Error::BadGateway { message } => message.clone(),
       Error::Internal { message } => message.clone(),
     }
@@ -145,6 +158,7 @@ mod tests {
       Error::not_implemented("e", "m").status(),
       StatusCode::NOT_IMPLEMENTED
     );
+    assert_eq!(Error::session_expired("s").status(), StatusCode::GONE);
     assert_eq!(Error::bad_gateway("x").status(), StatusCode::BAD_GATEWAY);
     assert_eq!(Error::internal("x").status(), StatusCode::INTERNAL_SERVER_ERROR);
   }
@@ -157,6 +171,7 @@ mod tests {
       "upstream_error"
     );
     assert_eq!(Error::not_implemented("e", "m").kind(), "not_implemented_error");
+    assert_eq!(Error::session_expired("s").kind(), "session_expired");
     assert_eq!(Error::bad_gateway("x").kind(), "bad_gateway");
     assert_eq!(Error::internal("x").kind(), "internal_error");
   }

@@ -274,6 +274,7 @@ impl CopilotProvider {
     let headers = self.headers_for_request(ctx.behave_as);
     let h = headers::copilot_request_headers(token.expose(), &headers, ctx.stream, &initiator)?;
     let url = format!("{COPILOT_API}{path}");
+    crate::server::record_upstream_url(&url);
     debug!(%url, "POST upstream");
     let resp = ctx
       .http

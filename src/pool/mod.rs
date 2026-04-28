@@ -1,9 +1,14 @@
 //! Generic account pool. Each account holds an `Arc<dyn Provider>`; the pool
-//! itself only manages health/cooldown state and round-robin selection.
+//! manages provider-bucketed round-robin, health/cooldown state, and optional
+//! session-id affinity.
+
+pub mod affinity;
 
 use crate::config::Config;
+use crate::pool::affinity::{Affinity, Lookup};
 use crate::provider::{self, Endpoint, Provider};
 use parking_lot::RwLock;
+use std::collections::BTreeMap;
 use snafu::{ResultExt, Snafu};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -83,9 +88,22 @@ impl Account {
 }
 
 pub struct AccountPool {
+  buckets: BTreeMap<String, ProviderBucket>,
+  accounts: Vec<Arc<Account>>,
+  cooldown_base: Duration,
+  affinity: Affinity,
+}
+
+struct ProviderBucket {
+  provider: Arc<dyn Provider>,
   accounts: Vec<Arc<Account>>,
   cursor: AtomicUsize,
-  cooldown_base: Duration,
+}
+
+pub enum SessionAcquire {
+  Account(Arc<Account>),
+  SessionExpired,
+  None,
 }
 
 impl AccountPool {
@@ -94,28 +112,45 @@ impl AccountPool {
       return NoAccountsSnafu.fail();
     }
     let mut accounts = Vec::with_capacity(cfg.accounts.len());
+    let mut buckets: BTreeMap<String, ProviderBucket> = BTreeMap::new();
     for a in &cfg.accounts {
       let p = provider::build_for_account(a, &cfg.copilot)
         .context(BuildAccountSnafu { id: a.id.clone() })?;
       debug!(account = %a.id, provider = %p.info().id, "pool: built account");
-      accounts.push(Arc::new(Account {
+      let acct = Arc::new(Account {
         id: a.id.clone(),
-        provider: p,
+        provider: p.clone(),
         inner: RwLock::new(AccountInner {
           cooldown_until: None,
           consecutive_failures: 0,
         }),
-      }));
+      });
+      let bucket_key = p.info().id.clone();
+      buckets
+        .entry(bucket_key)
+        .or_insert_with(|| ProviderBucket {
+          provider: p.clone(),
+          accounts: Vec::new(),
+          cursor: AtomicUsize::new(0),
+        })
+        .accounts
+        .push(acct.clone());
+      accounts.push(acct);
     }
     info!(
       accounts = accounts.len(),
+      providers = buckets.len(),
       cooldown_base_secs = cfg.pool.failure_cooldown_secs,
       "account pool initialised"
     );
     Ok(Arc::new(Self {
+      buckets,
       accounts,
-      cursor: AtomicUsize::new(0),
       cooldown_base: Duration::from_secs(cfg.pool.failure_cooldown_secs),
+      affinity: Affinity::new(
+        Duration::from_secs(cfg.pool.session_ttl_secs),
+        Duration::from_secs(cfg.pool.session_tombstone_secs),
+      ),
     }))
   }
 
@@ -127,53 +162,261 @@ impl AccountPool {
     self.cooldown_base
   }
 
-  /// Pick the next account that supports both `model` and `endpoint`
-  /// (round-robin).
-  ///
-  /// Returns `None` only when **no** account in the pool supports the
-  /// `(model, endpoint)` tuple — in which case the handler should map to
-  /// `501 Not Implemented` rather than retrying. Cooldown is best-effort:
-  /// if every supporting account is in cooldown we still hand one back so
-  /// the caller can attempt the request.
-  pub fn acquire(&self, model: Option<&str>, endpoint: Endpoint) -> Option<Arc<Account>> {
+  pub fn acquire_for_session(
+    &self,
+    session_id: Option<&str>,
+    model: Option<&str>,
+    endpoint: Endpoint,
+  ) -> SessionAcquire {
+    if let Some(id) = session_id {
+      match self.affinity.lookup(id) {
+        Lookup::Hit(account_id) => {
+          if let Some(acct) = self.account_by_id(&account_id) {
+            if acct.is_healthy() && self.account_matches(&acct, model, endpoint) {
+              return SessionAcquire::Account(acct);
+            }
+          }
+        }
+        Lookup::Expired => return SessionAcquire::SessionExpired,
+        Lookup::Unknown => {}
+      }
+    }
+
+    match self.acquire_from_buckets(model, endpoint) {
+      Some(acct) => {
+        if let Some(id) = session_id {
+          self.record_session(id, &acct.id);
+        }
+        SessionAcquire::Account(acct)
+      }
+      None => SessionAcquire::None,
+    }
+  }
+
+  pub fn record_session(&self, session_id: &str, account_id: &str) {
+    self.affinity.record(session_id, account_id);
+  }
+
+  pub fn all(&self) -> &[Arc<Account>] {
+    &self.accounts
+  }
+
+  fn acquire_from_buckets(&self, model: Option<&str>, endpoint: Endpoint) -> Option<Arc<Account>> {
+    let mut candidates = Vec::new();
+    for bucket in self.buckets.values() {
+      if bucket.matches(model, endpoint) {
+        candidates.push(bucket);
+      }
+    }
+
+    for bucket in &candidates {
+      if let Some(acct) = bucket.pick_healthy() {
+        return Some(acct);
+      }
+    }
+
+    let mut best: Option<Arc<Account>> = None;
+    let mut best_t: Option<Instant> = None;
+    for bucket in candidates {
+      if let Some((acct, t)) = bucket.pick_earliest_cooldown() {
+        if best.is_none() || t < best_t {
+          best = Some(acct);
+          best_t = t;
+        }
+      }
+    }
+    best
+  }
+
+  fn account_by_id(&self, id: &str) -> Option<Arc<Account>> {
+    self.accounts.iter().find(|a| a.id == id).cloned()
+  }
+
+  fn account_matches(&self, acct: &Account, model: Option<&str>, endpoint: Endpoint) -> bool {
+    let model = model.unwrap_or("");
+    (model.is_empty() || acct.provider.model_info(model).is_some()) && acct.provider.supports(model, endpoint)
+  }
+}
+
+impl ProviderBucket {
+  fn matches(&self, model: Option<&str>, endpoint: Endpoint) -> bool {
+    let model = model.unwrap_or("");
+    (model.is_empty() || self.provider.model_info(model).is_some()) && self.provider.supports(model, endpoint)
+  }
+
+  fn pick_healthy(&self) -> Option<Arc<Account>> {
     let n = self.accounts.len();
     if n == 0 {
       return None;
     }
     let start = self.cursor.fetch_add(1, Ordering::Relaxed);
-
-    // Helper: does this account claim support for (model, endpoint)?
-    let supports = |a: &Account| -> bool {
-      let m = model.unwrap_or("");
-      a.provider.supports(m, endpoint)
-    };
-
-    // First pass: healthy AND supports endpoint (and model, when given).
     for i in 0..n {
       let idx = (start + i) % n;
       let a = &self.accounts[idx];
-      if a.is_healthy() && supports(a) {
+      if a.is_healthy() {
         return Some(a.clone());
       }
     }
-    // Second pass: any account that supports the endpoint, even if in
-    // cooldown — pick the one with the earliest cooldown_until.
-    let mut best: Option<&Arc<Account>> = None;
+    None
+  }
+
+  fn pick_earliest_cooldown(&self) -> Option<(Arc<Account>, Option<Instant>)> {
+    let mut best: Option<Arc<Account>> = None;
     let mut best_t: Option<Instant> = None;
     for a in &self.accounts {
-      if !supports(a) {
-        continue;
-      }
       let t = a.inner.read().cooldown_until;
       if best.is_none() || t < best_t {
-        best = Some(a);
+        best = Some(a.clone());
         best_t = t;
       }
     }
-    best.cloned()
+    best.map(|acct| (acct, best_t))
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::provider::{AuthKind, Capabilities, Interleaved, Limits, Modalities, ModelInfo, ProviderInfo, RequestCtx};
+  use async_trait::async_trait;
+  use serde_json::Value;
+
+  struct MockProvider {
+    info: ProviderInfo,
   }
 
-  pub fn all(&self) -> &[Arc<Account>] {
-    &self.accounts
+  impl MockProvider {
+    fn new(id: &str, aliases: &'static [&'static str], models: &[&str]) -> Arc<Self> {
+      Arc::new(Self {
+        info: ProviderInfo {
+          id: id.into(),
+          aliases,
+          display_name: "mock",
+          upstream_url: "https://mock.invalid".into(),
+          auth_kind: AuthKind::StaticApiKey,
+          default_models: models.iter().map(|m| model(m)).collect(),
+        },
+      })
+    }
+  }
+
+  #[async_trait]
+  impl Provider for MockProvider {
+    fn id(&self) -> &str {
+      &self.info.id
+    }
+
+    fn info(&self) -> &ProviderInfo {
+      &self.info
+    }
+
+    async fn list_models(&self, _http: &reqwest::Client) -> crate::provider::Result<Value> {
+      Ok(serde_json::json!({ "object": "list", "data": [] }))
+    }
+
+    async fn chat(&self, _ctx: RequestCtx<'_>) -> crate::provider::Result<reqwest::Response> {
+      unreachable!()
+    }
+  }
+
+  fn model(id: &str) -> ModelInfo {
+    ModelInfo {
+      id: id.into(),
+      name: id.into(),
+      capabilities: Capabilities {
+        temperature: true,
+        reasoning: false,
+        attachment: false,
+        toolcall: true,
+        input: Modalities::TEXT_ONLY,
+        output: Modalities::TEXT_ONLY,
+        interleaved: Interleaved::Disabled(false),
+      },
+      cost: None,
+      limit: Limits {
+        context: 1,
+        output: 1,
+      },
+      release_date: None,
+    }
+  }
+
+  fn acct(id: &str, provider: Arc<dyn Provider>) -> Arc<Account> {
+    Arc::new(Account {
+      id: id.into(),
+      provider,
+      inner: RwLock::new(AccountInner {
+        cooldown_until: None,
+        consecutive_failures: 0,
+      }),
+    })
+  }
+
+  fn pool() -> AccountPool {
+    static A: &[&str] = &["provider-a"];
+    static B: &[&str] = &["provider-b"];
+    let pa = MockProvider::new("provider-a", A, &["model-a"]);
+    let pb = MockProvider::new("provider-b", B, &["model-b"]);
+    let a1 = acct("a1", pa.clone());
+    let a2 = acct("a2", pa.clone());
+    let b1 = acct("b1", pb.clone());
+    let mut buckets = BTreeMap::new();
+    buckets.insert(
+      "provider-a".into(),
+      ProviderBucket {
+        provider: pa,
+        accounts: vec![a1.clone(), a2.clone()],
+        cursor: AtomicUsize::new(0),
+      },
+    );
+    buckets.insert(
+      "provider-b".into(),
+      ProviderBucket {
+        provider: pb,
+        accounts: vec![b1.clone()],
+        cursor: AtomicUsize::new(0),
+      },
+    );
+    AccountPool {
+      buckets,
+      accounts: vec![a1, a2, b1],
+      cooldown_base: Duration::from_secs(1),
+      affinity: Affinity::new(Duration::from_secs(60), Duration::from_secs(120)),
+    }
+  }
+
+  #[test]
+  fn routes_by_provider_model_catalogue() {
+    let p = pool();
+    for _ in 0..8 {
+      let SessionAcquire::Account(a) = p.acquire_for_session(None, Some("model-a"), Endpoint::ChatCompletions) else {
+        panic!("expected provider-a account");
+      };
+      assert!(a.id.starts_with('a'), "wrong account: {}", a.id);
+    }
+    for _ in 0..8 {
+      let SessionAcquire::Account(a) = p.acquire_for_session(None, Some("model-b"), Endpoint::ChatCompletions) else {
+        panic!("expected provider-b account");
+      };
+      assert_eq!(a.id, "b1");
+    }
+    assert!(matches!(
+      p.acquire_for_session(None, Some("unknown"), Endpoint::ChatCompletions),
+      SessionAcquire::None
+    ));
+  }
+
+  #[test]
+  fn session_affinity_reuses_recorded_account() {
+    let p = pool();
+    let SessionAcquire::Account(first) = p.acquire_for_session(Some("s1"), Some("model-a"), Endpoint::ChatCompletions) else {
+      panic!("expected account");
+    };
+    for _ in 0..4 {
+      let SessionAcquire::Account(next) = p.acquire_for_session(Some("s1"), Some("model-a"), Endpoint::ChatCompletions) else {
+        panic!("expected account");
+      };
+      assert_eq!(next.id, first.id);
+    }
   }
 }
