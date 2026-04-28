@@ -5,18 +5,20 @@ use crate::provider::{
 use crate::util::http::build_client;
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
+use std::io::IsTerminal;
 use std::path::PathBuf;
 
 #[derive(Args, Debug)]
 pub struct LoginArgs {
-    /// Provider to log in to. Defaults to `github-copilot`.
+    /// Provider to log in to. If omitted and stdin is a TTY, you'll be
+    /// prompted to pick one.
     ///
     /// Accepted: `github-copilot`, `zai-coding-plan`, `zai`,
     /// `zhipuai-coding-plan`, `zhipuai`. The four `zai*`/`zhipuai*` aliases
     /// all route to the same Z.ai backend; whichever you pick is preserved
     /// verbatim in the saved account so usage logs reflect operator intent.
-    #[arg(long, default_value = ID_GITHUB_COPILOT)]
-    pub provider: String,
+    #[arg(long)]
+    pub provider: Option<String>,
 
     /// ID to assign to the new account. Defaults to the GitHub username for
     /// `github-copilot`, or to the provider id for static-key providers.
@@ -33,7 +35,12 @@ pub async fn run(cfg_path: Option<PathBuf>, args: LoginArgs) -> Result<()> {
     let proxy = if args.no_proxy { ProxyConfig::default() } else { cfg.proxy.clone() };
     let client = build_client(&proxy)?;
 
-    let account = match args.provider.as_str() {
+    let provider = match args.provider {
+        Some(p) => p,
+        None => pick_provider_interactive()?,
+    };
+
+    let account = match provider.as_str() {
         ID_GITHUB_COPILOT => copilot_login(&client, &cfg, args.id).await?,
         p if ZAI_ALIASES.contains(&p) => zai_login(&client, p, args.id).await?,
         other => {
@@ -50,6 +57,29 @@ pub async fn run(cfg_path: Option<PathBuf>, args: LoginArgs) -> Result<()> {
     cfg.save(&path)?;
     println!("Saved account '{id}' to {}", path.display());
     Ok(())
+}
+
+/// Show an arrow-key picker over all five accepted provider ids. Errors out
+/// (rather than silently defaulting) when stdin isn't a TTY — scripted use
+/// must pass `--provider` explicitly.
+fn pick_provider_interactive() -> Result<String> {
+    if !std::io::stdin().is_terminal() {
+        return Err(anyhow!(
+            "no --provider given and stdin is not a TTY; pass --provider <id> (one of: {}, {})",
+            ID_GITHUB_COPILOT,
+            ZAI_ALIASES.join(" | ")
+        ));
+    }
+    let mut options: Vec<&'static str> = Vec::with_capacity(1 + ZAI_ALIASES.len());
+    options.push(ID_GITHUB_COPILOT);
+    options.extend(ZAI_ALIASES.iter().copied());
+
+    let pick = inquire::Select::new("Pick a provider:", options)
+        .with_starting_cursor(0) // github-copilot
+        .with_help_message("↑/↓ to move · enter to select · esc to cancel")
+        .prompt()
+        .context("provider selection cancelled")?;
+    Ok(pick.to_string())
 }
 
 async fn copilot_login(

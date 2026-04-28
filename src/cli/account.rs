@@ -30,7 +30,7 @@ pub struct ListArgs {
 pub async fn run(cfg_path: Option<PathBuf>, cmd: AccountCmd) -> Result<()> {
     let (mut cfg, path) = Config::load(cfg_path.as_deref())?;
     match cmd {
-        AccountCmd::List(args) => list(&cfg, args).await?,
+        AccountCmd::List(args) => list(&mut cfg, &path, args).await?,
         AccountCmd::Remove { id } => {
             let before = cfg.accounts.len();
             cfg.accounts.retain(|a| a.id != id);
@@ -49,7 +49,7 @@ pub async fn run(cfg_path: Option<PathBuf>, cmd: AccountCmd) -> Result<()> {
 // list
 // ---------------------------------------------------------------------------
 
-async fn list(cfg: &Config, args: ListArgs) -> Result<()> {
+async fn list(cfg: &mut Config, cfg_path: &std::path::Path, args: ListArgs) -> Result<()> {
     if cfg.accounts.is_empty() {
         println!("(no accounts)");
         return Ok(());
@@ -68,6 +68,25 @@ async fn list(cfg: &Config, args: ListArgs) -> Result<()> {
             .map(|a| fetch_quota(http.clone(), a.clone(), timeout));
         futures::future::join_all(futs).await
     };
+
+    // Persist any refreshed Copilot api_tokens. The quota probe already calls
+    // `token::exchange`, so we piggy-back on its result instead of issuing a
+    // second request. This is a no-op under `--no-quota`.
+    let mut dirty = false;
+    for (a, q) in cfg.accounts.iter_mut().zip(quotas.iter()) {
+        if let QuotaResult::Copilot(c) = q {
+            if a.api_token.as_deref() != Some(c.fresh_token.as_str())
+                || a.api_token_expires_at != Some(c.fresh_expires_at)
+            {
+                a.api_token = Some(c.fresh_token.clone());
+                a.api_token_expires_at = Some(c.fresh_expires_at);
+                dirty = true;
+            }
+        }
+    }
+    if dirty {
+        cfg.save(cfg_path)?;
+    }
 
     let mut first = true;
     for (a, q) in cfg.accounts.iter().zip(quotas.iter()) {
@@ -91,11 +110,18 @@ enum QuotaResult {
 
 #[derive(Debug)]
 struct CopilotMonthly {
-    /// Premium-interactions budget remaining for the month.
-    /// Upstream sends per-feature buckets; we surface the most informative
-    /// non-null one in `headline`, plus the reset date when available.
-    headline: Option<(String, u64)>, // (feature label, remaining)
-    reset_date: Option<String>,      // ISO YYYY-MM-DD
+    /// Headline figure to display: `(label, remaining, Some(entitlement))`
+    /// for metered features, `(label, 0, None)` rendered as "unlimited".
+    headline: Option<(String, u64, Option<u64>)>,
+    /// Marketing plan name (e.g. `individual_pro`).
+    plan: Option<String>,
+    reset_date: Option<String>, // ISO YYYY-MM-DD
+    /// Fresh short-lived Copilot api_token returned by the same exchange
+    /// call that produced the quota. Persisted back to config so that the
+    /// daemon (which never writes to disk at runtime) starts up with a
+    /// non-expired cache.
+    fresh_token: String,
+    fresh_expires_at: i64,
 }
 
 async fn fetch_quota(
@@ -108,28 +134,41 @@ async fn fetch_quota(
             return QuotaResult::None;
         };
         let headers = account.copilot.clone().unwrap_or_default();
+        // Two parallel probes:
+        //   1. token exchange — refreshes api_token (always needed on `list`)
+        //   2. user-info     — quota_snapshots (Plus/Business plans)
+        let http2 = http.clone();
+        let gh2 = gh.clone();
+        let h2 = headers.clone();
         let fut = async move {
-            crate::provider::github_copilot::token::exchange(&http, &gh, &headers).await
+            let (tok, info) = tokio::join!(
+                crate::provider::github_copilot::token::exchange(&http, &gh, &headers),
+                crate::provider::github_copilot::user::fetch(&http2, &gh2, &h2),
+            );
+            (tok, info)
         };
         return match tokio::time::timeout(timeout, fut).await {
             Err(_) => QuotaResult::Err("timeout".into()),
-            Ok(Err(e)) => QuotaResult::Err(short_err(&e)),
-            Ok(Ok(resp)) => {
-                let q = resp.limited_user_quotas.as_ref();
-                let headline = q.and_then(|q| {
-                    q.premium_interactions
-                        .map(|n| ("premium_interactions".to_string(), n))
-                        .or_else(|| q.chat.map(|n| ("chat".to_string(), n)))
-                        .or_else(|| q.completions.map(|n| ("completions".to_string(), n)))
+            Ok((Err(e), _)) => QuotaResult::Err(short_err(&e)),
+            Ok((Ok(tok), info_res)) => {
+                // Pick the most informative bucket:
+                //   premium_interactions (metered on Plus) > chat > completions.
+                // Fall back to the first metered snapshot if the well-known
+                // ones are all unlimited.
+                let headline = info_res.as_ref().ok().and_then(|info| {
+                    pick_headline(info)
                 });
-                if headline.is_none() && resp.limited_user_reset_date.is_none() {
-                    QuotaResult::None
-                } else {
-                    QuotaResult::Copilot(CopilotMonthly {
-                        headline,
-                        reset_date: resp.limited_user_reset_date,
-                    })
-                }
+                let (plan, reset_date) = info_res
+                    .as_ref()
+                    .map(|i| (i.copilot_plan.clone(), i.quota_reset_date.clone()))
+                    .unwrap_or((None, None));
+                QuotaResult::Copilot(CopilotMonthly {
+                    headline,
+                    plan,
+                    reset_date,
+                    fresh_token: tok.token,
+                    fresh_expires_at: tok.expires_at,
+                })
             }
         };
     }
@@ -174,29 +213,87 @@ fn render_account(a: &Account, q: &QuotaResult) {
         QuotaResult::Skipped => {}
         QuotaResult::None => {}
         QuotaResult::Err(e) => println!("  quota       : unavailable ({e})"),
-        QuotaResult::Copilot(c) => render_copilot(c),
+        QuotaResult::Copilot(c) => {
+            if c.headline.is_some() || c.reset_date.is_some() || c.plan.is_some() {
+                render_copilot(c);
+            }
+        }
         QuotaResult::Zai(z) => render_zai(z),
     }
 }
 
 fn render_copilot(c: &CopilotMonthly) {
     // Copilot's premium-request budget is a *monthly* counter; we display
-    // remaining count + reset date. Per-feature buckets sometimes diverge,
-    // so we surface the most relevant headline.
+    // remaining count + reset date for metered features, "unlimited" for
+    // unmetered ones (e.g. chat on Plus).
+    if let Some(plan) = &c.plan {
+        println!("  copilot plan: {plan}");
+    }
     let reset = c
         .reset_date
         .as_deref()
         .map(|d| format!(" — resets {d}"))
         .unwrap_or_default();
     match &c.headline {
-        Some((label, n)) => {
-            println!("  copilot     : {n} {label} remaining (monthly){reset}");
+        Some((label, remaining, Some(entitlement))) => {
+            let pct = if *entitlement > 0 {
+                100.0 * (*remaining as f64) / (*entitlement as f64)
+            } else {
+                0.0
+            };
+            println!(
+                "  copilot     : {remaining} / {entitlement} {label} ({pct:.1}%){reset}"
+            );
+        }
+        Some((label, _, None)) => {
+            println!("  copilot     : unlimited {label}{reset}");
         }
         None => {
-            // Unlimited / org plan: we got a reset date but no remaining.
-            println!("  copilot     : monthly quota{reset}");
+            // No metered feature reported but we have a reset date or plan.
+            if !reset.is_empty() {
+                println!("  copilot     : monthly quota{reset}");
+            }
         }
     }
+}
+
+/// Pick the most informative quota snapshot for one-line display.
+///
+/// Preference order:
+///   1. `premium_interactions` (the visible Plus quota)
+///   2. `chat`
+///   3. `completions`
+///   4. first remaining metered snapshot
+///
+/// For unmetered features we still surface them (as `unlimited <label>`),
+/// but only if no metered candidate is available.
+fn pick_headline(
+    info: &crate::provider::github_copilot::user::CopilotUserInfo,
+) -> Option<(String, u64, Option<u64>)> {
+    let snaps = &info.quota_snapshots;
+    let preferred = ["premium_interactions", "chat", "completions"];
+
+    // First pass: preferred metered.
+    for k in preferred {
+        if let Some(s) = snaps.get(k) {
+            if !s.unlimited {
+                return Some((k.to_string(), s.remaining.unwrap_or(0), s.entitlement));
+            }
+        }
+    }
+    // Second pass: any metered.
+    for (k, s) in snaps {
+        if !s.unlimited && s.entitlement.is_some() {
+            return Some((k.clone(), s.remaining.unwrap_or(0), s.entitlement));
+        }
+    }
+    // Third pass: preferred unmetered.
+    for k in preferred {
+        if snaps.get(k).map(|s| s.unlimited).unwrap_or(false) {
+            return Some((k.to_string(), 0, None));
+        }
+    }
+    None
 }
 
 fn render_zai(z: &crate::provider::zai::quota::ZaiQuota) {

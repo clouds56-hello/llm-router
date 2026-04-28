@@ -4,6 +4,7 @@ pub mod headers;
 pub mod models;
 pub mod oauth;
 pub mod token;
+pub mod user;
 
 use crate::config::{Account, CopilotHeaders, InitiatorMode};
 use anyhow::{anyhow, Context, Result};

@@ -35,6 +35,9 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 time = { version = "0.3", features = ["formatting", "parsing", "macros"] }
 humantime = "2"
 rpassword = "7"
+inquire = { version = "0.7", default-features = false, features = ["crossterm"] }
+arc-swap = "1"
+notify = "6"
 
 [profile.release]
 lto = "thin"
