@@ -8,7 +8,7 @@
 
 use super::error::ApiError;
 use super::AppState;
-use crate::db::{CallRecord, MessageRecord};
+use crate::db::{CallRecord, HttpSnapshot, MessageRecord, OutboundSnapshot, PartRecord, SessionSource};
 use crate::pool::Account;
 use crate::provider::Endpoint;
 use axum::body::Body;
@@ -22,9 +22,11 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Instant;
+use uuid::Uuid;
 
 /// Buffer the upstream response, parse usage, record it, and return a
 /// JSON `Response` to the client (status + content-type preserved).
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn buffered_response(
   s: AppState,
   acct: Arc<Account>,
@@ -35,6 +37,7 @@ pub(crate) async fn buffered_response(
   session_id: Option<String>,
   req_headers: HeaderMap,
   req_body: Value,
+  outbound: Option<OutboundSnapshot>,
   started: Instant,
 ) -> Response {
   let status = resp.status();
@@ -45,6 +48,17 @@ pub(crate) async fn buffered_response(
       return ApiError::bad_gateway(format!("reading upstream body: {e}")).into_response();
     }
   };
+
+  let mut headers = HeaderMap::new();
+  headers.insert(
+    axum::http::header::CONTENT_TYPE,
+    HeaderValue::from_static("application/json"),
+  );
+  if let Some(id) = session_id.as_deref() {
+    if let Ok(value) = HeaderValue::from_str(id) {
+      headers.insert(super::SESSION_ID_HEADER, value);
+    }
+  }
 
   let (pt, ct) = parse_usage_any_json(&bytes);
   record_call(
@@ -59,6 +73,8 @@ pub(crate) async fn buffered_response(
     &req_body,
     Some(&resp_headers),
     Some(&bytes),
+    &headers,
+    outbound,
     pt,
     ct,
     started,
@@ -66,22 +82,13 @@ pub(crate) async fn buffered_response(
     false,
   );
 
-  let mut headers = HeaderMap::new();
-  headers.insert(
-    axum::http::header::CONTENT_TYPE,
-    HeaderValue::from_static("application/json"),
-  );
-  if let Some(id) = session_id.as_deref() {
-    if let Ok(value) = HeaderValue::from_str(id) {
-      headers.insert(super::SESSION_ID_HEADER, value);
-    }
-  }
   (status, headers, bytes).into_response()
 }
 
 /// Stream the upstream response back as `text/event-stream`, scanning each
 /// `data:` SSE frame for a `usage` block to flush to the usage db when the
 /// stream terminates.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn stream_response(
   s: AppState,
   acct: Arc<Account>,
@@ -92,6 +99,7 @@ pub(crate) async fn stream_response(
   session_id: Option<String>,
   req_headers: HeaderMap,
   req_body: Value,
+  outbound: Option<OutboundSnapshot>,
   started: Instant,
 ) -> Response {
   let status = resp.status();
@@ -110,6 +118,20 @@ pub(crate) async fn stream_response(
   let req_headers_clone = req_headers.clone();
   let req_body_clone = req_body.clone();
   let s_clone = s.clone();
+
+  let mut headers = HeaderMap::new();
+  headers.insert(
+    axum::http::header::CONTENT_TYPE,
+    HeaderValue::from_static("text/event-stream"),
+  );
+  if let Some(id) = session_id.as_deref() {
+    if let Ok(value) = HeaderValue::from_str(id) {
+      headers.insert(super::SESSION_ID_HEADER, value);
+    }
+  }
+  headers.insert(axum::http::header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+  headers.insert(axum::http::header::CONNECTION, HeaderValue::from_static("keep-alive"));
+  let inbound_resp_headers = headers.clone();
 
   let upstream = resp.bytes_stream();
   let mut buffer = Vec::<u8>::new();
@@ -160,6 +182,7 @@ pub(crate) async fn stream_response(
 
   let recorded = Arc::new(parking_lot::Mutex::new(false));
   let recorded_clone = recorded.clone();
+  let outbound_for_end = parking_lot::Mutex::new(outbound);
   let on_end = move || {
     if *recorded_clone.lock() {
       return;
@@ -167,6 +190,7 @@ pub(crate) async fn stream_response(
     *recorded_clone.lock() = true;
     let (pt, ct) = *usage_holder.lock();
     let captured = bytes::Bytes::from(resp_body_holder.lock().clone());
+    let outbound_taken = outbound_for_end.lock().take();
     record_call(
       &s_clone,
       &acct_id,
@@ -179,6 +203,8 @@ pub(crate) async fn stream_response(
       &req_body_clone,
       Some(&resp_headers),
       Some(&captured),
+      &inbound_resp_headers,
+      outbound_taken,
       pt,
       ct,
       started,
@@ -190,18 +216,6 @@ pub(crate) async fn stream_response(
   let stream = StreamWithFinalizer::new(mapped, on_end);
   let body = Body::from_stream(stream);
 
-  let mut headers = HeaderMap::new();
-  headers.insert(
-    axum::http::header::CONTENT_TYPE,
-    HeaderValue::from_static("text/event-stream"),
-  );
-  if let Some(id) = session_id.as_deref() {
-    if let Ok(value) = HeaderValue::from_str(id) {
-      headers.insert(super::SESSION_ID_HEADER, value);
-    }
-  }
-  headers.insert(axum::http::header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
-  headers.insert(axum::http::header::CONNECTION, HeaderValue::from_static("keep-alive"));
   (status, headers, body).into_response()
 }
 
@@ -256,7 +270,6 @@ fn parse_usage_any_json(bytes: &[u8]) -> (Option<u64>, Option<u64>) {
 }
 
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_arguments)]
 fn record_call(
   s: &AppState,
   account_id: &str,
@@ -269,6 +282,8 @@ fn record_call(
   req_body: &Value,
   resp_headers: Option<&HeaderMap>,
   resp_body: Option<&bytes::Bytes>,
+  inbound_resp_headers: &HeaderMap,
+  outbound: Option<OutboundSnapshot>,
   pt: Option<u64>,
   ct: Option<u64>,
   started: Instant,
@@ -281,16 +296,24 @@ fn record_call(
   let req_body_bytes = serde_json::to_vec(req_body).unwrap_or_default();
   let resp_body_bytes = resp_body.map(|b| b.to_vec()).unwrap_or_default();
   let mut messages = extract_request_messages(req_body, endpoint, max);
-  if session_id.is_some() && !resp_body_bytes.is_empty() {
+  if !resp_body_bytes.is_empty() {
     messages.push(MessageRecord {
       role: "assistant".into(),
       status: Some(status),
-      body: clip_body(&resp_body_bytes, max),
+      parts: vec![PartRecord {
+        part_type: "raw".into(),
+        content: clip_body(&resp_body_bytes, max),
+      }],
     });
   }
+  let (effective_id, source) = match session_id {
+    Some(id) => (id.to_string(), SessionSource::Header),
+    None => (Uuid::new_v4().to_string(), SessionSource::Auto),
+  };
   db.record(CallRecord {
     ts: time::OffsetDateTime::now_utc().unix_timestamp(),
-    session_id: session_id.map(str::to_string),
+    session_id: effective_id,
+    session_source: source,
     endpoint: endpoint.to_string(),
     account_id: account_id.to_string(),
     provider_id: provider_id.to_string(),
@@ -301,30 +324,33 @@ fn record_call(
     latency_ms,
     prompt_tokens: pt,
     completion_tokens: ct,
-    req_headers: headers_json(req_headers),
-    req_body: clip_body(&req_body_bytes, max),
-    resp_headers: resp_headers.map(headers_json),
-    resp_body: resp_body.map(|b| clip_body(b, max)),
+    inbound_req: HttpSnapshot {
+      method: None,
+      url: None,
+      status: None,
+      headers: req_headers.clone(),
+      body: clip_body(&req_body_bytes, max),
+    },
+    outbound_req: outbound.map(|mut snap| {
+      snap.body = clip_body(snap.body.as_ref(), max);
+      snap
+    }),
+    outbound_resp: resp_headers.map(|headers| HttpSnapshot {
+      method: None,
+      url: None,
+      status: Some(status),
+      headers: headers.clone(),
+      body: resp_body.map(|b| clip_body(b, max)).unwrap_or_default(),
+    }),
+    inbound_resp: HttpSnapshot {
+      method: None,
+      url: None,
+      status: Some(status),
+      headers: inbound_resp_headers.clone(),
+      body: resp_body.map(|b| clip_body(b, max)).unwrap_or_default(),
+    },
     messages,
   });
-}
-
-fn headers_json(headers: &HeaderMap) -> bytes::Bytes {
-  let mut out = serde_json::Map::new();
-  for (name, value) in headers {
-    let key = name.as_str().to_ascii_lowercase();
-    let value = if is_sensitive_header(&key) {
-      "<redacted>".to_string()
-    } else {
-      value.to_str().unwrap_or("<non-utf8>").to_string()
-    };
-    out.insert(key, Value::String(value));
-  }
-  serde_json::to_vec(&Value::Object(out)).unwrap_or_default().into()
-}
-
-fn is_sensitive_header(name: &str) -> bool {
-  matches!(name, "authorization" | "proxy-authorization" | "cookie") || name.contains("api-key")
 }
 
 fn clip_body(body: &[u8], max: usize) -> bytes::Bytes {
@@ -337,30 +363,37 @@ fn clip_body(body: &[u8], max: usize) -> bytes::Bytes {
     .into()
 }
 
+/// Build per-message [`MessageRecord`]s for `sessions.db`. For each inbound
+/// message we emit one record whose `parts` contains one `PartRecord` per
+/// content element (string content collapses to a single `text` part).
 fn extract_request_messages(body: &Value, endpoint: Endpoint, max: usize) -> Vec<MessageRecord> {
   let mut out = Vec::new();
   match endpoint {
     Endpoint::ChatCompletions | Endpoint::Messages => {
-      if let Some(messages) = body.get("messages").and_then(|v| v.as_array()) {
-        for msg in messages {
-          let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("user").to_string();
+      if endpoint == Endpoint::Messages {
+        if let Some(system) = body.get("system") {
           out.push(MessageRecord {
-            role,
+            role: "system".into(),
             status: None,
-            body: clip_body(&serde_json::to_vec(msg).unwrap_or_default(), max),
+            parts: parts_from_content(system, max),
           });
         }
       }
-      if endpoint == Endpoint::Messages {
-        if let Some(system) = body.get("system") {
-          out.insert(
-            0,
-            MessageRecord {
-              role: "system".into(),
-              status: None,
-              body: clip_body(&serde_json::to_vec(system).unwrap_or_default(), max),
-            },
-          );
+      if let Some(messages) = body.get("messages").and_then(|v| v.as_array()) {
+        for msg in messages {
+          let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("user").to_string();
+          let parts = match msg.get("content") {
+            Some(content) => parts_from_content(content, max),
+            None => vec![PartRecord {
+              part_type: "raw".into(),
+              content: clip_body(&serde_json::to_vec(msg).unwrap_or_default(), max),
+            }],
+          };
+          out.push(MessageRecord {
+            role,
+            status: None,
+            parts,
+          });
         }
       }
     }
@@ -369,22 +402,86 @@ fn extract_request_messages(body: &Value, endpoint: Endpoint, max: usize) -> Vec
       if let Some(items) = input.as_array() {
         for item in items {
           let role = item.get("role").and_then(|v| v.as_str()).unwrap_or("user").to_string();
+          let parts = match item.get("content") {
+            Some(content) => parts_from_content(content, max),
+            None => vec![PartRecord {
+              part_type: "raw".into(),
+              content: clip_body(&serde_json::to_vec(item).unwrap_or_default(), max),
+            }],
+          };
           out.push(MessageRecord {
             role,
             status: None,
-            body: clip_body(&serde_json::to_vec(item).unwrap_or_default(), max),
+            parts,
           });
         }
+      } else if let Some(text) = input.as_str() {
+        out.push(MessageRecord {
+          role: "user".into(),
+          status: None,
+          parts: vec![PartRecord {
+            part_type: "text".into(),
+            content: clip_body(text.as_bytes(), max),
+          }],
+        });
       } else {
         out.push(MessageRecord {
           role: "user".into(),
           status: None,
-          body: clip_body(&serde_json::to_vec(input).unwrap_or_default(), max),
+          parts: vec![PartRecord {
+            part_type: "raw".into(),
+            content: clip_body(&serde_json::to_vec(input).unwrap_or_default(), max),
+          }],
         });
       }
     }
   }
   out
+}
+
+/// Convert a message `content` value (either a string or an array of typed
+/// parts) into one or more [`PartRecord`]s. `text`/`input_text` parts are
+/// stored as utf-8; structured parts (`image_url`, `tool_use`,
+/// `tool_result`, …) are stored as their JSON serialisation so the original
+/// shape is recoverable.
+fn parts_from_content(content: &Value, max: usize) -> Vec<PartRecord> {
+  if let Some(text) = content.as_str() {
+    return vec![PartRecord {
+      part_type: "text".into(),
+      content: clip_body(text.as_bytes(), max),
+    }];
+  }
+  if let Some(items) = content.as_array() {
+    if items.is_empty() {
+      return vec![PartRecord {
+        part_type: "raw".into(),
+        content: Bytes::from_static(b"[]"),
+      }];
+    }
+    return items
+      .iter()
+      .map(|item| {
+        let part_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("raw").to_string();
+        let content_bytes = if matches!(part_type.as_str(), "text" | "input_text" | "output_text") {
+          if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
+            clip_body(text.as_bytes(), max)
+          } else {
+            clip_body(&serde_json::to_vec(item).unwrap_or_default(), max)
+          }
+        } else {
+          clip_body(&serde_json::to_vec(item).unwrap_or_default(), max)
+        };
+        PartRecord {
+          part_type,
+          content: content_bytes,
+        }
+      })
+      .collect();
+  }
+  vec![PartRecord {
+    part_type: "raw".into(),
+    content: clip_body(&serde_json::to_vec(content).unwrap_or_default(), max),
+  }]
 }
 
 // --- Stream wrapper that runs a closure when polled to completion or dropped.
@@ -428,6 +525,9 @@ impl<S, F: FnOnce() + Send + 'static> Drop for StreamWithFinalizer<S, F> {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::config::{Account as AccountCfg, Config, DbConfig, ZaiAccountConfig};
+  use crate::server::build_state;
+  use crate::util::secret::Secret;
   use serde_json::json;
 
   #[test]
@@ -458,5 +558,100 @@ mod tests {
         "response": { "usage": { "input_tokens": 3, "output_tokens": 4 }}
     });
     assert_eq!(parse_usage_any_value(&v), (Some(3), Some(4)));
+  }
+
+  #[test]
+  fn chat_array_content_becomes_multiple_parts() {
+    let body = json!({
+      "messages": [{
+        "role": "user",
+        "content": [
+          { "type": "text", "text": "hello" },
+          { "type": "image_url", "image_url": { "url": "data:image/png;base64,abc" } }
+        ]
+      }]
+    });
+    let messages = extract_request_messages(&body, Endpoint::ChatCompletions, 1024);
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].parts.len(), 2);
+    assert_eq!(messages[0].parts[0].part_type, "text");
+    assert_eq!(messages[0].parts[0].content.as_ref(), b"hello");
+    assert_eq!(messages[0].parts[1].part_type, "image_url");
+    assert!(std::str::from_utf8(messages[0].parts[1].content.as_ref())
+      .unwrap()
+      .contains("image_url"));
+  }
+
+  #[tokio::test]
+  async fn record_call_generates_auto_session_and_assistant_raw_part() {
+    let dir = std::env::temp_dir().join(format!("llm-router-forward-{}", Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut cfg = Config {
+      db: DbConfig {
+        enabled: true,
+        usage_db_path: Some(dir.join("usage.db")),
+        sessions_db_path: Some(dir.join("sessions.db")),
+        requests_dir: Some(dir.join("requests")),
+        record_sessions: true,
+        record_request_bodies: true,
+        body_max_bytes: 1024 * 1024,
+        write_queue_capacity: 16,
+      },
+      ..Default::default()
+    };
+    cfg.accounts.push(AccountCfg {
+      id: "acct".into(),
+      provider: "zai-coding-plan".into(),
+      github_token: None,
+      api_token: None,
+      api_token_expires_at: None,
+      api_key: Some(Secret::new("sk-test".into())),
+      copilot: None,
+      zai: Some(ZaiAccountConfig { base_url: None }),
+      behave_as: None,
+    });
+    let state = build_state(&cfg).unwrap();
+    let req_body = json!({ "model": "glm-4.6", "messages": [{ "role": "user", "content": "hi" }] });
+    let resp_body = Bytes::from_static(br#"{"id":"r1"}"#);
+    record_call(
+      &state,
+      "acct",
+      "zai-coding-plan",
+      Endpoint::ChatCompletions,
+      "glm-4.6",
+      "user",
+      None,
+      &HeaderMap::new(),
+      &req_body,
+      Some(&HeaderMap::new()),
+      Some(&resp_body),
+      &HeaderMap::new(),
+      None,
+      None,
+      None,
+      Instant::now(),
+      200,
+      false,
+    );
+    state.db.as_ref().unwrap().shutdown().await.unwrap();
+
+    let conn = rusqlite::Connection::open(dir.join("sessions.db")).unwrap();
+    let (session_id, source): (String, String) = conn
+      .query_row("SELECT id, source FROM sessions", [], |r| Ok((r.get(0)?, r.get(1)?)))
+      .unwrap();
+    assert_eq!(source, "auto");
+    Uuid::parse_str(&session_id).unwrap();
+    let raw_count: i64 = conn
+      .query_row(
+        "SELECT COUNT(*)
+         FROM messages m
+         JOIN message_part_refs r ON r.message_id = m.id
+         JOIN message_parts p ON p.hash = r.part_hash
+         WHERE m.role = 'assistant' AND p.part_type = 'raw' AND p.content = ?1",
+        [resp_body.as_ref()],
+        |r| r.get(0),
+      )
+      .unwrap();
+    assert_eq!(raw_count, 1);
   }
 }

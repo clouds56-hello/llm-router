@@ -84,14 +84,14 @@ pub async fn chat_completions(
   let inbound = Arc::new(inbound);
   let initiator_arc = Arc::new(initiator.clone());
 
-  let DispatchOk { acct, resp } = {
+  let DispatchOk { acct, resp, outbound } = {
     let s_for_closure = s.clone();
     dispatch(
       &s,
       session_id.as_deref(),
       &model,
       Endpoint::ChatCompletions,
-      move |acct| {
+      move |acct, capture| {
         let body = body.clone();
         let inbound = inbound.clone();
         let initiator_arc = initiator_arc.clone();
@@ -106,6 +106,7 @@ pub async fn chat_completions(
             initiator: initiator_arc.as_str(),
             inbound_headers: &inbound,
             behave_as: behave_as.as_deref().map(|s| s.as_str()),
+            outbound: Some(capture),
           };
           acct.provider.chat(ctx).await
         }
@@ -126,6 +127,7 @@ pub async fn chat_completions(
         session_id,
         req_headers,
         req_body,
+        outbound,
         started,
       )
       .await,
@@ -142,6 +144,7 @@ pub async fn chat_completions(
         session_id,
         req_headers,
         req_body,
+        outbound,
         started,
       )
       .await,

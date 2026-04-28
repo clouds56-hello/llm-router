@@ -272,15 +272,21 @@ impl CopilotProvider {
     };
     tracing::Span::current().record("initiator", initiator.as_str());
     let headers = self.headers_for_request(ctx.behave_as);
-    let h = headers::copilot_request_headers(token.expose(), &headers, ctx.stream, &initiator)?;
+    let mut h = headers::copilot_request_headers(token.expose(), &headers, ctx.stream, &initiator)?;
+    h.insert(
+      reqwest::header::CONTENT_TYPE,
+      reqwest::header::HeaderValue::from_static("application/json"),
+    );
     let url = format!("{COPILOT_API}{path}");
     crate::server::record_upstream_url(&url);
     debug!(%url, "POST upstream");
+    let body_bytes = bytes::Bytes::from(serde_json::to_vec(ctx.body).unwrap_or_default());
+    ctx.capture_outbound("POST", &url, &h, body_bytes.clone());
     let resp = ctx
       .http
       .post(&url)
       .headers(h)
-      .json(ctx.body)
+      .body(body_bytes)
       .send()
       .await
       .context(error::HttpSnafu { what })?;

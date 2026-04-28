@@ -195,11 +195,14 @@ impl Provider for ZaiProvider {
     let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
     crate::server::record_upstream_url(&url);
     debug!(%url, "POST zai chat");
+    let headers = self.auth_headers(ctx.stream)?;
+    let body_bytes = bytes::Bytes::from(serde_json::to_vec(&body).unwrap_or_default());
+    ctx.capture_outbound("POST", &url, &headers, body_bytes.clone());
     let resp = ctx
       .http
       .post(&url)
-      .headers(self.auth_headers(ctx.stream)?)
-      .json(&body)
+      .headers(headers)
+      .body(body_bytes)
       .send()
       .await
       .context(error::HttpSnafu { what: "zai chat" })?;
@@ -222,6 +225,9 @@ impl Provider for ZaiProvider {
 mod tests {
   use super::*;
   use crate::config::Account as AcctCfg;
+  use crate::provider::{new_outbound_capture, Endpoint, RequestCtx};
+  use axum::http::HeaderMap;
+  use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
   fn acct(provider: &str, key: Option<&str>) -> AcctCfg {
     AcctCfg {
@@ -280,5 +286,51 @@ mod tests {
     });
     let p = ZaiProvider::from_account(&a).unwrap();
     assert_eq!(p.base_url, "https://open.bigmodel.cn/api/paas/v4");
+  }
+
+  #[tokio::test]
+  async fn captures_transformed_outbound_body() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+      let (mut stream, _) = listener.accept().await.unwrap();
+      let mut buf = vec![0_u8; 8192];
+      let n = stream.read(&mut buf).await.unwrap();
+      assert!(String::from_utf8_lossy(&buf[..n]).contains("POST /chat/completions"));
+      stream
+        .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\n{}")
+        .await
+        .unwrap();
+    });
+
+    let mut cfg = acct("zai-coding-plan", Some("sk-test"));
+    cfg.zai = Some(crate::config::ZaiAccountConfig {
+      base_url: Some(format!("http://{addr}")),
+    });
+    let provider = ZaiProvider::from_account(&cfg).unwrap();
+    let http = reqwest::Client::new();
+    let body = serde_json::json!({ "model": "glm-4.6", "messages": [{ "role": "user", "content": "hi" }] });
+    let inbound = HeaderMap::new();
+    let capture = new_outbound_capture();
+    let ctx = RequestCtx {
+      endpoint: Endpoint::ChatCompletions,
+      http: &http,
+      body: &body,
+      stream: false,
+      initiator: "user",
+      inbound_headers: &inbound,
+      behave_as: None,
+      outbound: Some(capture.clone()),
+    };
+    let resp = provider.chat(ctx).await.unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+    server.await.unwrap();
+    let captured = capture.get().expect("captured outbound");
+    let captured_body: Value = serde_json::from_slice(captured.body.as_ref()).unwrap();
+    assert_eq!(captured.method.as_deref(), Some("POST"));
+    assert!(
+      captured_body.get("thinking").is_some(),
+      "body was not transformed: {captured_body}"
+    );
   }
 }

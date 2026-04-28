@@ -88,27 +88,34 @@ pub async fn messages(
   let inbound = Arc::new(inbound);
   let initiator_arc = Arc::new(initiator.clone());
 
-  let DispatchOk { acct, resp } = {
+  let DispatchOk { acct, resp, outbound } = {
     let s_for_closure = s.clone();
-    dispatch(&s, session_id.as_deref(), &model, Endpoint::Messages, move |acct| {
-      let body = body.clone();
-      let inbound = inbound.clone();
-      let initiator_arc = initiator_arc.clone();
-      let behave_as = behave_as_inbound.clone();
-      let http = s_for_closure.http.clone();
-      async move {
-        let ctx = RequestCtx {
-          endpoint: Endpoint::Messages,
-          http: &http,
-          body: &body,
-          stream,
-          initiator: initiator_arc.as_str(),
-          inbound_headers: &inbound,
-          behave_as: behave_as.as_deref().map(|s| s.as_str()),
-        };
-        acct.provider.messages(ctx).await
-      }
-    })
+    dispatch(
+      &s,
+      session_id.as_deref(),
+      &model,
+      Endpoint::Messages,
+      move |acct, capture| {
+        let body = body.clone();
+        let inbound = inbound.clone();
+        let initiator_arc = initiator_arc.clone();
+        let behave_as = behave_as_inbound.clone();
+        let http = s_for_closure.http.clone();
+        async move {
+          let ctx = RequestCtx {
+            endpoint: Endpoint::Messages,
+            http: &http,
+            body: &body,
+            stream,
+            initiator: initiator_arc.as_str(),
+            inbound_headers: &inbound,
+            behave_as: behave_as.as_deref().map(|s| s.as_str()),
+            outbound: Some(capture),
+          };
+          acct.provider.messages(ctx).await
+        }
+      },
+    )
     .await?
   };
 
@@ -124,6 +131,7 @@ pub async fn messages(
         session_id,
         req_headers,
         req_body,
+        outbound,
         started,
       )
       .await,
@@ -140,6 +148,7 @@ pub async fn messages(
         session_id,
         req_headers,
         req_body,
+        outbound,
         started,
       )
       .await,

@@ -14,8 +14,9 @@
 
 use super::error::ApiError;
 use super::AppState;
+use crate::db::OutboundSnapshot;
 use crate::pool::{Account, SessionAcquire};
-use crate::provider::Endpoint;
+use crate::provider::{new_outbound_capture, Endpoint, OutboundCapture};
 use axum::http::StatusCode;
 use std::future::Future;
 use std::sync::Arc;
@@ -26,6 +27,11 @@ const MAX_RETRIES: usize = 2;
 pub(crate) struct DispatchOk {
   pub acct: Arc<Account>,
   pub resp: reqwest::Response,
+  /// The outbound snapshot captured by the provider during the *successful*
+  /// attempt, if any. `None` if the provider didn't call
+  /// `RequestCtx::capture_outbound` (e.g. it returned `Err` before reaching
+  /// `.send()`).
+  pub outbound: Option<OutboundSnapshot>,
 }
 
 /// Run up to `MAX_RETRIES + 1` attempts of `send` against accounts the pool
@@ -43,7 +49,7 @@ pub(crate) async fn dispatch<F, Fut>(
   send: F,
 ) -> Result<DispatchOk, ApiError>
 where
-  F: Fn(Arc<Account>) -> Fut,
+  F: Fn(Arc<Account>, OutboundCapture) -> Fut,
   Fut: Future<Output = crate::provider::Result<reqwest::Response>>,
 {
   let mut last_err: Option<(StatusCode, String)> = None;
@@ -76,9 +82,10 @@ where
       status = tracing::field::Empty,
     );
 
+    let capture = new_outbound_capture();
     let result = async {
       debug!("sending upstream request");
-      send(acct.clone()).await
+      send(acct.clone(), capture.clone()).await
     }
     .instrument(attempt_span.clone())
     .await;
@@ -115,9 +122,96 @@ where
     if let Some(id) = session_id {
       state.pool.record_session(id, &acct.id);
     }
-    return Ok(DispatchOk { acct, resp });
+    let outbound = capture.get().cloned();
+    return Ok(DispatchOk { acct, resp, outbound });
   }
 
   let (status, msg) = last_err.unwrap_or((StatusCode::BAD_GATEWAY, "all attempts failed".into()));
   Err(ApiError::upstream(status, msg))
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::config::{Account as AccountCfg, Config, ZaiAccountConfig};
+  use crate::server::build_state;
+  use crate::util::secret::Secret;
+  use bytes::Bytes;
+  use std::sync::atomic::{AtomicUsize, Ordering};
+  use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+  #[tokio::test]
+  async fn returns_outbound_from_last_successful_attempt() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+      for status in [500, 200] {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut buf = vec![0_u8; 1024];
+        let _ = stream.read(&mut buf).await.unwrap();
+        let line = if status == 200 {
+          "HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\n{}"
+        } else {
+          "HTTP/1.1 500 Internal Server Error\r\ncontent-length: 4\r\n\r\nfail"
+        };
+        stream.write_all(line.as_bytes()).await.unwrap();
+      }
+    });
+
+    let mut cfg = Config::default();
+    cfg.accounts.push(AccountCfg {
+      id: "acct".into(),
+      provider: "zai-coding-plan".into(),
+      github_token: None,
+      api_token: None,
+      api_token_expires_at: None,
+      api_key: Some(Secret::new("sk-test".into())),
+      copilot: None,
+      zai: Some(ZaiAccountConfig { base_url: None }),
+      behave_as: None,
+    });
+    cfg.db.enabled = false;
+    let state = build_state(&cfg).unwrap();
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let url = format!("http://{addr}/probe");
+    let http = state.http.clone();
+    let result = dispatch(&state, None, "", Endpoint::ChatCompletions, {
+      let attempts = attempts.clone();
+      let url = url.clone();
+      let http = http.clone();
+      move |_acct, capture| {
+        let attempts = attempts.clone();
+        let url = url.clone();
+        let http = http.clone();
+        async move {
+          let n = attempts.fetch_add(1, Ordering::SeqCst) + 1;
+          let mut headers = reqwest::header::HeaderMap::new();
+          headers.insert(
+            "x-attempt",
+            reqwest::header::HeaderValue::from_str(&n.to_string()).unwrap(),
+          );
+          let _ = capture.set(crate::db::OutboundSnapshot {
+            method: Some("POST".into()),
+            url: Some(url.clone()),
+            status: None,
+            headers,
+            body: Bytes::from(format!("attempt-{n}")),
+          });
+          http
+            .get(&url)
+            .send()
+            .await
+            .map_err(|source| crate::provider::error::Error::Http {
+              what: "dispatch test",
+              source,
+            })
+        }
+      }
+    })
+    .await
+    .unwrap();
+    server.await.unwrap();
+    assert_eq!(result.resp.status(), StatusCode::OK);
+    assert_eq!(result.outbound.unwrap().body.as_ref(), b"attempt-2");
+  }
 }

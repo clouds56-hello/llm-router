@@ -11,10 +11,11 @@
 //! models).
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use reqwest::header::HeaderMap;
 use serde::Serialize;
 use serde_json::Value;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 pub mod error;
 pub mod github_copilot;
@@ -191,6 +192,35 @@ pub struct RequestCtx<'a> {
   /// Persona override from the inbound `X-Behave-As` request header, if any.
   /// Takes precedence over config-file `behave_as` settings.
   pub behave_as: Option<&'a str>,
+  /// Optional one-shot slot for capturing the actual outbound HTTP request
+  /// (post-transform, post-auth) for forensic logging in
+  /// `requests/YYYY-MM-DD.db`. Providers fill this just before `.send()`.
+  pub outbound: Option<OutboundCapture>,
+}
+
+impl RequestCtx<'_> {
+  /// Record the outbound request snapshot if the dispatcher allocated a
+  /// slot. Subsequent calls within the same attempt are ignored
+  /// (`OnceLock` semantics).
+  pub fn capture_outbound(&self, method: &str, url: &str, headers: &HeaderMap, body: Bytes) {
+    if let Some(slot) = self.outbound.as_ref() {
+      let _ = slot.set(crate::db::OutboundSnapshot {
+        method: Some(method.to_string()),
+        url: Some(url.to_string()),
+        status: None,
+        headers: headers.clone(),
+        body,
+      });
+    }
+  }
+}
+
+/// Slot for a captured outbound request. Allocated per dispatch attempt;
+/// only the slot from the last successful attempt is persisted.
+pub type OutboundCapture = Arc<OnceLock<crate::db::OutboundSnapshot>>;
+
+pub fn new_outbound_capture() -> OutboundCapture {
+  Arc::new(OnceLock::new())
 }
 
 #[async_trait]
