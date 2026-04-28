@@ -15,6 +15,7 @@
 //! (Claude Code, opencode) rely on.
 
 pub mod models;
+pub mod quota;
 pub mod transform;
 
 use crate::config::Account;
