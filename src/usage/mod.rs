@@ -74,10 +74,12 @@ impl UsageDb {
       .exists([])
       .context(MigrateSnafu)?;
     if !has_init {
+      tracing::info!("usage db migration: adding 'initiator' column");
       conn
         .execute_batch("ALTER TABLE requests ADD COLUMN initiator TEXT NOT NULL DEFAULT 'user';")
         .context(MigrateSnafu)?;
     }
+    tracing::debug!(path = %path.display(), "usage db opened");
     Ok(Self { conn: Mutex::new(conn) })
   }
 

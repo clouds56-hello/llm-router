@@ -55,7 +55,10 @@ impl Profiles {
   /// the embedded set rather than crashing the daemon.
   pub fn global() -> &'static Profiles {
     GLOBAL.get_or_init(|| match Self::load() {
-      Ok(p) => p,
+      Ok(p) => {
+        tracing::debug!(personas = p.table.len(), "profiles registry loaded");
+        p
+      }
       Err(e) => {
         tracing::warn!(error = %e, "failed to load profiles; using embedded only");
         Self::parse(EMBEDDED).unwrap_or_default()

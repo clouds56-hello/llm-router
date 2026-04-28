@@ -83,9 +83,22 @@ pub fn global_with_source() -> &'static (Catalogue, Source) {
 }
 
 fn load_global() -> &'static (Catalogue, Source) {
-  GLOBAL.get_or_init(|| match try_disk_cache() {
-    Some((c, p)) => (c, Source::DiskCache(p)),
-    None => (parse_embedded(), Source::Embedded),
+  GLOBAL.get_or_init(|| {
+    let (cat, src) = match try_disk_cache() {
+      Some((c, p)) => (c, Source::DiskCache(p)),
+      None => (parse_embedded(), Source::Embedded),
+    };
+    let providers = cat.len();
+    let models: usize = cat.values().map(|p| p.models.len()).sum();
+    match &src {
+      Source::DiskCache(p) => {
+        tracing::info!(source = "disk_cache", path = %p.display(), providers, models, "models.dev catalogue loaded");
+      }
+      Source::Embedded => {
+        tracing::info!(source = "embedded", providers, models, "models.dev catalogue loaded");
+      }
+    }
+    (cat, src)
   })
 }
 
@@ -124,14 +137,17 @@ pub struct UpdateReport {
 /// The fetched bytes must:
 ///   * parse as our [`Catalogue`] schema, and
 ///   * contain at least one provider (defends against silent empty payloads).
+#[tracing::instrument(name = "catalogue_update", skip_all, fields(%url, status = tracing::field::Empty, providers = tracing::field::Empty, models = tracing::field::Empty, bytes = tracing::field::Empty))]
 pub async fn fetch_and_persist(http: &reqwest::Client, url: &str) -> Result<UpdateReport> {
   let started = Instant::now();
+  tracing::debug!("fetching catalogue");
   let resp = http
     .get(url)
     .send()
     .await
     .context(FetchSnafu { url: url.to_string() })?;
   let status = resp.status();
+  tracing::Span::current().record("status", status.as_u16());
   let body = resp
     .bytes()
     .await
@@ -145,6 +161,10 @@ pub async fn fetch_and_persist(http: &reqwest::Client, url: &str) -> Result<Upda
     return EmptyCatalogueSnafu { url: url.to_string() }.fail();
   }
   let models: usize = parsed.values().map(|p| p.models.len()).sum();
+  let span = tracing::Span::current();
+  span.record("providers", parsed.len());
+  span.record("models", models);
+  span.record("bytes", body.len() as u64);
 
   let path = cache_path().ok_or(Error::NoCacheDir)?;
   if let Some(parent) = path.parent() {
@@ -155,6 +175,7 @@ pub async fn fetch_and_persist(http: &reqwest::Client, url: &str) -> Result<Upda
   let tmp = path.with_extension("json.tmp");
   std::fs::write(&tmp, &body).context(WriteSnafu { path: tmp.clone() })?;
   std::fs::rename(&tmp, &path).context(RenameSnafu { path: path.clone() })?;
+  tracing::info!(path = %path.display(), providers = parsed.len(), models, "catalogue updated");
 
   Ok(UpdateReport {
     providers: parsed.len(),

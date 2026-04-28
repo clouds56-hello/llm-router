@@ -131,6 +131,7 @@ fn cmd_set(path: &std::path::Path, args: SetArgs) -> Result<()> {
     }
     Ok(())
   })?;
+  tracing::info!(key = %args.key, account = ?args.account, add = args.add, "config set");
   println!("set {}", args.key);
   Ok(())
 }
@@ -192,6 +193,7 @@ fn cmd_unset(path: &std::path::Path, args: UnsetArgs) -> Result<()> {
     }
     Ok(())
   })?;
+  tracing::info!(key = %args.key, account = ?args.account, "config unset");
   println!("unset {}", args.key);
   Ok(())
 }

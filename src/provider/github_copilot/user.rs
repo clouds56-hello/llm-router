@@ -8,9 +8,11 @@
 
 use crate::config::CopilotHeaders;
 use crate::provider::{error, Result};
+use crate::util::redact::token_fingerprint;
 use serde::Deserialize;
 use snafu::ResultExt;
 use std::collections::BTreeMap;
+use tracing::{debug, instrument};
 
 const USER_INFO_URL: &str = "https://api.github.com/copilot_internal/user";
 
@@ -58,8 +60,19 @@ pub struct QuotaSnapshot {
 ///
 /// Auth uses the long-lived `github_token` (same credential as
 /// `token::exchange`), not a short-lived api_token.
+#[instrument(
+  name = "copilot_user_info",
+  skip_all,
+  fields(
+    github_token_fp = %token_fingerprint(github_token),
+    status = tracing::field::Empty,
+    plan = tracing::field::Empty,
+    quotas = tracing::field::Empty,
+  ),
+)]
 pub async fn fetch(client: &reqwest::Client, github_token: &str, headers: &CopilotHeaders) -> Result<CopilotUserInfo> {
   let h = super::headers::token_exchange_headers(github_token, headers)?;
+  debug!("fetching copilot user info");
   let resp = client
     .get(USER_INFO_URL)
     .headers(h)
@@ -67,6 +80,7 @@ pub async fn fetch(client: &reqwest::Client, github_token: &str, headers: &Copil
     .await
     .context(error::HttpSnafu { what: "copilot user-info" })?;
   let status = resp.status();
+  tracing::Span::current().record("status", status.as_u16());
   let body = resp.text().await.unwrap_or_default();
   if !status.is_success() {
     return error::HttpStatusSnafu {
@@ -76,8 +90,14 @@ pub async fn fetch(client: &reqwest::Client, github_token: &str, headers: &Copil
     }
     .fail();
   }
-  serde_json::from_str(&body).context(error::JsonSnafu {
+  let parsed: CopilotUserInfo = serde_json::from_str(&body).context(error::JsonSnafu {
     what: "copilot user-info",
     body: body.clone(),
-  })
+  })?;
+  let span = tracing::Span::current();
+  if let Some(p) = parsed.copilot_plan.as_deref() {
+    span.record("plan", p);
+  }
+  span.record("quotas", parsed.quota_snapshots.len());
+  Ok(parsed)
 }

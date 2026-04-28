@@ -1,5 +1,6 @@
 use crate::config::{Account, Config};
 use crate::provider::{ID_GITHUB_COPILOT, ZAI_ALIASES};
+use crate::util::secret::Secret;
 use anyhow::{anyhow, Context, Result};
 use clap::{Args, ValueEnum};
 use serde_json::Value;
@@ -66,8 +67,16 @@ pub async fn run(cfg_path: Option<PathBuf>, args: ImportArgs) -> Result<()> {
   };
 
   let (mut cfg, path) = Config::load(cfg_path.as_deref())?;
+  let provider = account.provider.clone();
   cfg.upsert_account(account);
   cfg.save(&path)?;
+  tracing::info!(
+    account = %args.id,
+    %provider,
+    source = ?args.from,
+    path = %path.display(),
+    "account imported"
+  );
   println!("Saved account '{}' to {}", args.id, path.display());
   Ok(())
 }
@@ -76,7 +85,7 @@ fn copilot_account(id: String, token: String) -> Account {
   Account {
     id,
     provider: ID_GITHUB_COPILOT.into(),
-    github_token: Some(token),
+    github_token: Some(Secret::new(token)),
     api_token: None,
     api_token_expires_at: None,
     api_key: None,
@@ -93,7 +102,7 @@ fn zai_account(id: String, provider: &str, key: String) -> Account {
     github_token: None,
     api_token: None,
     api_token_expires_at: None,
-    api_key: Some(key),
+    api_key: Some(Secret::new(key)),
     copilot: None,
     zai: None,
     behave_as: None,

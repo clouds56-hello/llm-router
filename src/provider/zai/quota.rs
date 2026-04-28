@@ -14,9 +14,11 @@
 //! rather than aborting the whole `account list`.
 
 use crate::provider::{error, Result};
+use crate::util::redact::token_fingerprint;
 use serde::Deserialize;
 use snafu::ResultExt;
 use std::time::Duration;
+use tracing::{debug, instrument};
 
 const PATH: &str = "/api/monitor/usage/quota/limit";
 
@@ -104,8 +106,18 @@ enum RawLimit {
 /// Fetch and classify the quota response. Returns an error if the request
 /// itself failed; a successful 200 with no recognisable buckets yields a
 /// `ZaiQuota` with all fields `None`.
+#[instrument(
+  name = "zai_quota",
+  skip_all,
+  fields(
+    provider = %provider_id,
+    key_fp = %token_fingerprint(api_key),
+    status = tracing::field::Empty,
+  ),
+)]
 pub async fn fetch(http: &reqwest::Client, provider_id: &str, api_key: &str) -> Result<ZaiQuota> {
   let url = format!("{}{PATH}", host_for(provider_id));
+  debug!(%url, "GET zai quota");
   let resp = http
     .get(&url)
     .timeout(Duration::from_secs(5))
@@ -117,6 +129,7 @@ pub async fn fetch(http: &reqwest::Client, provider_id: &str, api_key: &str) -> 
     .context(error::HttpSnafu { what: "zai quota" })?;
 
   let status = resp.status();
+  tracing::Span::current().record("status", status.as_u16());
   let body = resp.text().await.unwrap_or_default();
   if !status.is_success() {
     return error::HttpStatusSnafu {

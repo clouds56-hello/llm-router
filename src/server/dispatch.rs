@@ -19,6 +19,7 @@ use crate::provider::Endpoint;
 use axum::http::StatusCode;
 use std::future::Future;
 use std::sync::Arc;
+use tracing::{debug, info_span, warn, Instrument};
 
 const MAX_RETRIES: usize = 2;
 
@@ -51,16 +52,31 @@ where
       // No account in the pool advertises this endpoint at all — this
       // is a configuration / capability mismatch, not a transient
       // failure, so don't retry.
+      warn!(%endpoint, %model, attempt, "no account supports endpoint/model");
       return Err(ApiError::not_implemented(endpoint.to_string(), model.to_string()));
     };
 
-    let resp = match send(acct.clone()).await {
+    let attempt_span = info_span!(
+      "attempt",
+      attempt,
+      account = %acct.id,
+      provider = %acct.provider.info().id,
+      %endpoint,
+      %model,
+      status = tracing::field::Empty,
+    );
+
+    let result = async {
+      debug!("sending upstream request");
+      send(acct.clone()).await
+    }
+    .instrument(attempt_span.clone())
+    .await;
+
+    let resp = match result {
       Ok(r) => r,
       Err(e) => {
-        tracing::warn!(
-            account = %acct.id, attempt, %endpoint, error = %e,
-            "provider request failed"
-        );
+        warn!(parent: &attempt_span, error = %e, "provider request failed");
         acct.mark_failure(state.pool.cooldown_base());
         last_err = Some((StatusCode::BAD_GATEWAY, e.to_string()));
         continue;
@@ -68,27 +84,23 @@ where
     };
 
     let status = resp.status();
+    attempt_span.record("status", status.as_u16());
 
     if status == StatusCode::UNAUTHORIZED {
-      tracing::warn!(
-          account = %acct.id, attempt, %endpoint,
-          "401 from upstream; refreshing creds"
-      );
+      warn!(parent: &attempt_span, "401 from upstream; refreshing creds");
       acct.invalidate_credentials();
       last_err = Some((status, "unauthorized".into()));
       continue;
     }
     if status == StatusCode::TOO_MANY_REQUESTS || status == StatusCode::FORBIDDEN || status.is_server_error() {
       let body_text = resp.text().await.unwrap_or_default();
-      tracing::warn!(
-          account = %acct.id, attempt, %endpoint, %status, body = %body_text,
-          "upstream error; cooldown"
-      );
+      warn!(parent: &attempt_span, %status, body = %body_text, "upstream error; cooldown");
       acct.mark_failure(state.pool.cooldown_base());
       last_err = Some((status, body_text));
       continue;
     }
 
+    debug!(parent: &attempt_span, "upstream accepted");
     acct.mark_success();
     return Ok(DispatchOk { acct, resp });
   }

@@ -7,6 +7,8 @@ pub mod token;
 pub mod user;
 
 use crate::config::{Account, CopilotHeaders, InitiatorMode};
+use crate::util::redact::{token_fingerprint, BehaveAs};
+use crate::util::secret::Secret;
 use async_trait::async_trait;
 use parking_lot::RwLock;
 use reqwest::header::HeaderMap;
@@ -14,6 +16,7 @@ use serde_json::Value;
 use snafu::ResultExt;
 use std::sync::OnceLock;
 use tokio::sync::Mutex as AsyncMutex;
+use tracing::{debug, instrument, warn};
 
 use super::{error, AuthKind, Endpoint, Provider, ProviderInfo, RequestCtx, Result};
 
@@ -24,14 +27,14 @@ pub const TOKEN_EXCHANGE_URL: &str = "https://api.github.com/copilot_internal/v2
 
 /// Cached short-lived API token state.
 struct ApiToken {
-  token: Option<String>,
+  token: Option<Secret<String>>,
   expires_at: Option<i64>,
 }
 
 pub struct CopilotProvider {
   #[allow(dead_code)]
   pub id: String,
-  pub github_token: String,
+  pub github_token: Secret<String>,
   pub headers: CopilotHeaders,
   refresh_lock: AsyncMutex<()>,
   cache: RwLock<ApiToken>,
@@ -73,36 +76,49 @@ impl CopilotProvider {
     })
   }
 
-  fn snapshot(&self) -> (Option<String>, Option<i64>) {
+  fn snapshot(&self) -> (Option<Secret<String>>, Option<i64>) {
     let g = self.cache.read();
     (g.token.clone(), g.expires_at)
   }
 
   /// Ensure we have a non-expired Copilot API token; refresh if needed.
-  pub async fn ensure_api_token(&self, http: &reqwest::Client) -> Result<String> {
+  #[instrument(name = "ensure_api_token", skip_all, fields(account = %self.id, refreshed = tracing::field::Empty, fp = tracing::field::Empty))]
+  pub async fn ensure_api_token(&self, http: &reqwest::Client) -> Result<Secret<String>> {
     const SKEW_SECS: i64 = 300;
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
     if let (Some(tok), Some(exp)) = self.snapshot() {
       if exp - SKEW_SECS > now {
+        let span = tracing::Span::current();
+        span.record("refreshed", false);
+        span.record("fp", tracing::field::display(token_fingerprint(tok.expose())));
         return Ok(tok);
       }
     }
     let _g = self.refresh_lock.lock().await;
     if let (Some(tok), Some(exp)) = self.snapshot() {
       if exp - SKEW_SECS > now {
+        let span = tracing::Span::current();
+        span.record("refreshed", false);
+        span.record("fp", tracing::field::display(token_fingerprint(tok.expose())));
         return Ok(tok);
       }
     }
-    let resp = token::exchange(http, &self.github_token, &self.headers).await?;
+    debug!("api token expired or missing; refreshing");
+    let resp = token::exchange(http, self.github_token.expose(), &self.headers).await?;
+    let token = Secret::new(resp.token);
     {
       let mut g = self.cache.write();
-      g.token = Some(resp.token.clone());
+      g.token = Some(token.clone());
       g.expires_at = Some(resp.expires_at);
     }
-    Ok(resp.token)
+    let span = tracing::Span::current();
+    span.record("refreshed", true);
+    span.record("fp", tracing::field::display(token_fingerprint(token.expose())));
+    Ok(token)
   }
 
   fn invalidate_api_token(&self) {
+    debug!(account = %self.id, "invalidating cached copilot api token");
     let mut g = self.cache.write();
     g.token = None;
     g.expires_at = None;
@@ -121,7 +137,7 @@ impl CopilotProvider {
     }
     let profiles = crate::provider::profiles::Profiles::global();
     let Some(resolved) = profiles.resolve(persona, super::ID_GITHUB_COPILOT) else {
-      tracing::warn!(persona, "unknown inbound X-Behave-As persona; ignoring");
+      warn!(persona, "unknown inbound X-Behave-As persona; ignoring");
       return self.headers.clone();
     };
     crate::provider::profiles::warn_if_unverified(persona, super::ID_GITHUB_COPILOT, &resolved);
@@ -207,7 +223,7 @@ impl Provider for CopilotProvider {
 
   async fn list_models(&self, http: &reqwest::Client) -> Result<Value> {
     let token = self.ensure_api_token(http).await?;
-    models::list(http, &token, &self.headers).await
+    models::list(http, token.expose(), &self.headers).await
   }
 
   async fn chat(&self, ctx: RequestCtx<'_>) -> Result<reqwest::Response> {
@@ -233,6 +249,18 @@ impl CopilotProvider {
   /// context — auth, header construction, persona, and initiator handling
   /// are identical because Copilot proxies all three on the same host with
   /// the same auth scheme.
+  #[instrument(
+    name = "copilot_upstream",
+    skip_all,
+    fields(
+      account = %self.id,
+      what,
+      path,
+      stream = ctx.stream,
+      behave_as = %BehaveAs(ctx.behave_as),
+      initiator = tracing::field::Empty,
+    ),
+  )]
   async fn upstream_post(&self, ctx: RequestCtx<'_>, path: &str, what: &'static str) -> Result<reqwest::Response> {
     let token = self.ensure_api_token(ctx.http).await?;
     let initiator = match ctx.endpoint {
@@ -242,9 +270,11 @@ impl CopilotProvider {
       Endpoint::Responses => self.resolve_initiator_responses(ctx.body, ctx.inbound_headers, ctx.initiator),
       _ => self.resolve_initiator(ctx.body, ctx.inbound_headers, ctx.initiator),
     };
+    tracing::Span::current().record("initiator", initiator.as_str());
     let headers = self.headers_for_request(ctx.behave_as);
-    let h = headers::copilot_request_headers(&token, &headers, ctx.stream, &initiator)?;
+    let h = headers::copilot_request_headers(token.expose(), &headers, ctx.stream, &initiator)?;
     let url = format!("{COPILOT_API}{path}");
+    debug!(%url, "POST upstream");
     let resp = ctx
       .http
       .post(&url)
@@ -253,6 +283,7 @@ impl CopilotProvider {
       .send()
       .await
       .context(error::HttpSnafu { what })?;
+    debug!(status = %resp.status(), "upstream returned");
     Ok(resp)
   }
 

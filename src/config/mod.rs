@@ -60,13 +60,13 @@ struct AccountRaw {
   #[serde(default = "default_provider")]
   provider: String,
   #[serde(default)]
-  github_token: Option<String>,
+  github_token: Option<crate::util::secret::Secret<String>>,
   #[serde(default)]
-  api_token: Option<String>,
+  api_token: Option<crate::util::secret::Secret<String>>,
   #[serde(default)]
   api_token_expires_at: Option<i64>,
   #[serde(default)]
-  api_key: Option<String>,
+  api_key: Option<crate::util::secret::Secret<String>>,
   #[serde(default)]
   copilot: Option<CopilotHeadersRaw>,
   #[serde(default)]
@@ -387,16 +387,16 @@ pub struct Account {
   pub provider: String,
   /// GitHub OAuth token (github-copilot provider only).
   #[serde(default)]
-  pub github_token: Option<String>,
+  pub github_token: Option<crate::util::secret::Secret<String>>,
   /// Cached short-lived Copilot API token; written back by the daemon.
   #[serde(default)]
-  pub api_token: Option<String>,
+  pub api_token: Option<crate::util::secret::Secret<String>>,
   /// Unix seconds when `api_token` expires.
   #[serde(default)]
   pub api_token_expires_at: Option<i64>,
   /// Static long-lived API key (zai/zhipuai providers).
   #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub api_key: Option<String>,
+  pub api_key: Option<crate::util::secret::Secret<String>>,
   /// Optional per-account header overrides (github-copilot provider only).
   #[serde(default)]
   pub copilot: Option<CopilotHeaders>,
@@ -576,7 +576,12 @@ impl Config {
         return error::MissingGithubTokenSnafu { id: a.id.clone() }.fail();
       }
       if crate::provider::ZAI_ALIASES.contains(&a.provider.as_str())
-        && a.api_key.as_deref().map(str::trim).unwrap_or("").is_empty()
+        && a
+          .api_key
+          .as_ref()
+          .map(|s| s.expose().trim())
+          .unwrap_or("")
+          .is_empty()
       {
         return error::MissingApiKeySnafu {
           id: a.id.clone(),
@@ -585,6 +590,11 @@ impl Config {
         .fail();
       }
     }
+    tracing::debug!(
+      path = %path.display(),
+      accounts = cfg.accounts.len(),
+      "config loaded"
+    );
     Ok((cfg, path))
   }
 
@@ -593,7 +603,9 @@ impl Config {
       std::fs::create_dir_all(parent).context(error::CreateDirSnafu { path: parent.to_path_buf() })?;
     }
     let toml = toml::to_string_pretty(self).context(error::SerializeSnafu)?;
-    write_atomic(path, &toml)
+    write_atomic(path, &toml)?;
+    tracing::debug!(path = %path.display(), "config saved");
+    Ok(())
   }
 
   /// Apply an in-place edit to the config TOML, preserving user comments and

@@ -1,6 +1,7 @@
 use crate::config::{Account, Config};
 use crate::provider::{ID_GITHUB_COPILOT, ZAI_ALIASES};
 use crate::util::http::build_client;
+use crate::util::secret::Secret;
 use crate::util::timefmt::{relative_from_now, relative_from_now_ms};
 use anyhow::{anyhow, Result};
 use clap::Subcommand;
@@ -38,6 +39,7 @@ pub async fn run(cfg_path: Option<PathBuf>, cmd: AccountCmd) -> Result<()> {
         return Err(anyhow!("no account with id '{id}'"));
       }
       cfg.save(&path)?;
+      tracing::info!(account = %id, remaining = cfg.accounts.len(), "account removed");
       println!("Removed '{id}'");
     }
     AccountCmd::Show { id } => show(&cfg, &id)?,
@@ -75,8 +77,13 @@ async fn list(cfg: &mut Config, cfg_path: &std::path::Path, args: ListArgs) -> R
   let mut dirty = false;
   for (a, q) in cfg.accounts.iter_mut().zip(quotas.iter()) {
     if let QuotaResult::Copilot(c) = q {
-      if a.api_token.as_deref() != Some(c.fresh_token.as_str()) || a.api_token_expires_at != Some(c.fresh_expires_at) {
-        a.api_token = Some(c.fresh_token.clone());
+      let same_tok = a
+        .api_token
+        .as_ref()
+        .map(|s| s.expose().as_str() == c.fresh_token.as_str())
+        .unwrap_or(false);
+      if !same_tok || a.api_token_expires_at != Some(c.fresh_expires_at) {
+        a.api_token = Some(Secret::new(c.fresh_token.clone()));
         a.api_token_expires_at = Some(c.fresh_expires_at);
         dirty = true;
       }
@@ -136,8 +143,8 @@ async fn fetch_quota(http: reqwest::Client, account: Account, timeout: Duration)
     let h2 = headers.clone();
     let fut = async move {
       let (tok, info) = tokio::join!(
-        crate::provider::github_copilot::token::exchange(&http, &gh, &headers),
-        crate::provider::github_copilot::user::fetch(&http2, &gh2, &h2),
+        crate::provider::github_copilot::token::exchange(&http, gh.expose(), &headers),
+        crate::provider::github_copilot::user::fetch(&http2, gh2.expose(), &h2),
       );
       (tok, info)
     };
@@ -170,7 +177,7 @@ async fn fetch_quota(http: reqwest::Client, account: Account, timeout: Duration)
       return QuotaResult::None;
     };
     let provider = account.provider.clone();
-    let fut = async move { crate::provider::zai::quota::fetch(&http, &provider, &key).await };
+    let fut = async move { crate::provider::zai::quota::fetch(&http, &provider, key.expose()).await };
     return match tokio::time::timeout(timeout, fut).await {
       Err(_) => QuotaResult::Err("timeout".into()),
       Ok(Err(e)) => QuotaResult::Err(short_err(&e)),
@@ -350,14 +357,20 @@ fn show(cfg: &Config, id: &str) -> Result<()> {
     .ok_or_else(|| anyhow!("no account with id '{id}'"))?;
   println!("id: {}", a.id);
   println!("provider: {}", a.provider);
-  if let Some(gh) = a.github_token.as_deref() {
+  if let Some(gh) = a.github_token.as_ref().map(|s| s.expose()) {
     println!("github_token: {}…", &gh[..gh.len().min(7)]);
   }
-  if let Some(k) = a.api_key.as_deref() {
+  if let Some(k) = a.api_key.as_ref().map(|s| s.expose()) {
     println!("api_key: {}", mask(k));
   }
   if a.api_token.is_some() || a.api_token_expires_at.is_some() {
-    println!("api_token: {}", a.api_token.as_deref().map(mask).unwrap_or("-".into()));
+    println!(
+      "api_token: {}",
+      a.api_token
+        .as_ref()
+        .map(|s| mask(s.expose()))
+        .unwrap_or_else(|| "-".into())
+    );
     match a.api_token_expires_at {
       Some(ts) => println!("api_token_expires_at: {ts} ({})", relative_from_now(ts)),
       None => println!("api_token_expires_at: -"),

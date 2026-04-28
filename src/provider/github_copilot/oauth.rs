@@ -3,9 +3,11 @@
 //! Reference: https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow
 
 use crate::provider::{error, Result};
+use crate::util::redact::token_fingerprint;
 use serde::Deserialize;
 use snafu::ResultExt;
 use std::time::Duration;
+use tracing::{debug, info, instrument, warn};
 
 /// VS Code Copilot Chat client ID. Public, well-known.
 pub const COPILOT_CLIENT_ID: &str = "Iv1.b507a08c87ecfe98";
@@ -37,7 +39,9 @@ struct TokenOk {
   scope: Option<String>,
 }
 
+#[instrument(name = "device_code", skip_all, fields(status = tracing::field::Empty))]
 pub async fn request_device_code(client: &reqwest::Client) -> Result<DeviceCode> {
+  debug!("requesting GitHub device code");
   let resp = client
     .post(DEVICE_CODE_URL)
     .header("accept", "application/json")
@@ -46,6 +50,7 @@ pub async fn request_device_code(client: &reqwest::Client) -> Result<DeviceCode>
     .await
     .context(error::HttpSnafu { what: "device code" })?;
   let status = resp.status();
+  tracing::Span::current().record("status", status.as_u16());
   let body = resp.text().await.unwrap_or_default();
   if !status.is_success() {
     return error::HttpStatusSnafu {
@@ -55,21 +60,42 @@ pub async fn request_device_code(client: &reqwest::Client) -> Result<DeviceCode>
     }
     .fail();
   }
-  serde_json::from_str(&body).context(error::JsonSnafu {
+  let dc: DeviceCode = serde_json::from_str(&body).context(error::JsonSnafu {
     what: "device code",
     body: body.clone(),
-  })
+  })?;
+  info!(
+    user_code = %dc.user_code,
+    verification_uri = %dc.verification_uri,
+    expires_in = dc.expires_in,
+    "GitHub device code issued"
+  );
+  Ok(dc)
 }
 
+#[instrument(
+  name = "oauth_poll",
+  skip_all,
+  fields(
+    user_code = %dc.user_code,
+    interval = dc.interval,
+    expires_in = dc.expires_in,
+    polls = tracing::field::Empty,
+    token_fp = tracing::field::Empty,
+  ),
+)]
 pub async fn poll_for_token(client: &reqwest::Client, dc: &DeviceCode) -> Result<String> {
   let mut interval = Duration::from_secs(dc.interval.max(1));
   let deadline = std::time::Instant::now() + Duration::from_secs(dc.expires_in);
+  let mut polls: u64 = 0;
 
   loop {
     if std::time::Instant::now() >= deadline {
+      warn!(polls, "device code expired before authorization");
       return error::DeviceCodeExpiredSnafu.fail();
     }
     tokio::time::sleep(interval).await;
+    polls += 1;
 
     let resp = client
       .post(ACCESS_TOKEN_URL)
@@ -86,30 +112,43 @@ pub async fn poll_for_token(client: &reqwest::Client, dc: &DeviceCode) -> Result
 
     if let Ok(ok) = serde_json::from_str::<TokenOk>(&body) {
       if !ok.access_token.is_empty() {
-        tracing::debug!(
-            token_type = ?ok.token_type, scope = ?ok.scope, "received access token"
-        );
+        let span = tracing::Span::current();
+        span.record("polls", polls);
+        span.record("token_fp", tracing::field::display(token_fingerprint(&ok.access_token)));
+        info!(token_type = ?ok.token_type, scope = ?ok.scope, polls, "received GitHub access token");
         return Ok(ok.access_token);
       }
     }
     if let Ok(p) = serde_json::from_str::<TokenPending>(&body) {
       match p.error.as_str() {
-        "authorization_pending" => {}
-        "slow_down" => {
-          interval = Duration::from_secs(p.interval.unwrap_or(interval.as_secs() + 5));
+        "authorization_pending" => {
+          debug!(polls, "authorization still pending");
         }
-        "expired_token" => return error::DeviceCodeExpiredSnafu.fail(),
-        "access_denied" => return error::AccessDeniedSnafu.fail(),
+        "slow_down" => {
+          let next = p.interval.unwrap_or(interval.as_secs() + 5);
+          debug!(polls, slow_to_secs = next, "slow_down from upstream");
+          interval = Duration::from_secs(next);
+        }
+        "expired_token" => {
+          warn!(polls, "upstream reports device token expired");
+          return error::DeviceCodeExpiredSnafu.fail();
+        }
+        "access_denied" => {
+          warn!(polls, "user denied authorization");
+          return error::AccessDeniedSnafu.fail();
+        }
         other => {
+          warn!(polls, code = %other, "unexpected oauth error");
           return error::OAuthSnafu {
             code: other.to_string(),
             body,
           }
-          .fail()
+          .fail();
         }
       }
       continue;
     }
+    warn!(polls, "unparseable oauth response");
     return error::OAuthUnexpectedSnafu { body }.fail();
   }
 }

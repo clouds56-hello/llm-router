@@ -8,6 +8,7 @@ use snafu::{ResultExt, Snafu};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tracing::{debug, info, warn};
 
 /// Errors that can occur while constructing or querying an [`AccountPool`].
 ///
@@ -56,11 +57,19 @@ impl Account {
     let mult = 1u32 << (g.consecutive_failures.min(5) - 1);
     let cd = cooldown_base.saturating_mul(mult);
     g.cooldown_until = Some(Instant::now() + cd);
-    tracing::warn!(account = %self.id, retry_in_secs = cd.as_secs(), "account in cooldown");
+    warn!(
+      account = %self.id,
+      retry_in_secs = cd.as_secs(),
+      consecutive_failures = g.consecutive_failures,
+      "account in cooldown"
+    );
   }
 
   pub fn mark_success(&self) {
     let mut g = self.inner.write();
+    if g.consecutive_failures > 0 {
+      debug!(account = %self.id, recovered_after = g.consecutive_failures, "account recovered");
+    }
     g.consecutive_failures = 0;
     g.cooldown_until = None;
   }
@@ -68,6 +77,7 @@ impl Account {
   /// Notify the underlying provider that an upstream 401 happened so it can
   /// drop any cached short-lived credential.
   pub fn invalidate_credentials(&self) {
+    debug!(account = %self.id, "invalidating credentials due to upstream 401");
     self.provider.on_unauthorized();
   }
 }
@@ -87,6 +97,7 @@ impl AccountPool {
     for a in &cfg.accounts {
       let p = provider::build_for_account(a, &cfg.copilot)
         .context(BuildAccountSnafu { id: a.id.clone() })?;
+      debug!(account = %a.id, provider = %p.info().id, "pool: built account");
       accounts.push(Arc::new(Account {
         id: a.id.clone(),
         provider: p,
@@ -96,6 +107,11 @@ impl AccountPool {
         }),
       }));
     }
+    info!(
+      accounts = accounts.len(),
+      cooldown_base_secs = cfg.pool.failure_cooldown_secs,
+      "account pool initialised"
+    );
     Ok(Arc::new(Self {
       accounts,
       cursor: AtomicUsize::new(0),

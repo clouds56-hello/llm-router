@@ -1,6 +1,7 @@
 use crate::config::{Account, Config, ProxyConfig};
 use crate::provider::{github_copilot as gh, zai, ID_GITHUB_COPILOT, ID_ZAI_CODING_PLAN, ZAI_ALIASES};
 use crate::util::http::build_client;
+use crate::util::secret::Secret;
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
 use std::io::IsTerminal;
@@ -55,8 +56,10 @@ pub async fn run(cfg_path: Option<PathBuf>, args: LoginArgs) -> Result<()> {
   };
 
   let id = account.id.clone();
+  let provider = account.provider.clone();
   cfg.upsert_account(account);
   cfg.save(&path)?;
+  tracing::info!(account = %id, %provider, path = %path.display(), "account saved");
   println!("Saved account '{id}' to {}", path.display());
   Ok(())
 }
@@ -108,8 +111,8 @@ async fn copilot_login(client: &reqwest::Client, cfg: &Config, id_override: Opti
   Ok(Account {
     id,
     provider: ID_GITHUB_COPILOT.into(),
-    github_token: Some(gh_token),
-    api_token: Some(resp.token),
+    github_token: Some(Secret::new(gh_token)),
+    api_token: Some(Secret::new(resp.token)),
     api_token_expires_at: Some(resp.expires_at),
     api_key: None,
     copilot: None,
@@ -148,7 +151,7 @@ async fn zai_login(client: &reqwest::Client, provider_alias: &str, id_override: 
     github_token: None,
     api_token: None,
     api_token_expires_at: None,
-    api_key: Some(key),
+    api_key: Some(Secret::new(key)),
     copilot: None,
     zai: None,
     behave_as: None,

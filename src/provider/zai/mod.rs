@@ -19,10 +19,13 @@ pub mod quota;
 pub mod transform;
 
 use crate::config::Account;
+use crate::util::redact::token_fingerprint;
+use crate::util::secret::Secret;
 use async_trait::async_trait;
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use serde_json::Value;
 use snafu::ResultExt;
+use tracing::{debug, instrument, warn};
 
 use super::{error, AuthKind, ModelInfo, Provider, ProviderInfo, RequestCtx, Result, ZAI_ALIASES};
 
@@ -32,7 +35,7 @@ pub const DEFAULT_BASE_URL: &str = "https://api.z.ai/api/coding/paas/v4";
 
 pub struct ZaiProvider {
   pub id: String,
-  api_key: String,
+  api_key: Secret<String>,
   base_url: String,
   info: ProviderInfo,
 }
@@ -61,7 +64,7 @@ impl ZaiProvider {
     let key = a
       .api_key
       .clone()
-      .filter(|s| !s.trim().is_empty())
+      .filter(|s| !s.expose().trim().is_empty())
       .ok_or(error::Error::MissingCredential {
         account: a.id.clone(),
         what: "api_key",
@@ -92,7 +95,7 @@ impl ZaiProvider {
     let mut m = HeaderMap::new();
     m.insert(
       AUTHORIZATION,
-      HeaderValue::from_str(&format!("Bearer {}", self.api_key))
+      HeaderValue::from_str(&format!("Bearer {}", self.api_key.expose()))
         .context(error::HeaderValueSnafu { name: "authorization" })?,
     );
     m.insert(
@@ -122,8 +125,14 @@ impl Provider for ZaiProvider {
     self.info.default_models.iter().find(|m| m.id == model)
   }
 
+  #[instrument(
+    name = "zai_list_models",
+    skip_all,
+    fields(account = %self.id, key_fp = %token_fingerprint(self.api_key.expose()), status = tracing::field::Empty, count = tracing::field::Empty),
+  )]
   async fn list_models(&self, http: &reqwest::Client) -> Result<Value> {
     let url = format!("{}/models", self.base_url.trim_end_matches('/'));
+    debug!(%url, "GET zai models");
     let resp = http
       .get(&url)
       .headers(self.auth_headers(false)?)
@@ -131,6 +140,7 @@ impl Provider for ZaiProvider {
       .await
       .context(error::HttpSnafu { what: "zai /models" })?;
     let status = resp.status();
+    tracing::Span::current().record("status", status.as_u16());
     let body = resp.text().await.unwrap_or_default();
     if !status.is_success() {
       return error::HttpStatusSnafu {
@@ -151,9 +161,22 @@ impl Provider for ZaiProvider {
       Value::Array(a) => a.clone(),
       _ => Vec::new(),
     };
+    tracing::Span::current().record("count", data.len());
     Ok(serde_json::json!({ "object": "list", "data": data }))
   }
 
+  #[instrument(
+    name = "zai_chat",
+    skip_all,
+    fields(
+      account = %self.id,
+      key_fp = %token_fingerprint(self.api_key.expose()),
+      stream = ctx.stream,
+      model = tracing::field::Empty,
+      reasoning = tracing::field::Empty,
+      status = tracing::field::Empty,
+    ),
+  )]
   async fn chat(&self, ctx: RequestCtx<'_>) -> Result<reqwest::Response> {
     let model_id = ctx.body.get("model").and_then(|v| v.as_str()).unwrap_or("");
     // Reasoning gating: known models drive it explicitly; unknown GLM
@@ -162,10 +185,14 @@ impl Provider for ZaiProvider {
       .model_info(model_id)
       .map(|m| m.capabilities.reasoning)
       .unwrap_or_else(|| model_id.starts_with("glm-"));
+    let span = tracing::Span::current();
+    span.record("model", model_id);
+    span.record("reasoning", reasoning);
 
     let body = transform::shape_request(ctx.body, reasoning);
 
     let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
+    debug!(%url, "POST zai chat");
     let resp = ctx
       .http
       .post(&url)
@@ -174,15 +201,17 @@ impl Provider for ZaiProvider {
       .send()
       .await
       .context(error::HttpSnafu { what: "zai chat" })?;
+    span.record("status", resp.status().as_u16());
     Ok(resp)
   }
 
   fn on_unauthorized(&self) {
     // Static API keys cannot be silently refreshed; the operator must
     // rotate. We log loudly so they notice.
-    tracing::warn!(
-        account = %self.id,
-        "zai upstream returned 401: api_key likely revoked or expired"
+    warn!(
+      account = %self.id,
+      key_fp = %token_fingerprint(self.api_key.expose()),
+      "zai upstream returned 401: api_key likely revoked or expired"
     );
   }
 }
@@ -199,7 +228,7 @@ mod tests {
       github_token: None,
       api_token: None,
       api_token_expires_at: None,
-      api_key: key.map(|s| s.into()),
+      api_key: key.map(|s| Secret::new(s.into())),
       copilot: None,
       zai: None,
       behave_as: None,

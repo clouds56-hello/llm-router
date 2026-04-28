@@ -110,7 +110,7 @@ pub fn init_basic() {
     .try_init();
 }
 
-fn build_filter(cfg: &LoggingConfig, mode: RunMode) -> EnvFilter {
+pub(crate) fn build_filter(cfg: &LoggingConfig, mode: RunMode) -> EnvFilter {
   if let Ok(env) = std::env::var("RUST_LOG") {
     if !env.is_empty() {
       if let Ok(f) = EnvFilter::try_new(&env) {
@@ -165,4 +165,44 @@ fn resolve_logs_dir(cfg: &LoggingConfig) -> Result<PathBuf, String> {
     return Ok(d.clone());
   }
   crate::config::paths::default_logs_dir().map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  /// Run filter-precedence checks sequentially in one `#[test]` because
+  /// they mutate the process-wide `RUST_LOG` env var.
+  #[test]
+  fn filter_precedence_env_then_config_then_default() {
+    let mut cfg = LoggingConfig::default();
+
+    // 1. RUST_LOG wins.
+    std::env::set_var("RUST_LOG", "trace,llm_router=trace");
+    cfg.level = "warn,llm_router=warn".into();
+    let f = build_filter(&cfg, RunMode::Server);
+    assert!(format!("{f}").contains("trace"), "env should win: {f}");
+
+    // 2. Config level wins over RunMode default when env is unset.
+    std::env::remove_var("RUST_LOG");
+    cfg.level = "warn,llm_router=debug".into();
+    let f = build_filter(&cfg, RunMode::Server);
+    let s = format!("{f}");
+    assert!(s.contains("llm_router=debug"), "config should win: {s}");
+
+    // 3. RunMode default applies when both env and config are empty/unset.
+    cfg.level = String::new();
+    let f = build_filter(&cfg, RunMode::ReadOnlyCli);
+    let s = format!("{f}");
+    assert!(s.contains("llm_router=warn"), "run-mode default: {s}");
+
+    // 4. Malformed env directive falls through to config.
+    std::env::set_var("RUST_LOG", "this is not a filter ===");
+    cfg.level = "info,llm_router=info".into();
+    let f = build_filter(&cfg, RunMode::Server);
+    let s = format!("{f}");
+    assert!(s.contains("llm_router=info"), "fallback on bad env: {s}");
+
+    std::env::remove_var("RUST_LOG");
+  }
 }

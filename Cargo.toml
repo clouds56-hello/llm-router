@@ -41,6 +41,7 @@ rpassword = "7"
 inquire = { version = "0.7", default-features = false, features = ["crossterm"] }
 arc-swap = "1"
 notify = "6"
+sha2 = "0.10.9"
 
 [profile.release]
 lto = "thin"

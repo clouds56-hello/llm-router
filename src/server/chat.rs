@@ -4,6 +4,7 @@ use super::forward::{buffered_response, stream_response};
 use super::AppState;
 use crate::provider::github_copilot::headers::classify_initiator;
 use crate::provider::{Endpoint, RequestCtx};
+use crate::util::redact::BehaveAs;
 use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::response::Response;
@@ -11,7 +12,19 @@ use axum::Json;
 use serde_json::Value;
 use std::sync::Arc;
 use std::time::Instant;
+use tracing::{debug, instrument};
 
+#[instrument(
+  name = "chat_completions",
+  skip_all,
+  fields(
+    endpoint = %Endpoint::ChatCompletions,
+    model = tracing::field::Empty,
+    stream = tracing::field::Empty,
+    initiator = tracing::field::Empty,
+    behave_as = tracing::field::Empty,
+  ),
+)]
 pub async fn chat_completions(
   State(s): State<AppState>,
   inbound: HeaderMap,
@@ -23,6 +36,9 @@ pub async fn chat_completions(
     .and_then(|v| v.as_str())
     .unwrap_or("unknown")
     .to_string();
+  let span = tracing::Span::current();
+  span.record("model", model.as_str());
+  span.record("stream", stream);
 
   // Pre-classify; providers may override based on their own config.
   let initiator: String = match inbound.get("x-initiator").and_then(|v| v.to_str().ok()) {
@@ -43,6 +59,13 @@ pub async fn chat_completions(
     .map(|s| s.trim().to_string())
     .filter(|s| !s.is_empty())
     .map(Arc::new);
+
+  span.record("initiator", initiator.as_str());
+  span.record(
+    "behave_as",
+    tracing::field::display(BehaveAs(behave_as_inbound.as_deref().map(|s| s.as_str()))),
+  );
+  debug!("dispatching chat completion");
 
   let started = Instant::now();
 

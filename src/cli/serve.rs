@@ -44,7 +44,6 @@ pub async fn run(cfg_path: Option<PathBuf>, args: ServeArgs) -> Result<()> {
     .with_context(|| format!("bind {addr}"))?;
 
   tracing::info!(%addr, accounts = n, "llm-router listening");
-  println!("llm-router listening on http://{addr}  (accounts: {n})");
 
   axum::serve(listener, app).await?;
   Ok(())
