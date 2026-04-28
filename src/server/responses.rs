@@ -1,8 +1,15 @@
+//! `POST /v1/responses` — OpenAI Responses API passthrough.
+//!
+//! No translation: the inbound JSON body is forwarded verbatim to whichever
+//! provider in the pool natively speaks `/responses` for the requested model
+//! (today: GitHub Copilot for the gpt-5 / o-series families). If no
+//! configured account supports the endpoint, the dispatcher returns 501.
+
 use super::dispatch::{dispatch, DispatchOk};
 use super::error::ApiError;
 use super::forward::{buffered_response, stream_response};
 use super::AppState;
-use crate::provider::github_copilot::headers::classify_initiator;
+use crate::provider::github_copilot::headers::classify_initiator_responses;
 use crate::provider::{Endpoint, RequestCtx};
 use axum::extract::State;
 use axum::http::HeaderMap;
@@ -12,7 +19,7 @@ use serde_json::Value;
 use std::sync::Arc;
 use std::time::Instant;
 
-pub async fn chat_completions(
+pub async fn responses(
     State(s): State<AppState>,
     inbound: HeaderMap,
     Json(body): Json<Value>,
@@ -24,13 +31,18 @@ pub async fn chat_completions(
         .unwrap_or("unknown")
         .to_string();
 
-    // Pre-classify; providers may override based on their own config.
+    // Responses-bodies use `input` not `messages`; honour an explicit
+    // X-Initiator override before falling back to the input-aware classifier.
     let initiator: String = match inbound.get("x-initiator").and_then(|v| v.to_str().ok()) {
         Some(v) => {
             let lv = v.trim().to_ascii_lowercase();
-            if lv == "user" || lv == "agent" { lv } else { classify_initiator(&body).into() }
+            if lv == "user" || lv == "agent" {
+                lv
+            } else {
+                classify_initiator_responses(&body).into()
+            }
         }
-        None => classify_initiator(&body).into(),
+        None => classify_initiator_responses(&body).into(),
     };
 
     let behave_as_inbound: Option<Arc<String>> = inbound
@@ -42,16 +54,13 @@ pub async fn chat_completions(
 
     let started = Instant::now();
 
-    // Wrap inputs in Arc so the per-attempt closure can clone cheaply
-    // without borrowing from the surrounding scope (which would force
-    // higher-ranked lifetime bounds on the dispatch closure type).
     let body = Arc::new(body);
     let inbound = Arc::new(inbound);
     let initiator_arc = Arc::new(initiator.clone());
 
     let DispatchOk { acct, resp } = {
         let s_for_closure = s.clone();
-        dispatch(&s, &model, Endpoint::ChatCompletions, move |acct| {
+        dispatch(&s, &model, Endpoint::Responses, move |acct| {
             let body = body.clone();
             let inbound = inbound.clone();
             let initiator_arc = initiator_arc.clone();
@@ -59,7 +68,7 @@ pub async fn chat_completions(
             let http = s_for_closure.http.clone();
             async move {
                 let ctx = RequestCtx {
-                    endpoint: Endpoint::ChatCompletions,
+                    endpoint: Endpoint::Responses,
                     http: &http,
                     body: &body,
                     stream,
@@ -67,7 +76,7 @@ pub async fn chat_completions(
                     inbound_headers: &inbound,
                     behave_as: behave_as.as_deref().map(|s| s.as_str()),
                 };
-                acct.provider.chat(ctx).await
+                acct.provider.responses(ctx).await
             }
         })
         .await?

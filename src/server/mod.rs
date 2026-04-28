@@ -1,6 +1,10 @@
 pub mod chat;
+pub mod dispatch;
 pub mod error;
+pub mod forward;
+pub mod messages;
 pub mod models;
+pub mod responses;
 
 use crate::config::Config;
 use crate::pool::AccountPool;
@@ -22,6 +26,8 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/v1/models", get(models::list_models))
         .route("/v1/chat/completions", post(chat::chat_completions))
+        .route("/v1/responses", post(responses::responses))
+        .route("/v1/messages", post(messages::messages))
         .route("/healthz", get(health))
         .with_state(state)
 }

@@ -1,3 +1,9 @@
+//! `POST /v1/messages` — Anthropic Messages API passthrough.
+//!
+//! Forwarded verbatim to whichever provider in the pool natively speaks
+//! `/v1/messages` for the requested model (today: GitHub Copilot for the
+//! Claude family). No translation in this version.
+
 use super::dispatch::{dispatch, DispatchOk};
 use super::error::ApiError;
 use super::forward::{buffered_response, stream_response};
@@ -12,7 +18,7 @@ use serde_json::Value;
 use std::sync::Arc;
 use std::time::Instant;
 
-pub async fn chat_completions(
+pub async fn messages(
     State(s): State<AppState>,
     inbound: HeaderMap,
     Json(body): Json<Value>,
@@ -24,7 +30,8 @@ pub async fn chat_completions(
         .unwrap_or("unknown")
         .to_string();
 
-    // Pre-classify; providers may override based on their own config.
+    // Anthropic body shape uses `messages: [{role, content}]`, so the
+    // existing chat-style classifier walks it correctly.
     let initiator: String = match inbound.get("x-initiator").and_then(|v| v.to_str().ok()) {
         Some(v) => {
             let lv = v.trim().to_ascii_lowercase();
@@ -42,16 +49,13 @@ pub async fn chat_completions(
 
     let started = Instant::now();
 
-    // Wrap inputs in Arc so the per-attempt closure can clone cheaply
-    // without borrowing from the surrounding scope (which would force
-    // higher-ranked lifetime bounds on the dispatch closure type).
     let body = Arc::new(body);
     let inbound = Arc::new(inbound);
     let initiator_arc = Arc::new(initiator.clone());
 
     let DispatchOk { acct, resp } = {
         let s_for_closure = s.clone();
-        dispatch(&s, &model, Endpoint::ChatCompletions, move |acct| {
+        dispatch(&s, &model, Endpoint::Messages, move |acct| {
             let body = body.clone();
             let inbound = inbound.clone();
             let initiator_arc = initiator_arc.clone();
@@ -59,7 +63,7 @@ pub async fn chat_completions(
             let http = s_for_closure.http.clone();
             async move {
                 let ctx = RequestCtx {
-                    endpoint: Endpoint::ChatCompletions,
+                    endpoint: Endpoint::Messages,
                     http: &http,
                     body: &body,
                     stream,
@@ -67,7 +71,7 @@ pub async fn chat_completions(
                     inbound_headers: &inbound,
                     behave_as: behave_as.as_deref().map(|s| s.as_str()),
                 };
-                acct.provider.chat(ctx).await
+                acct.provider.messages(ctx).await
             }
         })
         .await?

@@ -147,8 +147,40 @@ pub struct ProviderInfo {
     pub default_models: Vec<ModelInfo>,
 }
 
-/// Per-request context handed to a provider.
-pub struct ChatCtx<'a> {
+/// The inbound API surface a request belongs to. Each variant is wired to a
+/// distinct upstream path on providers that support it. Bytes are forwarded
+/// verbatim; no cross-format translation happens in this crate today.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Endpoint {
+    /// `POST /v1/chat/completions` (OpenAI Chat Completions).
+    ChatCompletions,
+    /// `POST /v1/responses` (OpenAI Responses API).
+    Responses,
+    /// `POST /v1/messages` (Anthropic Messages API).
+    Messages,
+}
+
+impl Endpoint {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Endpoint::ChatCompletions => "chat_completions",
+            Endpoint::Responses => "responses",
+            Endpoint::Messages => "messages",
+        }
+    }
+}
+
+impl std::fmt::Display for Endpoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Per-request context handed to a provider. The same shape covers every
+/// inbound endpoint — the `endpoint` field tells the provider (and the
+/// dispatcher) which surface this request belongs to.
+pub struct RequestCtx<'a> {
+    pub endpoint: Endpoint,
     pub http: &'a reqwest::Client,
     pub body: &'a Value,
     pub stream: bool,
@@ -178,9 +210,16 @@ pub trait Provider: Send + Sync {
         self.info().default_models.iter().find(|m| m.id == model)
     }
 
-    /// Model routing hint. For providers that don't know their model list
-    /// upfront, return `true` to accept everything.
-    fn supports_model(&self, _model: &str) -> bool { true }
+    /// Whether this provider speaks `endpoint` for the given model. The pool
+    /// uses this to skip accounts that cannot service a request.
+    ///
+    /// Default impl: every provider is assumed chat-completions-capable for
+    /// every model; Responses / Messages are opt-in (return `false`).
+    /// Providers that natively passthrough to upstream `/responses` or
+    /// `/v1/messages` should override.
+    fn supports(&self, _model: &str, endpoint: Endpoint) -> bool {
+        matches!(endpoint, Endpoint::ChatCompletions)
+    }
 
     /// `GET /models`. Result must be a JSON object suitable for inclusion in
     /// an OpenAI `/v1/models` response (an `{ "object":"list", "data":[...] }`
@@ -189,7 +228,26 @@ pub trait Provider: Send + Sync {
 
     /// Execute a chat completion. Returns the raw upstream `reqwest::Response`
     /// so the caller can stream or buffer the body verbatim.
-    async fn chat(&self, ctx: ChatCtx<'_>) -> Result<reqwest::Response>;
+    async fn chat(&self, ctx: RequestCtx<'_>) -> Result<reqwest::Response>;
+
+    /// Execute a Responses-API request (`POST /v1/responses` upstream).
+    /// Default impl returns an error — providers that natively support the
+    /// surface override.
+    async fn responses(&self, _ctx: RequestCtx<'_>) -> Result<reqwest::Response> {
+        Err(anyhow!(
+            "provider '{}' does not implement /v1/responses",
+            self.info().id
+        ))
+    }
+
+    /// Execute an Anthropic Messages-API request (`POST /v1/messages`
+    /// upstream). Default impl returns an error.
+    async fn messages(&self, _ctx: RequestCtx<'_>) -> Result<reqwest::Response> {
+        Err(anyhow!(
+            "provider '{}' does not implement /v1/messages",
+            self.info().id
+        ))
+    }
 
     /// Called by the pool when an upstream 401 occurs, so the provider may
     /// invalidate any cached short-lived token. Default: no-op.

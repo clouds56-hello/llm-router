@@ -2,7 +2,7 @@
 //! itself only manages health/cooldown state and round-robin selection.
 
 use crate::config::Config;
-use crate::provider::{self, Provider};
+use crate::provider::{self, Endpoint, Provider};
 use anyhow::{anyhow, Result};
 use parking_lot::RwLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -84,42 +84,50 @@ impl AccountPool {
 
     pub fn cooldown_base(&self) -> Duration { self.cooldown_base }
 
-    /// Pick the next healthy account that supports the given model
-    /// (round-robin). If `model` is None or no account claims support, fall
-    /// back to plain round-robin over healthy accounts.
-    pub fn acquire(&self, model: Option<&str>) -> Arc<Account> {
+    /// Pick the next account that supports both `model` and `endpoint`
+    /// (round-robin).
+    ///
+    /// Returns `None` only when **no** account in the pool supports the
+    /// `(model, endpoint)` tuple — in which case the handler should map to
+    /// `501 Not Implemented` rather than retrying. Cooldown is best-effort:
+    /// if every supporting account is in cooldown we still hand one back so
+    /// the caller can attempt the request.
+    pub fn acquire(&self, model: Option<&str>, endpoint: Endpoint) -> Option<Arc<Account>> {
         let n = self.accounts.len();
+        if n == 0 {
+            return None;
+        }
         let start = self.cursor.fetch_add(1, Ordering::Relaxed);
 
-        // First pass: healthy + supports_model
-        if let Some(m) = model {
-            for i in 0..n {
-                let idx = (start + i) % n;
-                let a = &self.accounts[idx];
-                if a.is_healthy() && a.provider.supports_model(m) {
-                    return a.clone();
-                }
-            }
-        }
-        // Second pass: any healthy
+        // Helper: does this account claim support for (model, endpoint)?
+        let supports = |a: &Account| -> bool {
+            let m = model.unwrap_or("");
+            a.provider.supports(m, endpoint)
+        };
+
+        // First pass: healthy AND supports endpoint (and model, when given).
         for i in 0..n {
             let idx = (start + i) % n;
             let a = &self.accounts[idx];
-            if a.is_healthy() {
-                return a.clone();
+            if a.is_healthy() && supports(a) {
+                return Some(a.clone());
             }
         }
-        // All in cooldown: pick the one with the earliest cooldown_until.
-        let mut best = &self.accounts[0];
-        let mut best_t = best.inner.read().cooldown_until;
-        for a in &self.accounts[1..] {
+        // Second pass: any account that supports the endpoint, even if in
+        // cooldown — pick the one with the earliest cooldown_until.
+        let mut best: Option<&Arc<Account>> = None;
+        let mut best_t: Option<Instant> = None;
+        for a in &self.accounts {
+            if !supports(a) {
+                continue;
+            }
             let t = a.inner.read().cooldown_until;
-            if t < best_t {
-                best = a;
+            if best.is_none() || t < best_t {
+                best = Some(a);
                 best_t = t;
             }
         }
-        best.clone()
+        best.cloned()
     }
 
     pub fn all(&self) -> &[Arc<Account>] { &self.accounts }

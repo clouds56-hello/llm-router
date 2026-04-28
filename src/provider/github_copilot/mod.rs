@@ -15,7 +15,7 @@ use serde_json::Value;
 use std::sync::OnceLock;
 use tokio::sync::Mutex as AsyncMutex;
 
-use super::{AuthKind, ChatCtx, Provider, ProviderInfo};
+use super::{AuthKind, Endpoint, Provider, ProviderInfo, RequestCtx};
 
 #[allow(dead_code)]
 pub const GITHUB_API: &str = "https://api.github.com";
@@ -177,17 +177,80 @@ impl Provider for CopilotProvider {
 
     fn info(&self) -> &ProviderInfo { &self.info }
 
+    /// Capability matrix for Copilot's three upstream surfaces.
+    ///
+    /// We do best-effort pattern matching on the model id rather than a hard
+    /// allowlist, because Copilot ships new models continuously and the
+    /// upstream `/models` response does not yet annotate per-endpoint
+    /// support. The patterns here mirror what the official Copilot CLI /
+    /// VSCode plugin route.
+    fn supports(&self, model: &str, endpoint: Endpoint) -> bool {
+        match endpoint {
+            // Every Copilot model speaks the OpenAI Chat Completions surface.
+            Endpoint::ChatCompletions => true,
+            // Anthropic Messages API: Claude family routes here natively.
+            Endpoint::Messages => model.starts_with("claude-"),
+            // OpenAI Responses API: o-series and gpt-5+ families.
+            Endpoint::Responses => {
+                let m = model;
+                m.starts_with("gpt-5")
+                    || m.starts_with("o1")
+                    || m.starts_with("o3")
+                    || m.starts_with("o4")
+            }
+        }
+    }
+
     async fn list_models(&self, http: &reqwest::Client) -> Result<Value> {
         let token = self.ensure_api_token(http).await?;
         models::list(http, &token, &self.headers).await
     }
 
-    async fn chat(&self, ctx: ChatCtx<'_>) -> Result<reqwest::Response> {
+    async fn chat(&self, ctx: RequestCtx<'_>) -> Result<reqwest::Response> {
+        self.upstream_post(ctx, "/chat/completions", "upstream chat request failed")
+            .await
+    }
+
+    async fn responses(&self, ctx: RequestCtx<'_>) -> Result<reqwest::Response> {
+        self.upstream_post(ctx, "/responses", "upstream responses request failed")
+            .await
+    }
+
+    async fn messages(&self, ctx: RequestCtx<'_>) -> Result<reqwest::Response> {
+        self.upstream_post(ctx, "/v1/messages", "upstream messages request failed")
+            .await
+    }
+
+    fn on_unauthorized(&self) { self.invalidate_api_token(); }
+}
+
+impl CopilotProvider {
+    /// Shared upstream POST path used by every endpoint surface. The
+    /// per-surface methods only differ in `path` and the wrapping error
+    /// context — auth, header construction, persona, and initiator handling
+    /// are identical because Copilot proxies all three on the same host with
+    /// the same auth scheme.
+    async fn upstream_post(
+        &self,
+        ctx: RequestCtx<'_>,
+        path: &str,
+        err_ctx: &'static str,
+    ) -> Result<reqwest::Response> {
         let token = self.ensure_api_token(ctx.http).await?;
-        let initiator = self.resolve_initiator(ctx.body, ctx.inbound_headers, ctx.initiator);
+        let initiator = match ctx.endpoint {
+            // For /v1/responses the inbound body uses `input`, not `messages`,
+            // so the chat-style classifier would always fall through to
+            // "user". Use the responses-aware variant instead.
+            Endpoint::Responses => self.resolve_initiator_responses(
+                ctx.body,
+                ctx.inbound_headers,
+                ctx.initiator,
+            ),
+            _ => self.resolve_initiator(ctx.body, ctx.inbound_headers, ctx.initiator),
+        };
         let headers = self.headers_for_request(ctx.behave_as);
         let h = headers::copilot_request_headers(&token, &headers, ctx.stream, &initiator)?;
-        let url = format!("{COPILOT_API}/chat/completions");
+        let url = format!("{COPILOT_API}{path}");
         let resp = ctx
             .http
             .post(&url)
@@ -195,9 +258,34 @@ impl Provider for CopilotProvider {
             .json(ctx.body)
             .send()
             .await
-            .context("upstream chat request failed")?;
+            .context(err_ctx)?;
         Ok(resp)
     }
 
-    fn on_unauthorized(&self) { self.invalidate_api_token(); }
+    /// Variant of [`Self::resolve_initiator`] for the Responses API, whose
+    /// body is shaped `{ input: …, instructions: …, … }` rather than
+    /// `{ messages: [...] }`.
+    fn resolve_initiator_responses(
+        &self,
+        body: &Value,
+        inbound: &HeaderMap,
+        fallback: &str,
+    ) -> String {
+        if let Some(v) = inbound.get("x-initiator").and_then(|v| v.to_str().ok()) {
+            let v = v.trim().to_ascii_lowercase();
+            if v == "user" || v == "agent" {
+                return v;
+            }
+        }
+        match self.headers.initiator_mode {
+            InitiatorMode::AlwaysUser => "user".into(),
+            InitiatorMode::AlwaysAgent => "agent".into(),
+            InitiatorMode::Auto => {
+                if fallback == "user" || fallback == "agent" {
+                    return fallback.into();
+                }
+                headers::classify_initiator_responses(body).into()
+            }
+        }
+    }
 }

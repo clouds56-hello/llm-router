@@ -24,7 +24,7 @@ use async_trait::async_trait;
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use serde_json::Value;
 
-use super::{AuthKind, ChatCtx, ModelInfo, Provider, ProviderInfo, ZAI_ALIASES};
+use super::{AuthKind, ModelInfo, Provider, ProviderInfo, RequestCtx, ZAI_ALIASES};
 
 /// Default upstream for the coding plan. Override per-account via
 /// `[accounts.<id>.zai] base_url = "..."`.
@@ -143,7 +143,7 @@ impl Provider for ZaiProvider {
         Ok(serde_json::json!({ "object": "list", "data": data }))
     }
 
-    async fn chat(&self, ctx: ChatCtx<'_>) -> Result<reqwest::Response> {
+    async fn chat(&self, ctx: RequestCtx<'_>) -> Result<reqwest::Response> {
         let model_id = ctx.body.get("model").and_then(|v| v.as_str()).unwrap_or("");
         // Reasoning gating: known models drive it explicitly; unknown GLM
         // models default to enabled (matches Z.ai's own clients).
