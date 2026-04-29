@@ -707,6 +707,126 @@ impl Config {
   }
 }
 
+impl From<ServerConfig> for llm_core::config::ServerConfig {
+  fn from(value: ServerConfig) -> Self {
+    Self { host: value.host, port: value.port }
+  }
+}
+
+impl From<PoolConfig> for llm_core::config::PoolConfig {
+  fn from(value: PoolConfig) -> Self {
+    Self {
+      strategy: value.strategy,
+      failure_cooldown_secs: value.failure_cooldown_secs,
+      session_ttl_secs: value.session_ttl_secs,
+      session_tombstone_secs: value.session_tombstone_secs,
+    }
+  }
+}
+
+impl From<DbConfig> for llm_core::config::DbConfig {
+  fn from(value: DbConfig) -> Self {
+    Self {
+      enabled: value.enabled,
+      usage_db_path: value.usage_db_path,
+      sessions_db_path: value.sessions_db_path,
+      requests_dir: value.requests_dir,
+      record_sessions: value.record_sessions,
+      record_request_bodies: value.record_request_bodies,
+      body_max_bytes: value.body_max_bytes,
+      write_queue_capacity: value.write_queue_capacity,
+    }
+  }
+}
+
+impl From<ProxyConfig> for llm_core::config::ProxyConfig {
+  fn from(value: ProxyConfig) -> Self {
+    Self { url: value.url, no_proxy: value.no_proxy, system: value.system }
+  }
+}
+
+impl From<LoggingConfig> for llm_core::config::LoggingConfig {
+  fn from(value: LoggingConfig) -> Self {
+    Self {
+      level: value.level,
+      format: match value.format {
+        LogFormat::Pretty => llm_core::config::LogFormat::Pretty,
+        LogFormat::Compact => llm_core::config::LogFormat::Compact,
+        LogFormat::Json => llm_core::config::LogFormat::Json,
+      },
+      target: match value.target {
+        LogTarget::Stderr => llm_core::config::LogTarget::Stderr,
+        LogTarget::File => llm_core::config::LogTarget::File,
+        LogTarget::Both => llm_core::config::LogTarget::Both,
+      },
+      dir: value.dir,
+      ansi: value.ansi,
+      include_spans: value.include_spans,
+    }
+  }
+}
+
+impl From<InitiatorMode> for llm_core::config::InitiatorMode {
+  fn from(value: InitiatorMode) -> Self {
+    match value {
+      InitiatorMode::Auto => Self::Auto,
+      InitiatorMode::AlwaysUser => Self::AlwaysUser,
+      InitiatorMode::AlwaysAgent => Self::AlwaysAgent,
+    }
+  }
+}
+
+impl From<CopilotHeaders> for llm_core::config::CopilotHeaders {
+  fn from(value: CopilotHeaders) -> Self {
+    Self {
+      editor_version: value.editor_version,
+      editor_plugin_version: value.editor_plugin_version,
+      user_agent: value.user_agent,
+      copilot_integration_id: value.copilot_integration_id,
+      openai_intent: value.openai_intent,
+      initiator_mode: value.initiator_mode.into(),
+      behave_as: value.behave_as,
+      extra_headers: value.extra_headers,
+    }
+  }
+}
+
+impl From<ZaiAccountConfig> for llm_core::config::ZaiAccountConfig {
+  fn from(value: ZaiAccountConfig) -> Self {
+    Self { base_url: value.base_url }
+  }
+}
+
+impl From<Account> for llm_core::config::Account {
+  fn from(value: Account) -> Self {
+    Self {
+      id: value.id,
+      provider: value.provider,
+      github_token: value.github_token,
+      api_token: value.api_token,
+      api_token_expires_at: value.api_token_expires_at,
+      api_key: value.api_key,
+      copilot: value.copilot.map(Into::into),
+      zai: value.zai.map(Into::into),
+      behave_as: value.behave_as,
+    }
+  }
+}
+
+impl From<Config> for llm_core::config::Config {
+  fn from(value: Config) -> Self {
+    Self {
+      server: value.server.into(),
+      pool: value.pool.into(),
+      db: value.db.into(),
+      proxy: value.proxy.into(),
+      logging: value.logging.into(),
+      copilot: value.copilot.into(),
+      accounts: value.accounts.into_iter().map(Into::into).collect(),
+    }
+  }
+}
+
 pub fn project_dirs() -> Result<ProjectDirs> {
   ProjectDirs::from("dev", "llm-router", "llm-router").ok_or(Error::NoProjectDirs)
 }

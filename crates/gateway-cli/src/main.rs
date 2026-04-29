@@ -2,16 +2,12 @@ use clap::Parser;
 use std::error::Error as StdError;
 use std::process::ExitCode;
 
-mod catalogue;
 mod cli;
 mod config;
-mod convert;
 mod db;
 mod error;
 mod logging;
-mod pool;
 mod provider;
-mod server;
 mod util;
 
 #[tokio::main]

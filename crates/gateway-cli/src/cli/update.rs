@@ -8,7 +8,7 @@ use anyhow::Result;
 use clap::Args;
 use std::time::Duration;
 
-use crate::catalogue::loader::{self, Source};
+use llm_catalogue::loader::{self, Source};
 
 const DEFAULT_URL: &str = "https://models.dev/api.json";
 

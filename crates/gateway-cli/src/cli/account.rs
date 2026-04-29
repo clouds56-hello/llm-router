@@ -135,15 +135,16 @@ async fn fetch_quota(http: reqwest::Client, account: Account, timeout: Duration)
       return QuotaResult::None;
     };
     let headers = account.copilot.clone().unwrap_or_default();
+    let core_headers: llm_core::config::CopilotHeaders = headers.clone().into();
     // Two parallel probes:
     //   1. token exchange — refreshes api_token (always needed on `list`)
     //   2. user-info     — quota_snapshots (Plus/Business plans)
     let http2 = http.clone();
     let gh2 = gh.clone();
-    let h2 = headers.clone();
+    let h2 = core_headers.clone();
     let fut = async move {
       let (tok, info) = tokio::join!(
-        crate::provider::github_copilot::token::exchange(&http, gh.expose(), &headers),
+        crate::provider::github_copilot::token::exchange(&http, gh.expose(), &core_headers),
         crate::provider::github_copilot::user::fetch(&http2, gh2.expose(), &h2),
       );
       (tok, info)

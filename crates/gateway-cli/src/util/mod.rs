@@ -1,5 +1,36 @@
-pub mod http;
-pub mod initiator;
-pub mod redact;
-pub mod secret;
-pub mod timefmt;
+pub mod http {
+  use crate::config::ProxyConfig;
+  use anyhow::{Context, Result};
+  use std::time::Duration;
+
+  pub fn build_client(proxy: &ProxyConfig) -> Result<reqwest::Client> {
+    let mut b = reqwest::Client::builder()
+      .connect_timeout(Duration::from_secs(15))
+      .timeout(Duration::from_secs(600))
+      .pool_idle_timeout(Some(Duration::from_secs(90)));
+
+    if let Some(url) = &proxy.url {
+      let mut p = reqwest::Proxy::all(url).with_context(|| format!("invalid proxy url: {url}"))?;
+      if !proxy.no_proxy.is_empty() {
+        let joined = proxy.no_proxy.join(",");
+        if let Some(np) = reqwest::NoProxy::from_string(&joined) {
+          p = p.no_proxy(Some(np));
+        }
+      }
+      b = b.proxy(p);
+      tracing::info!(scheme = %scheme_of(url), "outbound proxy enabled");
+    } else if proxy.system {
+      tracing::info!("outbound proxy: deferring to system env vars");
+    } else {
+      b = b.no_proxy();
+    }
+
+    Ok(b.build()?)
+  }
+
+  fn scheme_of(url: &str) -> &str {
+    url.split("://").next().unwrap_or("?")
+  }
+}
+
+pub use llm_core::util::{secret, timefmt};
