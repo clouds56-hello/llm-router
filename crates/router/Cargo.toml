@@ -1,0 +1,29 @@
+[package]
+name = "llm-router"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+llm-core = { workspace = true }
+llm-catalogue = { workspace = true }
+llm-convert = { workspace = true }
+llm-provider-copilot = { workspace = true }
+llm-provider-zai = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+axum = { workspace = true }
+bytes = { workspace = true }
+directories = { workspace = true }
+futures-util = { workspace = true }
+parking_lot = { workspace = true }
+reqwest = { workspace = true }
+serde_json = { workspace = true }
+snafu = { workspace = true }
+tokio = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+time = { workspace = true }
+toml = { workspace = true }
