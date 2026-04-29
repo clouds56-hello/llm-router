@@ -1,4 +1,9 @@
 pub mod github_copilot;
+pub mod headers;
+pub mod models;
+pub mod oauth;
+pub mod token;
+pub mod user;
 
 pub mod config;
 

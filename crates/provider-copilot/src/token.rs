@@ -13,7 +13,7 @@ use tracing::{debug, instrument};
 /// Note: this endpoint *does* expose `limited_user_quotas` /
 /// `limited_user_reset_date`, but they are `null` for paid plans
 /// (`plus_monthly_subscriber_quota`, business, …). For human-visible
-/// remaining-quota figures use `super::user::fetch_user_info` which hits
+/// remaining-quota figures use `crate::user::fetch` which hits
 /// `/copilot_internal/user` and returns per-feature `quota_snapshots`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct CopilotTokenResp {
@@ -40,10 +40,10 @@ pub async fn exchange(
   github_token: &str,
   headers: &CopilotHeaders,
 ) -> Result<CopilotTokenResp> {
-  let h = super::headers::token_exchange_headers(github_token, headers)?;
+  let h = crate::headers::token_exchange_headers(github_token, headers)?;
   debug!("posting token exchange");
   let resp = client
-    .get(super::TOKEN_EXCHANGE_URL)
+    .get(crate::github_copilot::TOKEN_EXCHANGE_URL)
     .headers(h)
     .send()
     .await

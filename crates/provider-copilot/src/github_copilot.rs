@@ -1,10 +1,6 @@
 //! GitHub Copilot provider.
 
-pub mod headers;
-pub mod models;
-pub mod oauth;
-pub mod token;
-pub mod user;
+pub use crate::{headers, models, oauth, token, user};
 
 use crate::config::{CopilotHeaders, InitiatorMode};
 use crate::util::redact::{token_fingerprint, BehaveAs};
@@ -19,7 +15,7 @@ use std::sync::OnceLock;
 use tokio::sync::Mutex as AsyncMutex;
 use tracing::{debug, instrument, warn};
 
-use super::{error, AuthKind, Endpoint, Provider, ProviderInfo, RequestCtx, Result};
+use crate::{error, AuthKind, Endpoint, Provider, ProviderInfo, RequestCtx, Result, ID_GITHUB_COPILOT};
 
 #[allow(dead_code)]
 pub const GITHUB_API: &str = "https://api.github.com";
@@ -45,8 +41,8 @@ pub struct CopilotProvider {
 fn copilot_info() -> &'static ProviderInfo {
   static CELL: OnceLock<ProviderInfo> = OnceLock::new();
   CELL.get_or_init(|| ProviderInfo {
-    id: super::ID_GITHUB_COPILOT.to_string(),
-    aliases: &[super::ID_GITHUB_COPILOT],
+    id: ID_GITHUB_COPILOT.to_string(),
+    aliases: &[ID_GITHUB_COPILOT],
     display_name: "GitHub Copilot",
     upstream_url: COPILOT_API.to_string(),
     auth_kind: AuthKind::OAuthDeviceFlow,
@@ -54,7 +50,7 @@ fn copilot_info() -> &'static ProviderInfo {
     // *identity*; the catalogue below provides metadata overlay for the
     // ids that models.dev tracks. Unknown ids still pass through
     // `/v1/models` — they just lack the `x_llm_router` enrichment block.
-    default_models: crate::catalogue::default_models_for(super::ID_GITHUB_COPILOT),
+    default_models: crate::catalogue::default_models_for(ID_GITHUB_COPILOT),
   })
 }
 

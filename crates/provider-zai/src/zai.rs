@@ -14,9 +14,7 @@
 //! the outgoing request body, mirroring the contract upstream coding tools
 //! (Claude Code, opencode) rely on.
 
-pub mod models;
-pub mod quota;
-pub mod transform;
+pub use crate::{models, quota, transform};
 
 use crate::util::redact::token_fingerprint;
 use crate::util::secret::Secret;
@@ -27,7 +25,7 @@ use serde_json::Value;
 use snafu::ResultExt;
 use tracing::{debug, instrument, warn};
 
-use super::{error, AuthKind, ModelInfo, Provider, ProviderInfo, RequestCtx, Result, ZAI_ALIASES};
+use crate::{error, AuthKind, ModelInfo, Provider, ProviderInfo, RequestCtx, Result, ZAI_ALIASES};
 
 /// Default upstream for the coding plan. Override per-account via
 /// `[accounts.<id>.zai] base_url = "..."`.

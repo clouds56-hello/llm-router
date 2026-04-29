@@ -71,7 +71,7 @@ pub struct QuotaSnapshot {
   ),
 )]
 pub async fn fetch(client: &reqwest::Client, github_token: &str, headers: &CopilotHeaders) -> Result<CopilotUserInfo> {
-  let h = super::headers::token_exchange_headers(github_token, headers)?;
+  let h = crate::headers::token_exchange_headers(github_token, headers)?;
   debug!("fetching copilot user info");
   let resp = client
     .get(USER_INFO_URL)

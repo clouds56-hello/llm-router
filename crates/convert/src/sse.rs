@@ -22,9 +22,9 @@ impl SseAccumulator {
 
   pub fn push_value(&mut self, value: &Value) -> Vec<IrDelta> {
     let deltas = match self.endpoint {
-      Endpoint::ChatCompletions => crate::convert::chat::delta_from_chat_chunk(value),
-      Endpoint::Responses => crate::convert::responses::delta_from_responses_event(value),
-      Endpoint::Messages => crate::convert::messages::delta_from_messages_event(value),
+      Endpoint::ChatCompletions => crate::chat::delta_from_chat_chunk(value),
+      Endpoint::Responses => crate::responses::delta_from_responses_event(value),
+      Endpoint::Messages => crate::messages::delta_from_messages_event(value),
     };
     for delta in deltas.iter().cloned() {
       self.response.push_delta(delta);
@@ -128,17 +128,17 @@ impl EmitState {
     }
     match self.to {
       Endpoint::ChatCompletions => {
-        for value in crate::convert::chat::chunk_from_deltas(&self.id, &self.model, deltas, false) {
+        for value in crate::chat::chunk_from_deltas(&self.id, &self.model, deltas, false) {
           out.extend_from_slice(&encode_sse(None, &value));
         }
       }
       Endpoint::Responses => {
-        for (event, value) in crate::convert::responses::events_from_deltas(&self.id, &self.model, deltas, false) {
+        for (event, value) in crate::responses::events_from_deltas(&self.id, &self.model, deltas, false) {
           out.extend_from_slice(&encode_sse(Some(&event), &value));
         }
       }
       Endpoint::Messages => {
-        for (event, value) in crate::convert::messages::events_from_deltas(&self.id, &self.model, deltas, false) {
+        for (event, value) in crate::messages::events_from_deltas(&self.id, &self.model, deltas, false) {
           out.extend_from_slice(&encode_sse(Some(&event), &value));
         }
       }

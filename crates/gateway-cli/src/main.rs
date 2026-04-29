@@ -2,8 +2,8 @@ use clap::Parser;
 use std::error::Error as StdError;
 use std::process::ExitCode;
 
+use llm_config as config;
 mod cli;
-mod config;
 mod db;
 mod error;
 mod logging;

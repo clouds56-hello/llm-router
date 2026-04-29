@@ -15,10 +15,10 @@ use tracing::{debug, instrument};
   ),
 )]
 pub async fn list(client: &reqwest::Client, api_token: &str, headers: &CopilotHeaders) -> Result<Value> {
-  let h = super::headers::copilot_request_headers(api_token, headers, false, "user")?;
+  let h = crate::headers::copilot_request_headers(api_token, headers, false, "user")?;
   debug!("fetching copilot model list");
   let resp = client
-    .get(format!("{}/models", super::COPILOT_API))
+    .get(format!("{}/models", crate::github_copilot::COPILOT_API))
     .headers(h)
     .send()
     .await
