@@ -9,41 +9,53 @@ user-agent              = "GitHubCopilotChat/0.20.0"
 copilot-integration-id  = "vscode-chat"
 openai-intent           = "conversation-panel"
 
-[opencode.default]
-verified = false
-user-agent = "opencode/0.x"
+[copilot.new]
+# last updated at 2026-04-14
+# x-stainless-retry-count = "0"
+# x-stainless-lang = "js"
+# x-stainless-package-version = "5.20.1"
+# x-stainless-os = "Windows"
+# x-stainless-arch = "x64"
+# x-stainless-runtime = "node"
+# x-stainless-runtime-version = "v22.19.0"
+accept = "application/json"
+openai-intent = "conversation-agent"
+# x-initiator = "user" | "agent"
+x-github-api-version = "2026-01-09"
+copilot-integration-id = "copilot-developer-cli"
+# x-interaction-id = "<uuid>"
+user-agent = "copilot/1.0.25 (client/sdk win32 v22.19.0) term/unknown"
+# authorization = "Bearer gho_<token>"
+# x-interaction-type = "conversation-user" | "conversation-agent"
+# x-agent-task-id = "<uuid>" # same in toolcalls
+# x-client-session-id = "<uuid>"
+accept-language = "*"
+sec-fetch-mode = "cors"
+accept-encoding = "br, gzip, deflate"
 
-[opencode.general]
-verified = false
+[opencode.default]
+# last updated at 2026-04-29
+accept = "*/*"
+accept-encoding = "gzip, deflate, br, zstd"
+user-agent = "opencode/1.14.28 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.13"
+# x-request-id = "<uuid>"
+# x-session-affinity = "ses_<base64:26>"
 
 [opencode.github-copilot]
-verified = false
-editor-version          = "opencode/0.x"
-editor-plugin-version   = "opencode/0.x"
-user-agent              = "opencode/0.x"
-copilot-integration-id  = "vscode-chat"
-openai-intent           = "conversation-panel"
+# "x-initiator" = "user"
+"Openai-Intent" = "conversation-edits"
+# "Copilot-Vision-Request" = "true"
 
 [codex.default]
 verified = false
-user-agent = "codex-cli/0.x"
-
-[codex.github-copilot]
-verified = false
-editor-version          = "codex-cli/0.x"
-editor-plugin-version   = "codex-cli/0.x"
-user-agent              = "codex-cli/0.x"
-copilot-integration-id  = "vscode-chat"
-openai-intent           = "conversation-panel"
+# last updated at 2026-04-14
+user-agent = "codex_cli_rs/0.114.0 (Ubuntu 26.4.0; x86_64) WindowsTerminal"
+# authorization = "Bearer <token>"
+# chatgpt-account-id = "<uuid>"
+accept = "*/*"
+# openai-beta = "responses_websockets=2026-02-06"
+# session_id = "<uuid>"
 
 [openclaw.default]
 verified = false
 user-agent = "openclaw/0.x"
-
-[openclaw.github-copilot]
-verified = false
-editor-version          = "openclaw/0.x"
-editor-plugin-version   = "openclaw/0.x"
-user-agent              = "openclaw/0.x"
-copilot-integration-id  = "vscode-chat"
-openai-intent           = "conversation-panel"
