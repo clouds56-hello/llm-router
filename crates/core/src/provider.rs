@@ -1,3 +1,4 @@
+use crate::account::AccountConfig;
 use async_trait::async_trait;
 use bytes::Bytes;
 use reqwest::header::HeaderMap;
@@ -14,7 +15,7 @@ pub const ID_ZAI_CODING_PLAN: &str = "zai-coding-plan";
 pub const ID_ZAI: &str = "zai";
 pub const ID_ZHIPUAI_CODING_PLAN: &str = "zhipuai-coding-plan";
 pub const ID_ZHIPUAI: &str = "zhipuai";
-pub const ZAI_ALIASES: &[&str] = &[ID_ZAI_CODING_PLAN, ID_ZAI, ID_ZHIPUAI_CODING_PLAN, ID_ZHIPUAI];
+pub const ZAI_PROVIDERS: &[&str] = &[ID_ZAI_CODING_PLAN, ID_ZAI, ID_ZHIPUAI_CODING_PLAN, ID_ZHIPUAI];
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -162,6 +163,18 @@ pub fn new_outbound_capture() -> OutboundCapture {
   Arc::new(OnceLock::new())
 }
 
+pub struct ProviderDescriptor {
+  pub id: &'static str,
+  pub validate: fn(&AccountConfig) -> Result<()>,
+  pub build: fn(Arc<AccountConfig>) -> Result<Arc<dyn Provider>>,
+}
+
+impl ProviderDescriptor {
+  pub fn matches(&self, id: &str) -> bool {
+    self.id == id
+  }
+}
+
 #[async_trait]
 pub trait Provider: Send + Sync {
   fn id(&self) -> &str;
@@ -195,4 +208,12 @@ pub trait Provider: Send + Sync {
   }
 
   fn on_unauthorized(&self) {}
+
+  fn needs_refresh(&self, _cfg: &AccountConfig) -> bool {
+    false
+  }
+
+  async fn refresh(&self, cfg: &AccountConfig, _http: &reqwest::Client) -> Result<AccountConfig> {
+    Ok(cfg.clone())
+  }
 }

@@ -17,11 +17,18 @@ pub use github_copilot::*;
 
 use std::sync::Arc;
 
+pub static DESCRIPTOR: llm_core::provider::ProviderDescriptor = llm_core::provider::ProviderDescriptor {
+  id: ID_GITHUB_COPILOT,
+  validate,
+  build,
+};
+
+pub fn validate(account: &llm_core::account::AccountConfig) -> llm_core::provider::Result<()> {
+  github_copilot::CopilotProvider::validate_account(account)
+}
+
 pub fn build(
-  account: &llm_core::account::Account,
-  headers: &config::CopilotHeaders,
+  account: Arc<llm_core::account::AccountConfig>,
 ) -> llm_core::provider::Result<Arc<dyn llm_core::provider::Provider>> {
-  Ok(Arc::new(github_copilot::CopilotProvider::from_account(
-    account, headers,
-  )?))
+  Ok(Arc::new(github_copilot::CopilotProvider::from_account(account)?))
 }

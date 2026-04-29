@@ -3,14 +3,12 @@ pub mod paths;
 pub mod profiles;
 
 pub use error::{Error, Result};
-pub use llm_core::account::{Account, ZaiAccountConfig};
+pub use llm_core::account::{Account, AccountConfig, AuthType};
 
 use directories::ProjectDirs;
-use llm_core::provider::{ID_GITHUB_COPILOT, ZAI_ALIASES};
+use llm_core::provider::ID_GITHUB_COPILOT;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
 use snafu::ResultExt;
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 pub const DEFAULT_PORT: u16 = 4141;
@@ -30,71 +28,15 @@ pub struct Config {
   #[serde(default)]
   pub logging: LoggingConfig,
   #[serde(default)]
-  pub copilot: Value,
-  #[serde(default)]
-  pub accounts: Vec<Account>,
-}
-
-/// Sparse view of `[copilot]` used during loading to distinguish
-/// user-explicit fields from hardcoded defaults. Any field left as `None` here
-/// is eligible to be filled in by a persona profile overlay.
-#[derive(Debug, Clone, Default, Deserialize)]
-struct CopilotHeadersRaw {
-  #[serde(default)]
-  editor_version: Option<String>,
-  #[serde(default)]
-  editor_plugin_version: Option<String>,
-  #[serde(default)]
-  user_agent: Option<String>,
-  #[serde(default)]
-  copilot_integration_id: Option<String>,
-  #[serde(default)]
-  openai_intent: Option<String>,
-  #[serde(default)]
-  initiator_mode: Option<InitiatorMode>,
-  #[serde(default)]
-  behave_as: Option<String>,
-  #[serde(default)]
-  extra_headers: Option<BTreeMap<String, String>>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-struct AccountRaw {
-  id: String,
-  #[serde(default = "default_provider")]
-  provider: String,
-  #[serde(default)]
-  github_token: Option<llm_core::util::secret::Secret<String>>,
-  #[serde(default)]
-  api_token: Option<llm_core::util::secret::Secret<String>>,
-  #[serde(default)]
-  api_token_expires_at: Option<i64>,
-  #[serde(default)]
-  api_key: Option<llm_core::util::secret::Secret<String>>,
-  #[serde(default)]
-  copilot: Option<CopilotHeadersRaw>,
-  #[serde(default)]
-  zai: Option<ZaiAccountConfig>,
-  #[serde(default)]
-  behave_as: Option<String>,
+  pub accounts: Vec<AccountConfig>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 struct ConfigRaw {
+  #[serde(flatten)]
+  config: Config,
   #[serde(default)]
-  server: ServerConfig,
-  #[serde(default)]
-  pool: PoolConfig,
-  #[serde(default, alias = "usage")]
-  db: DbConfig,
-  #[serde(default)]
-  proxy: ProxyConfig,
-  #[serde(default)]
-  logging: LoggingConfig,
-  #[serde(default)]
-  copilot: CopilotHeadersRaw,
-  #[serde(default)]
-  accounts: Vec<AccountRaw>,
+  copilot: Option<toml::Table>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -304,105 +246,6 @@ pub enum LogTarget {
   Both,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum InitiatorMode {
-  #[default]
-  Auto,
-  AlwaysUser,
-  AlwaysAgent,
-}
-
-fn default_provider() -> String {
-  DEFAULT_PROVIDER.to_string()
-}
-
-fn resolve_copilot(
-  raw: &CopilotHeadersRaw,
-  profiles: &profiles::Profiles,
-  upstream: &str,
-  inherited_persona: Option<&str>,
-) -> Value {
-  let mut headers = default_copilot_map();
-
-  if let Some(m) = raw.initiator_mode {
-    headers.insert(
-      "initiator_mode".into(),
-      serde_json::to_value(m).unwrap_or(Value::String("auto".into())),
-    );
-  }
-  let behave_as = raw.behave_as.clone().or_else(|| inherited_persona.map(str::to_string));
-  if let Some(persona_name) = behave_as.as_deref() {
-    headers.insert("behave_as".into(), Value::String(persona_name.to_string()));
-    if let Some(resolved) = profiles.resolve(persona_name, upstream) {
-      profiles::warn_if_unverified(persona_name, upstream, &resolved);
-      let mut extra = BTreeMap::new();
-      for (name, val) in &resolved.headers {
-        match name.as_str() {
-          "editor-version" if raw.editor_version.is_none() => insert_str(&mut headers, "editor_version", val),
-          "editor-plugin-version" if raw.editor_plugin_version.is_none() => {
-            insert_str(&mut headers, "editor_plugin_version", val)
-          }
-          "user-agent" if raw.user_agent.is_none() => insert_str(&mut headers, "user_agent", val),
-          "copilot-integration-id" if raw.copilot_integration_id.is_none() => {
-            insert_str(&mut headers, "copilot_integration_id", val)
-          }
-          "openai-intent" if raw.openai_intent.is_none() => insert_str(&mut headers, "openai_intent", val),
-          other => {
-            extra.insert(other.to_string(), val.clone());
-          }
-        }
-      }
-      if !extra.is_empty() {
-        headers.insert(
-          "extra_headers".into(),
-          serde_json::to_value(extra).unwrap_or(Value::Object(Map::new())),
-        );
-      }
-    } else {
-      tracing::warn!(persona = %persona_name, "unknown persona; ignoring behave_as");
-    }
-  }
-
-  if let Some(v) = &raw.editor_version {
-    insert_str(&mut headers, "editor_version", v);
-  }
-  if let Some(v) = &raw.editor_plugin_version {
-    insert_str(&mut headers, "editor_plugin_version", v);
-  }
-  if let Some(v) = &raw.user_agent {
-    insert_str(&mut headers, "user_agent", v);
-  }
-  if let Some(v) = &raw.copilot_integration_id {
-    insert_str(&mut headers, "copilot_integration_id", v);
-  }
-  if let Some(v) = &raw.openai_intent {
-    insert_str(&mut headers, "openai_intent", v);
-  }
-  if let Some(extra) = &raw.extra_headers {
-    headers.insert(
-      "extra_headers".into(),
-      serde_json::to_value(extra).unwrap_or(Value::Object(Map::new())),
-    );
-  }
-  Value::Object(headers)
-}
-
-fn default_copilot_map() -> Map<String, Value> {
-  let mut out = Map::new();
-  insert_str(&mut out, "editor_version", "vscode/1.95.0");
-  insert_str(&mut out, "editor_plugin_version", "copilot-chat/0.20.0");
-  insert_str(&mut out, "user_agent", "GitHubCopilotChat/0.20.0");
-  insert_str(&mut out, "copilot_integration_id", "vscode-chat");
-  insert_str(&mut out, "openai_intent", "conversation-panel");
-  out.insert("initiator_mode".into(), Value::String("auto".into()));
-  out
-}
-
-fn insert_str(headers: &mut Map<String, Value>, key: &str, value: &str) {
-  headers.insert(key.to_string(), Value::String(value.to_string()));
-}
-
 impl Config {
   pub fn load(explicit: Option<&Path>) -> Result<(Self, PathBuf)> {
     let path = match explicit {
@@ -414,41 +257,12 @@ impl Config {
     }
     let raw = std::fs::read_to_string(&path).context(error::ReadSnafu { path: path.clone() })?;
     let raw_cfg: ConfigRaw = toml::from_str(&raw).context(error::ParseSnafu { path: path.clone() })?;
-    let upstream = ID_GITHUB_COPILOT;
-    let profiles = profiles::Profiles::global();
-    let copilot = resolve_copilot(&raw_cfg.copilot, profiles, upstream, None);
-    let accounts: Vec<Account> = raw_cfg
-      .accounts
-      .into_iter()
-      .map(|a| {
-        let parent_persona = raw_cfg.copilot.behave_as.as_deref();
-        let acct_persona = a.behave_as.as_deref().or(parent_persona);
-        let acct_copilot = a
-          .copilot
-          .as_ref()
-          .map(|h| resolve_copilot(h, profiles, upstream, acct_persona));
-        Account {
-          id: a.id,
-          provider: a.provider,
-          github_token: a.github_token,
-          api_token: a.api_token,
-          api_token_expires_at: a.api_token_expires_at,
-          api_key: a.api_key,
-          copilot: acct_copilot,
-          zai: a.zai,
-          behave_as: a.behave_as,
-        }
-      })
-      .collect();
-    let cfg = Config {
-      server: raw_cfg.server,
-      pool: raw_cfg.pool,
-      db: raw_cfg.db,
-      proxy: raw_cfg.proxy,
-      logging: raw_cfg.logging,
-      copilot,
-      accounts,
-    };
+    if raw_cfg.copilot.is_some() {
+      tracing::warn!(
+        "top-level [copilot] config is ignored by the new account schema; move values under [accounts.settings]"
+      );
+    }
+    let cfg = raw_cfg.config;
     cfg.validate()?;
     tracing::debug!(path = %path.display(), accounts = cfg.accounts.len(), "config loaded");
     Ok((cfg, path))
@@ -456,26 +270,8 @@ impl Config {
 
   pub fn validate(&self) -> Result<()> {
     self.proxy.validate()?;
-    validate_copilot_value(&self.copilot)?;
     for a in &self.accounts {
-      if let Some(h) = &a.copilot {
-        validate_copilot_value(h).map_err(|e| Error::AccountOverride {
-          id: a.id.clone(),
-          source: Box::new(e),
-        })?;
-      }
-      if a.provider == DEFAULT_PROVIDER && a.github_token.is_none() {
-        return error::MissingGithubTokenSnafu { id: a.id.clone() }.fail();
-      }
-      if ZAI_ALIASES.contains(&a.provider.as_str())
-        && a.api_key.as_ref().map(|s| s.expose().trim()).unwrap_or("").is_empty()
-      {
-        return error::MissingApiKeySnafu {
-          id: a.id.clone(),
-          provider: a.provider.clone(),
-        }
-        .fail();
-      }
+      validate_account_common(a)?;
     }
     Ok(())
   }
@@ -513,17 +309,11 @@ impl Config {
       section: "[proxy]",
       source: Box::new(e),
     })?;
-    validate_copilot_value(&cfg.copilot).map_err(|e| Error::EditValidateSection {
-      section: "[copilot]",
-      source: Box::new(e),
-    })?;
     for a in &cfg.accounts {
-      if let Some(h) = &a.copilot {
-        validate_copilot_value(h).map_err(|e| Error::AccountOverride {
-          id: a.id.clone(),
-          source: Box::new(e),
-        })?;
-      }
+      validate_account_common(a).map_err(|e| Error::EditValidateSection {
+        section: "[[accounts]]",
+        source: Box::new(e),
+      })?;
     }
     if let Some(parent) = path.parent() {
       std::fs::create_dir_all(parent).context(error::CreateDirSnafu {
@@ -533,7 +323,7 @@ impl Config {
     write_atomic(path, &serialised)
   }
 
-  pub fn upsert_account(&mut self, a: Account) {
+  pub fn upsert_account(&mut self, a: AccountConfig) {
     if let Some(slot) = self.accounts.iter_mut().find(|x| x.id == a.id) {
       *slot = a;
     } else {
@@ -542,41 +332,24 @@ impl Config {
   }
 }
 
-fn validate_copilot_value(value: &Value) -> Result<()> {
-  if value.is_null() {
-    return Ok(());
-  }
-  let Some(obj) = value.as_object() else {
-    return Ok(());
-  };
-  if let Some(extra) = obj.get("extra_headers").and_then(Value::as_object) {
-    for name in extra.keys() {
-      if !is_token(name) {
-        return error::InvalidHeaderNameSnafu { name: name.clone() }.fail();
-      }
-      let lower = name.to_ascii_lowercase();
-      if matches!(
-        lower.as_str(),
-        "authorization" | "host" | "content-length" | "content-type"
-      ) {
-        return error::ReservedHeaderSnafu { name: name.clone() }.fail();
-      }
+fn validate_account_common(account: &AccountConfig) -> Result<()> {
+  if account.id.trim().is_empty() {
+    return error::InvalidAccountSnafu {
+      id: account.id.clone(),
+      message: "id must be non-empty".to_string(),
     }
+    .fail();
   }
-  for field in [
-    "editor_version",
-    "editor_plugin_version",
-    "user_agent",
-    "copilot_integration_id",
-    "openai_intent",
-  ] {
-    if obj
-      .get(field)
-      .and_then(Value::as_str)
-      .map(|s| s.trim().is_empty())
-      .unwrap_or(false)
-    {
-      return error::EmptyFieldSnafu { field }.fail();
+  if account.provider.trim().is_empty() {
+    return error::InvalidAccountSnafu {
+      id: account.id.clone(),
+      message: "provider must be non-empty".to_string(),
+    }
+    .fail();
+  }
+  for name in account.headers.keys() {
+    if !is_token(name) {
+      return error::InvalidHeaderNameSnafu { name: name.clone() }.fail();
     }
   }
   Ok(())

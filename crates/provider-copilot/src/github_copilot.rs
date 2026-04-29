@@ -6,12 +6,12 @@ use crate::config::{CopilotHeaders, InitiatorMode};
 use crate::util::redact::{token_fingerprint, BehaveAs};
 use crate::util::secret::Secret;
 use async_trait::async_trait;
-use llm_core::account::Account;
+use llm_core::account::AccountConfig;
 use parking_lot::RwLock;
 use reqwest::header::HeaderMap;
 use serde_json::Value;
 use snafu::ResultExt;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use tokio::sync::Mutex as AsyncMutex;
 use tracing::{debug, instrument, warn};
 
@@ -31,7 +31,7 @@ struct ApiToken {
 pub struct CopilotProvider {
   #[allow(dead_code)]
   pub id: String,
-  pub github_token: Secret<String>,
+  pub refresh_token: Secret<String>,
   pub headers: CopilotHeaders,
   refresh_lock: AsyncMutex<()>,
   cache: RwLock<ApiToken>,
@@ -55,19 +55,28 @@ fn copilot_info() -> &'static ProviderInfo {
 }
 
 impl CopilotProvider {
-  pub fn from_account(a: &Account, global: &CopilotHeaders) -> Result<Self> {
-    let gh = a.github_token.clone().ok_or(error::Error::MissingCredential {
+  pub fn validate_account(a: &AccountConfig) -> Result<()> {
+    let _ = a.refresh_token.clone().ok_or(error::Error::MissingCredential {
       account: a.id.clone(),
-      what: "github_token",
+      what: "refresh_token",
     })?;
+    let headers = headers_from_settings(a)?;
+    headers.validate()?;
+    Ok(())
+  }
+
+  pub fn from_account(a: Arc<AccountConfig>) -> Result<Self> {
+    Self::validate_account(&a)?;
+    let gh = a.refresh_token.clone().expect("validated refresh_token");
+    let headers = headers_from_settings(&a)?;
     Ok(Self {
       id: format!("github-copilot:{}", a.id),
-      github_token: gh,
-      headers: global.merged(a.copilot.as_ref().map(CopilotHeaders::from_value).transpose()?.as_ref()),
+      refresh_token: gh,
+      headers,
       refresh_lock: AsyncMutex::new(()),
       cache: RwLock::new(ApiToken {
-        token: a.api_token.clone(),
-        expires_at: a.api_token_expires_at,
+        token: a.access_token.clone(),
+        expires_at: a.access_token_expires_at,
       }),
       info: copilot_info().clone(),
     })
@@ -101,7 +110,7 @@ impl CopilotProvider {
       }
     }
     debug!("api token expired or missing; refreshing");
-    let resp = token::exchange(http, self.github_token.expose(), &self.headers).await?;
+    let resp = token::exchange(http, self.refresh_token.expose(), &self.headers).await?;
     let token = Secret::new(resp.token);
     {
       let mut g = self.cache.write();
@@ -213,6 +222,39 @@ impl Provider for CopilotProvider {
   fn on_unauthorized(&self) {
     self.invalidate_api_token();
   }
+
+  fn needs_refresh(&self, cfg: &AccountConfig) -> bool {
+    const SKEW_SECS: i64 = 300;
+    let now = time::OffsetDateTime::now_utc().unix_timestamp();
+    cfg
+      .access_token_expires_at
+      .map(|exp| exp - SKEW_SECS <= now)
+      .unwrap_or(true)
+      || cfg.access_token.is_none()
+  }
+
+  async fn refresh(&self, cfg: &AccountConfig, http: &reqwest::Client) -> Result<AccountConfig> {
+    let token = self.ensure_api_token(http).await?;
+    let (_, expires_at) = self.snapshot();
+    let mut next = cfg.clone();
+    next.access_token = Some(token);
+    next.access_token_expires_at = expires_at;
+    next.last_refresh = Some(time::OffsetDateTime::now_utc().unix_timestamp());
+    Ok(next)
+  }
+}
+
+fn headers_from_settings(a: &AccountConfig) -> Result<CopilotHeaders> {
+  let value = serde_json::to_value(&a.settings).map_err(|source| error::Error::Json {
+    what: "copilot account settings",
+    body: format!("{:?}", a.settings),
+    source,
+  })?;
+  let mut headers = CopilotHeaders::from_value(&value)?;
+  for (name, value) in &a.headers {
+    headers.extra_headers.insert(name.clone(), value.clone());
+  }
+  Ok(headers)
 }
 
 impl CopilotProvider {

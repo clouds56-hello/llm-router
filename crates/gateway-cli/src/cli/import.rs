@@ -1,5 +1,5 @@
-use crate::config::{Account, Config};
-use crate::provider::{ID_GITHUB_COPILOT, ZAI_ALIASES};
+use crate::config::{Account, AuthType, Config};
+use crate::provider::{ID_GITHUB_COPILOT, ZAI_PROVIDERS};
 use crate::util::secret::Secret;
 use anyhow::{anyhow, Context, Result};
 use clap::{Args, ValueEnum};
@@ -36,14 +36,14 @@ pub struct ImportArgs {
 }
 
 pub async fn run(cfg_path: Option<PathBuf>, args: ImportArgs) -> Result<()> {
-  let is_zai = ZAI_ALIASES.contains(&args.provider.as_str());
+  let is_zai = ZAI_PROVIDERS.contains(&args.provider.as_str());
   let is_copilot = args.provider == ID_GITHUB_COPILOT;
 
   if !is_copilot && !is_zai {
     return Err(anyhow!(
       "unknown provider '{}'. Try one of: {ID_GITHUB_COPILOT}, {}",
       args.provider,
-      ZAI_ALIASES.join(" | ")
+      ZAI_PROVIDERS.join(" | ")
     ));
   }
 
@@ -85,13 +85,23 @@ fn copilot_account(id: String, token: String) -> Account {
   Account {
     id,
     provider: ID_GITHUB_COPILOT.into(),
-    github_token: Some(Secret::new(token)),
-    api_token: None,
-    api_token_expires_at: None,
+    enabled: true,
+    tags: Vec::new(),
+    label: None,
+    base_url: None,
+    headers: Default::default(),
+    auth_type: Some(AuthType::Bearer),
+    username: None,
     api_key: None,
-    copilot: None,
-    zai: None,
-    behave_as: None,
+    api_key_expires_at: None,
+    access_token: None,
+    access_token_expires_at: None,
+    id_token: None,
+    refresh_token: Some(Secret::new(token)),
+    extra: Default::default(),
+    refresh_url: Some(crate::provider::github_copilot::TOKEN_EXCHANGE_URL.into()),
+    last_refresh: None,
+    settings: toml::Table::new(),
   }
 }
 
@@ -99,13 +109,23 @@ fn zai_account(id: String, provider: &str, key: String) -> Account {
   Account {
     id,
     provider: provider.into(),
-    github_token: None,
-    api_token: None,
-    api_token_expires_at: None,
+    enabled: true,
+    tags: Vec::new(),
+    label: None,
+    base_url: Some(crate::provider::zai::default_base_url(provider).into()),
+    headers: Default::default(),
+    auth_type: Some(AuthType::Bearer),
+    username: None,
     api_key: Some(Secret::new(key)),
-    copilot: None,
-    zai: None,
-    behave_as: None,
+    api_key_expires_at: None,
+    access_token: None,
+    access_token_expires_at: None,
+    id_token: None,
+    refresh_token: None,
+    extra: Default::default(),
+    refresh_url: None,
+    last_refresh: None,
+    settings: toml::Table::new(),
   }
 }
 

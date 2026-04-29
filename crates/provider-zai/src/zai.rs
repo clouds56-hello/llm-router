@@ -2,7 +2,7 @@
 //!
 //! Targets Z.ai's OpenAI-compatible coding-plan endpoint
 //! (`https://api.z.ai/api/coding/paas/v4`). The same backend implementation is
-//! exposed under four wire-aliases that all behave identically:
+//! exposed under four provider identifiers that share one implementation:
 //!   - `zai-coding-plan` (canonical)
 //!   - `zai`
 //!   - `zhipuai-coding-plan`
@@ -19,13 +19,13 @@ pub use crate::{models, quota, transform};
 use crate::util::redact::token_fingerprint;
 use crate::util::secret::Secret;
 use async_trait::async_trait;
-use llm_core::account::Account;
+use llm_core::account::AccountConfig;
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use serde_json::Value;
 use snafu::ResultExt;
 use tracing::{debug, instrument, warn};
 
-use crate::{error, AuthKind, ModelInfo, Provider, ProviderInfo, RequestCtx, Result, ZAI_ALIASES};
+use crate::{error, AuthKind, ModelInfo, Provider, ProviderInfo, RequestCtx, Result, ZAI_PROVIDERS};
 
 /// Default upstream for the coding plan. Override per-account via
 /// `[accounts.<id>.zai] base_url = "..."`.
@@ -51,15 +51,15 @@ impl std::fmt::Debug for ZaiProvider {
 }
 
 impl ZaiProvider {
-  pub fn from_account(a: &Account) -> Result<Self> {
-    if !ZAI_ALIASES.contains(&a.provider.as_str()) {
+  pub fn validate_account(a: &AccountConfig) -> Result<()> {
+    if !ZAI_PROVIDERS.contains(&a.provider.as_str()) {
       return error::ProviderMismatchSnafu {
-        expected: "zai-coding-plan|zai|zhipuai-coding-plan|zhipuai",
+        expected: "zai|zai-coding-plan|zhipuai|zhipuai-coding-plan",
         got: a.provider.clone(),
       }
       .fail();
     }
-    let key = a
+    let _ = a
       .api_key
       .clone()
       .filter(|s| !s.expose().trim().is_empty())
@@ -67,15 +67,20 @@ impl ZaiProvider {
         account: a.id.clone(),
         what: "api_key",
       })?;
+    Ok(())
+  }
+
+  pub fn from_account(a: std::sync::Arc<AccountConfig>) -> Result<Self> {
+    Self::validate_account(&a)?;
+    let key = a.api_key.clone().expect("validated api_key");
     let base_url = a
-      .zai
-      .as_ref()
-      .and_then(|z| z.base_url.clone())
-      .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
+      .base_url
+      .clone()
+      .unwrap_or_else(|| default_base_url(&a.provider).to_string());
 
     let info = ProviderInfo {
       id: a.provider.clone(),
-      aliases: ZAI_ALIASES,
+      aliases: &[],
       display_name: "Z.ai (GLM Coding Plan)",
       upstream_url: base_url.clone(),
       auth_kind: AuthKind::StaticApiKey,
@@ -107,6 +112,10 @@ impl ZaiProvider {
     m.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     Ok(m)
   }
+}
+
+pub fn default_base_url(_provider: &str) -> &'static str {
+  DEFAULT_BASE_URL
 }
 
 #[async_trait]
@@ -223,7 +232,7 @@ impl Provider for ZaiProvider {
 mod tests {
   use super::*;
   use crate::config::Account as AcctCfg;
-  use crate::provider::{new_outbound_capture, Endpoint, RequestCtx};
+  use crate::provider::{new_outbound_capture, Endpoint, RequestCtx, ZAI_PROVIDERS};
   use axum::http::HeaderMap;
   use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -231,39 +240,49 @@ mod tests {
     AcctCfg {
       id: "test".into(),
       provider: provider.into(),
-      github_token: None,
-      api_token: None,
-      api_token_expires_at: None,
+      enabled: true,
+      tags: Vec::new(),
+      label: None,
+      base_url: None,
+      headers: Default::default(),
+      auth_type: None,
+      username: None,
       api_key: key.map(|s| Secret::new(s.into())),
-      copilot: None,
-      zai: None,
-      behave_as: None,
+      api_key_expires_at: None,
+      access_token: None,
+      access_token_expires_at: None,
+      id_token: None,
+      refresh_token: None,
+      extra: Default::default(),
+      refresh_url: None,
+      last_refresh: None,
+      settings: toml::Table::new(),
     }
   }
 
   #[test]
   fn rejects_missing_api_key() {
-    let err = ZaiProvider::from_account(&acct("zai-coding-plan", None)).unwrap_err();
+    let err = ZaiProvider::from_account(std::sync::Arc::new(acct("zai-coding-plan", None))).unwrap_err();
     assert!(err.to_string().contains("api_key"), "{err}");
   }
 
   #[test]
   fn rejects_blank_api_key() {
-    let err = ZaiProvider::from_account(&acct("zai-coding-plan", Some("   "))).unwrap_err();
+    let err = ZaiProvider::from_account(std::sync::Arc::new(acct("zai-coding-plan", Some("   ")))).unwrap_err();
     assert!(err.to_string().contains("api_key"), "{err}");
   }
 
   #[test]
   fn rejects_non_zai_provider_id() {
-    let err = ZaiProvider::from_account(&acct("github-copilot", Some("sk-x"))).unwrap_err();
+    let err = ZaiProvider::from_account(std::sync::Arc::new(acct("github-copilot", Some("sk-x")))).unwrap_err();
     assert!(err.to_string().contains("provider mismatch"), "{err}");
   }
 
   #[test]
   fn all_four_aliases_construct_and_preserve_canonical_id() {
-    for alias in ZAI_ALIASES {
-      let p = ZaiProvider::from_account(&acct(alias, Some("sk-x"))).unwrap();
-      assert_eq!(p.info().id, *alias, "info().id should preserve operator alias");
+    for provider in ZAI_PROVIDERS {
+      let p = ZaiProvider::from_account(std::sync::Arc::new(acct(provider, Some("sk-x")))).unwrap();
+      assert_eq!(p.info().id, *provider, "info().id should preserve provider id");
       assert_eq!(p.info().display_name, "Z.ai (GLM Coding Plan)");
       assert_eq!(p.info().auth_kind, AuthKind::StaticApiKey);
       assert!(!p.info().default_models.is_empty());
@@ -272,17 +291,15 @@ mod tests {
 
   #[test]
   fn defaults_to_official_endpoint() {
-    let p = ZaiProvider::from_account(&acct("zai", Some("sk-x"))).unwrap();
+    let p = ZaiProvider::from_account(std::sync::Arc::new(acct("zai", Some("sk-x")))).unwrap();
     assert_eq!(p.base_url, DEFAULT_BASE_URL);
   }
 
   #[test]
   fn respects_base_url_override() {
     let mut a = acct("zhipuai", Some("sk-x"));
-    a.zai = Some(crate::config::ZaiAccountConfig {
-      base_url: Some("https://open.bigmodel.cn/api/paas/v4".into()),
-    });
-    let p = ZaiProvider::from_account(&a).unwrap();
+    a.base_url = Some("https://open.bigmodel.cn/api/paas/v4".into());
+    let p = ZaiProvider::from_account(std::sync::Arc::new(a)).unwrap();
     assert_eq!(p.base_url, "https://open.bigmodel.cn/api/paas/v4");
   }
 
@@ -302,10 +319,8 @@ mod tests {
     });
 
     let mut cfg = acct("zai-coding-plan", Some("sk-test"));
-    cfg.zai = Some(crate::config::ZaiAccountConfig {
-      base_url: Some(format!("http://{addr}")),
-    });
-    let provider = ZaiProvider::from_account(&cfg).unwrap();
+    cfg.base_url = Some(format!("http://{addr}"));
+    let provider = ZaiProvider::from_account(std::sync::Arc::new(cfg)).unwrap();
     let http = reqwest::Client::new();
     let body = serde_json::json!({ "model": "glm-4.6", "messages": [{ "role": "user", "content": "hi" }] });
     let inbound = HeaderMap::new();

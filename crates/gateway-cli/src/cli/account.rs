@@ -1,7 +1,6 @@
 use crate::config::{Account, Config};
-use crate::provider::{ID_GITHUB_COPILOT, ZAI_ALIASES};
+use crate::provider::{ID_GITHUB_COPILOT, ZAI_PROVIDERS};
 use crate::util::http::build_client;
-use crate::util::secret::Secret;
 use crate::util::timefmt::{relative_from_now, relative_from_now_ms};
 use anyhow::{anyhow, Result};
 use clap::Subcommand;
@@ -71,20 +70,21 @@ async fn list(cfg: &mut Config, cfg_path: &std::path::Path, args: ListArgs) -> R
     futures::future::join_all(futs).await
   };
 
-  // Persist any refreshed Copilot api_tokens. The quota probe already calls
+  // Persist any refreshed Copilot access tokens. The quota probe already calls
   // `token::exchange`, so we piggy-back on its result instead of issuing a
   // second request. This is a no-op under `--no-quota`.
   let mut dirty = false;
   for (a, q) in cfg.accounts.iter_mut().zip(quotas.iter()) {
     if let QuotaResult::Copilot(c) = q {
       let same_tok = a
-        .api_token
+        .access_token
         .as_ref()
         .map(|s| s.expose().as_str() == c.fresh_token.as_str())
         .unwrap_or(false);
-      if !same_tok || a.api_token_expires_at != Some(c.fresh_expires_at) {
-        a.api_token = Some(Secret::new(c.fresh_token.clone()));
-        a.api_token_expires_at = Some(c.fresh_expires_at);
+      if !same_tok || a.access_token_expires_at != Some(c.fresh_expires_at) {
+        a.access_token = Some(crate::util::secret::Secret::new(c.fresh_token.clone()));
+        a.access_token_expires_at = Some(c.fresh_expires_at);
+        a.last_refresh = Some(time::OffsetDateTime::now_utc().unix_timestamp());
         dirty = true;
       }
     }
@@ -121,7 +121,7 @@ struct CopilotMonthly {
   /// Marketing plan name (e.g. `individual_pro`).
   plan: Option<String>,
   reset_date: Option<String>, // ISO YYYY-MM-DD
-  /// Fresh short-lived Copilot api_token returned by the same exchange
+  /// Fresh short-lived Copilot access token returned by the same exchange
   /// call that produced the quota. Persisted back to config so that the
   /// daemon (which never writes to disk at runtime) starts up with a
   /// non-expired cache.
@@ -131,16 +131,16 @@ struct CopilotMonthly {
 
 async fn fetch_quota(http: reqwest::Client, account: Account, timeout: Duration) -> QuotaResult {
   if account.provider == ID_GITHUB_COPILOT {
-    let Some(gh) = account.github_token.clone() else {
+    let Some(gh) = account.refresh_token.clone() else {
       return QuotaResult::None;
     };
-    let header_value = account.copilot.clone().unwrap_or_else(|| serde_json::json!({}));
+    let header_value = serde_json::to_value(&account.settings).unwrap_or_else(|_| serde_json::json!({}));
     let core_headers = match llm_provider_copilot::config::CopilotHeaders::from_value(&header_value) {
       Ok(h) => h,
       Err(e) => return QuotaResult::Err(short_err(&e)),
     };
     // Two parallel probes:
-    //   1. token exchange — refreshes api_token (always needed on `list`)
+    //   1. token exchange — refreshes access_token (always needed on `list`)
     //   2. user-info     — quota_snapshots (Plus/Business plans)
     let http2 = http.clone();
     let gh2 = gh.clone();
@@ -176,7 +176,7 @@ async fn fetch_quota(http: reqwest::Client, account: Account, timeout: Duration)
     };
   }
 
-  if ZAI_ALIASES.contains(&account.provider.as_str()) {
+  if ZAI_PROVIDERS.contains(&account.provider.as_str()) {
     let Some(key) = account.api_key.clone() else {
       return QuotaResult::None;
     };
@@ -204,12 +204,12 @@ fn short_err<E: std::fmt::Display>(e: &E) -> String {
 fn render_account(a: &Account, q: &QuotaResult) {
   println!("{}  ({})", a.id, a.provider);
 
-  let has = a.api_token.is_some() || a.api_key.is_some();
+  let has = a.access_token.is_some() || a.api_key.is_some() || a.refresh_token.is_some();
   println!("  credentials : {}", if has { "present" } else { "missing" });
 
-  // Expiry: short-lived OAuth (api_token_expires_at) vs static api_key.
-  match a.api_token_expires_at {
-    Some(ts) => println!("  expires     : {} (api_token)", relative_from_now(ts)),
+  // Expiry: short-lived OAuth (access_token_expires_at) vs static api_key.
+  match a.access_token_expires_at {
+    Some(ts) => println!("  expires     : {} (access_token)", relative_from_now(ts)),
     None if a.api_key.is_some() => println!("  expires     : never (static api_key)"),
     None => println!("  expires     : -"),
   }
@@ -361,30 +361,40 @@ fn show(cfg: &Config, id: &str) -> Result<()> {
     .ok_or_else(|| anyhow!("no account with id '{id}'"))?;
   println!("id: {}", a.id);
   println!("provider: {}", a.provider);
-  if let Some(gh) = a.github_token.as_ref().map(|s| s.expose()) {
-    println!("github_token: {}…", &gh[..gh.len().min(7)]);
+  println!("enabled: {}", a.enabled);
+  if !a.tags.is_empty() {
+    println!("tags: {}", a.tags.join(", "));
+  }
+  if let Some(label) = &a.label {
+    println!("label: {label}");
+  }
+  if let Some(refresh) = a.refresh_token.as_ref().map(|s| s.expose()) {
+    println!("refresh_token: {}", mask(refresh));
   }
   if let Some(k) = a.api_key.as_ref().map(|s| s.expose()) {
     println!("api_key: {}", mask(k));
   }
-  if a.api_token.is_some() || a.api_token_expires_at.is_some() {
+  if a.access_token.is_some() || a.access_token_expires_at.is_some() {
     println!(
-      "api_token: {}",
-      a.api_token
+      "access_token: {}",
+      a.access_token
         .as_ref()
         .map(|s| mask(s.expose()))
         .unwrap_or_else(|| "-".into())
     );
-    match a.api_token_expires_at {
-      Some(ts) => println!("api_token_expires_at: {ts} ({})", relative_from_now(ts)),
-      None => println!("api_token_expires_at: -"),
+    match a.access_token_expires_at {
+      Some(ts) => println!("access_token_expires_at: {ts} ({})", relative_from_now(ts)),
+      None => println!("access_token_expires_at: -"),
     }
   }
-  println!("override_headers: {}", a.copilot.is_some());
-  if let Some(z) = &a.zai {
-    if let Some(b) = &z.base_url {
-      println!("zai.base_url: {b}");
-    }
+  if let Some(b) = &a.base_url {
+    println!("base_url: {b}");
+  }
+  if let Some(ts) = a.last_refresh {
+    println!("last_refresh: {ts} ({})", relative_from_now(ts));
+  }
+  if !a.settings.is_empty() {
+    println!("settings: {} keys", a.settings.len());
   }
   Ok(())
 }

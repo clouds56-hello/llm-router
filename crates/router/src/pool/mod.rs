@@ -5,8 +5,9 @@
 pub mod affinity;
 
 use crate::pool::affinity::{Affinity, Lookup};
+use arc_swap::ArcSwap;
 use llm_config::Config;
-use llm_core::account::Account as AccountConfig;
+use llm_core::account::AccountConfig;
 use llm_core::provider::{Endpoint, Provider};
 use parking_lot::RwLock;
 use snafu::{ResultExt, Snafu};
@@ -36,8 +37,8 @@ pub enum Error {
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
-pub struct Account {
-  pub id: String,
+pub struct AccountHandle {
+  pub config: ArcSwap<AccountConfig>,
   pub provider: Arc<dyn Provider>,
   inner: RwLock<AccountInner>,
 }
@@ -47,7 +48,11 @@ struct AccountInner {
   consecutive_failures: u32,
 }
 
-impl Account {
+impl AccountHandle {
+  pub fn id(&self) -> String {
+    self.config.load().id.clone()
+  }
+
   fn is_healthy(&self) -> bool {
     match self.inner.read().cooldown_until {
       None => true,
@@ -62,7 +67,7 @@ impl Account {
     let cd = cooldown_base.saturating_mul(mult);
     g.cooldown_until = Some(Instant::now() + cd);
     warn!(
-      account = %self.id,
+      account = %self.id(),
       retry_in_secs = cd.as_secs(),
       consecutive_failures = g.consecutive_failures,
       "account in cooldown"
@@ -72,7 +77,7 @@ impl Account {
   pub fn mark_success(&self) {
     let mut g = self.inner.write();
     if g.consecutive_failures > 0 {
-      debug!(account = %self.id, recovered_after = g.consecutive_failures, "account recovered");
+      debug!(account = %self.id(), recovered_after = g.consecutive_failures, "account recovered");
     }
     g.consecutive_failures = 0;
     g.cooldown_until = None;
@@ -81,33 +86,36 @@ impl Account {
   /// Notify the underlying provider that an upstream 401 happened so it can
   /// drop any cached short-lived credential.
   pub fn invalidate_credentials(&self) {
-    debug!(account = %self.id, "invalidating credentials due to upstream 401");
+    debug!(account = %self.id(), "invalidating credentials due to upstream 401");
     self.provider.on_unauthorized();
   }
 }
 
 pub struct AccountPool {
   buckets: BTreeMap<String, ProviderBucket>,
-  accounts: Vec<Arc<Account>>,
+  accounts: Vec<Arc<AccountHandle>>,
   cooldown_base: Duration,
   affinity: Affinity,
 }
 
 struct ProviderBucket {
   provider: Arc<dyn Provider>,
-  accounts: Vec<Arc<Account>>,
+  accounts: Vec<Arc<AccountHandle>>,
   cursor: AtomicUsize,
 }
 
 #[allow(dead_code)]
 pub enum SessionAcquire {
-  Account(Arc<Account>),
+  Account(Arc<AccountHandle>),
   SessionExpired,
   None,
 }
 
 pub enum EndpointAcquire {
-  Account { acct: Arc<Account>, endpoint: Endpoint },
+  Account {
+    acct: Arc<AccountHandle>,
+    endpoint: Endpoint,
+  },
   SessionExpired,
   None,
 }
@@ -115,7 +123,7 @@ pub enum EndpointAcquire {
 impl AccountPool {
   pub fn from_config_with<F>(cfg: &Config, build_provider: F) -> Result<Arc<Self>>
   where
-    F: Fn(&AccountConfig) -> llm_core::provider::Result<Arc<dyn Provider>>,
+    F: Fn(Arc<AccountConfig>) -> llm_core::provider::Result<Arc<dyn Provider>>,
   {
     if cfg.accounts.is_empty() {
       return NoAccountsSnafu.fail();
@@ -123,10 +131,11 @@ impl AccountPool {
     let mut accounts = Vec::with_capacity(cfg.accounts.len());
     let mut buckets: BTreeMap<String, ProviderBucket> = BTreeMap::new();
     for a in &cfg.accounts {
-      let p = build_provider(a).context(BuildAccountSnafu { id: a.id.clone() })?;
+      let cfg = Arc::new(a.clone());
+      let p = build_provider(cfg.clone()).context(BuildAccountSnafu { id: a.id.clone() })?;
       debug!(account = %a.id, provider = %p.info().id, "pool: built account");
-      let acct = Arc::new(Account {
-        id: a.id.clone(),
+      let acct = Arc::new(AccountHandle {
+        config: ArcSwap::from(cfg),
         provider: p.clone(),
         inner: RwLock::new(AccountInner {
           cooldown_until: None,
@@ -194,7 +203,7 @@ impl AccountPool {
     match self.acquire_from_buckets(model, endpoint) {
       Some(acct) => {
         if let Some(id) = session_id {
-          self.record_session(id, &acct.id);
+          self.record_session(id, &acct.id());
         }
         SessionAcquire::Account(acct)
       }
@@ -227,7 +236,7 @@ impl AccountPool {
     match self.acquire_from_buckets_convertible(model, requested) {
       Some((acct, endpoint)) => {
         if let Some(id) = session_id {
-          self.record_session(id, &acct.id);
+          self.record_session(id, &acct.id());
         }
         EndpointAcquire::Account { acct, endpoint }
       }
@@ -239,12 +248,12 @@ impl AccountPool {
     self.affinity.record(session_id, account_id);
   }
 
-  pub fn all(&self) -> &[Arc<Account>] {
+  pub fn all(&self) -> &[Arc<AccountHandle>] {
     &self.accounts
   }
 
   #[allow(dead_code)]
-  fn acquire_from_buckets(&self, model: Option<&str>, endpoint: Endpoint) -> Option<Arc<Account>> {
+  fn acquire_from_buckets(&self, model: Option<&str>, endpoint: Endpoint) -> Option<Arc<AccountHandle>> {
     let mut candidates = Vec::new();
     for bucket in self.buckets.values() {
       if bucket.matches(model, endpoint) {
@@ -258,7 +267,7 @@ impl AccountPool {
       }
     }
 
-    let mut best: Option<Arc<Account>> = None;
+    let mut best: Option<Arc<AccountHandle>> = None;
     let mut best_t: Option<Instant> = None;
     for bucket in candidates {
       if let Some((acct, t)) = bucket.pick_earliest_cooldown() {
@@ -275,7 +284,7 @@ impl AccountPool {
     &self,
     model: Option<&str>,
     requested: Endpoint,
-  ) -> Option<(Arc<Account>, Endpoint)> {
+  ) -> Option<(Arc<AccountHandle>, Endpoint)> {
     for endpoint in fallback_order(requested) {
       let mut candidates = Vec::new();
       for bucket in self.buckets.values() {
@@ -290,7 +299,7 @@ impl AccountPool {
         }
       }
 
-      let mut best: Option<Arc<Account>> = None;
+      let mut best: Option<Arc<AccountHandle>> = None;
       let mut best_t: Option<Instant> = None;
       for bucket in candidates {
         if let Some((acct, t)) = bucket.pick_earliest_cooldown() {
@@ -307,16 +316,21 @@ impl AccountPool {
     None
   }
 
-  fn account_by_id(&self, id: &str) -> Option<Arc<Account>> {
-    self.accounts.iter().find(|a| a.id == id).cloned()
+  fn account_by_id(&self, id: &str) -> Option<Arc<AccountHandle>> {
+    self.accounts.iter().find(|a| a.config.load().id == id).cloned()
   }
 
-  fn account_matches(&self, acct: &Account, model: Option<&str>, endpoint: Endpoint) -> bool {
+  fn account_matches(&self, acct: &AccountHandle, model: Option<&str>, endpoint: Endpoint) -> bool {
     let model = model.unwrap_or("");
     (model.is_empty() || acct.provider.model_info(model).is_some()) && acct.provider.supports(model, endpoint)
   }
 
-  fn account_matching_endpoint(&self, acct: &Account, model: Option<&str>, requested: Endpoint) -> Option<Endpoint> {
+  fn account_matching_endpoint(
+    &self,
+    acct: &AccountHandle,
+    model: Option<&str>,
+    requested: Endpoint,
+  ) -> Option<Endpoint> {
     fallback_order(requested)
       .into_iter()
       .find(|endpoint| self.account_matches(acct, model, *endpoint))
@@ -337,7 +351,7 @@ impl ProviderBucket {
     (model.is_empty() || self.provider.model_info(model).is_some()) && self.provider.supports(model, endpoint)
   }
 
-  fn pick_healthy(&self) -> Option<Arc<Account>> {
+  fn pick_healthy(&self) -> Option<Arc<AccountHandle>> {
     let n = self.accounts.len();
     if n == 0 {
       return None;
@@ -353,8 +367,8 @@ impl ProviderBucket {
     None
   }
 
-  fn pick_earliest_cooldown(&self) -> Option<(Arc<Account>, Option<Instant>)> {
-    let mut best: Option<Arc<Account>> = None;
+  fn pick_earliest_cooldown(&self) -> Option<(Arc<AccountHandle>, Option<Instant>)> {
+    let mut best: Option<Arc<AccountHandle>> = None;
     let mut best_t: Option<Instant> = None;
     for a in &self.accounts {
       let t = a.inner.read().cooldown_until;
@@ -431,9 +445,29 @@ mod tests {
     }
   }
 
-  fn acct(id: &str, provider: Arc<dyn Provider>) -> Arc<Account> {
-    Arc::new(Account {
-      id: id.into(),
+  fn acct(id: &str, provider: Arc<dyn Provider>) -> Arc<AccountHandle> {
+    Arc::new(AccountHandle {
+      config: ArcSwap::from(Arc::new(AccountConfig {
+        id: id.into(),
+        provider: provider.info().id.clone(),
+        enabled: true,
+        tags: Vec::new(),
+        label: None,
+        base_url: None,
+        headers: BTreeMap::new(),
+        auth_type: None,
+        username: None,
+        api_key: None,
+        api_key_expires_at: None,
+        access_token: None,
+        access_token_expires_at: None,
+        id_token: None,
+        refresh_token: None,
+        extra: BTreeMap::new(),
+        refresh_url: None,
+        last_refresh: None,
+        settings: toml::Table::new(),
+      })),
       provider,
       inner: RwLock::new(AccountInner {
         cooldown_until: None,
@@ -482,13 +516,13 @@ mod tests {
       let SessionAcquire::Account(a) = p.acquire_for_session(None, Some("model-a"), Endpoint::ChatCompletions) else {
         panic!("expected provider-a account");
       };
-      assert!(a.id.starts_with('a'), "wrong account: {}", a.id);
+      assert!(a.id().starts_with('a'), "wrong account: {}", a.id());
     }
     for _ in 0..8 {
       let SessionAcquire::Account(a) = p.acquire_for_session(None, Some("model-b"), Endpoint::ChatCompletions) else {
         panic!("expected provider-b account");
       };
-      assert_eq!(a.id, "b1");
+      assert_eq!(a.id(), "b1");
     }
     assert!(matches!(
       p.acquire_for_session(None, Some("unknown"), Endpoint::ChatCompletions),
@@ -508,7 +542,7 @@ mod tests {
       else {
         panic!("expected account");
       };
-      assert_eq!(next.id, first.id);
+      assert_eq!(next.id(), first.id());
     }
   }
 }

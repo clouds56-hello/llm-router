@@ -9,7 +9,7 @@
 use super::error::ApiError;
 use super::AppState;
 use crate::db::{CallRecord, HttpSnapshot, MessageRecord, OutboundSnapshot, PartRecord, SessionSource};
-use crate::pool::Account;
+use crate::pool::AccountHandle;
 use crate::provider::Endpoint;
 use axum::body::Body;
 use axum::http::{HeaderMap, HeaderValue};
@@ -29,7 +29,7 @@ use uuid::Uuid;
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn buffered_response(
   s: AppState,
-  acct: Arc<Account>,
+  acct: Arc<AccountHandle>,
   resp: reqwest::Response,
   endpoint: Endpoint,
   upstream_endpoint: Endpoint,
@@ -77,7 +77,7 @@ pub(crate) async fn buffered_response(
   let (pt, ct) = parse_usage_any_json(&bytes);
   record_call(
     &s,
-    &acct.id,
+    &acct.id(),
     acct.provider.info().id.as_str(),
     endpoint,
     &model,
@@ -105,7 +105,7 @@ pub(crate) async fn buffered_response(
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn stream_response(
   s: AppState,
-  acct: Arc<Account>,
+  acct: Arc<AccountHandle>,
   resp: reqwest::Response,
   endpoint: Endpoint,
   upstream_endpoint: Endpoint,
@@ -125,7 +125,7 @@ pub(crate) async fn stream_response(
   let resp_body_holder = Arc::new(parking_lot::Mutex::new(Vec::<u8>::new()));
   let resp_body_for_stream = resp_body_holder.clone();
   let max_body = s.db.as_ref().map(|db| db.body_max_bytes()).unwrap_or(0);
-  let acct_id = acct.id.clone();
+  let acct_id = acct.id();
   let provider_id = acct.provider.info().id.clone();
   let model_clone = model.clone();
   let initiator_clone = initiator.clone();
@@ -544,7 +544,7 @@ impl<S, F: FnOnce() + Send + 'static> Drop for StreamWithFinalizer<S, F> {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::config::{Account as AccountCfg, Config, ZaiAccountConfig};
+  use crate::config::{Account as AccountCfg, AuthType, Config};
   use crate::server::build_state;
   use crate::util::secret::Secret;
   use serde_json::json;
@@ -623,13 +623,23 @@ mod tests {
     cfg.accounts.push(AccountCfg {
       id: "acct".into(),
       provider: "zai-coding-plan".into(),
-      github_token: None,
-      api_token: None,
-      api_token_expires_at: None,
+      enabled: true,
+      tags: Vec::new(),
+      label: None,
+      base_url: None,
+      headers: Default::default(),
+      auth_type: Some(AuthType::Bearer),
+      username: None,
       api_key: Some(Secret::new("sk-test".into())),
-      copilot: None,
-      zai: Some(ZaiAccountConfig { base_url: None }),
-      behave_as: None,
+      api_key_expires_at: None,
+      access_token: None,
+      access_token_expires_at: None,
+      id_token: None,
+      refresh_token: None,
+      extra: Default::default(),
+      refresh_url: None,
+      last_refresh: None,
+      settings: toml::Table::new(),
     });
     let db = Arc::new(FakeDb::default());
     let state = build_state(&cfg, Some(db.clone())).unwrap();

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 #[derive(Args, Debug)]
 pub struct HeadersArgs {
-  /// Show resolved headers for a specific account (defaults to the global set)
+  /// Show resolved headers for a specific account.
   #[arg(long)]
   pub account: Option<String>,
 }
@@ -13,7 +13,7 @@ pub struct HeadersArgs {
 pub async fn run(cfg_path: Option<PathBuf>, args: HeadersArgs) -> Result<()> {
   let (cfg, _) = Config::load(cfg_path.as_deref())?;
   let headers = match args.account {
-    None => llm_provider_copilot::config::CopilotHeaders::from_value(&cfg.copilot)?,
+    None => llm_provider_copilot::config::CopilotHeaders::default(),
     Some(id) => {
       let a = cfg
         .accounts
@@ -28,13 +28,12 @@ pub async fn run(cfg_path: Option<PathBuf>, args: HeadersArgs) -> Result<()> {
         println!("(headers are only relevant for the github-copilot provider)");
         return Ok(());
       }
-      let global = llm_provider_copilot::config::CopilotHeaders::from_value(&cfg.copilot)?;
-      let account = a
-        .copilot
-        .as_ref()
-        .map(llm_provider_copilot::config::CopilotHeaders::from_value)
-        .transpose()?;
-      global.merged(account.as_ref())
+      let value = serde_json::to_value(&a.settings)?;
+      let mut headers = llm_provider_copilot::config::CopilotHeaders::from_value(&value)?;
+      for (k, v) in &a.headers {
+        headers.extra_headers.insert(k.clone(), v.clone());
+      }
+      headers
     }
   };
   println!("editor-version:         {}", headers.editor_version);

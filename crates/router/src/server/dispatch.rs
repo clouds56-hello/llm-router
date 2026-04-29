@@ -15,7 +15,7 @@
 use super::error::ApiError;
 use super::AppState;
 use crate::db::OutboundSnapshot;
-use crate::pool::{Account, EndpointAcquire};
+use crate::pool::{AccountHandle, EndpointAcquire};
 use crate::provider::{new_outbound_capture, Endpoint, OutboundCapture};
 use axum::http::StatusCode;
 use serde_json::Value;
@@ -26,7 +26,7 @@ use tracing::{debug, info_span, warn, Instrument};
 const MAX_RETRIES: usize = 2;
 
 pub(crate) struct DispatchOk {
-  pub acct: Arc<Account>,
+  pub acct: Arc<AccountHandle>,
   pub resp: reqwest::Response,
   pub upstream_endpoint: Endpoint,
   /// The outbound snapshot captured by the provider during the *successful*
@@ -52,7 +52,7 @@ pub(crate) async fn dispatch<F, Fut>(
   send: F,
 ) -> Result<DispatchOk, ApiError>
 where
-  F: Fn(Arc<Account>, Endpoint, Arc<Value>, OutboundCapture) -> Fut,
+  F: Fn(Arc<AccountHandle>, Endpoint, Arc<Value>, OutboundCapture) -> Fut,
   Fut: Future<Output = crate::provider::Result<reqwest::Response>>,
 {
   let mut last_err: Option<(StatusCode, String)> = None;
@@ -76,12 +76,13 @@ where
         return Err(ApiError::not_implemented(endpoint.to_string(), model.to_string()));
       }
     };
-    super::record_last_account(&acct.id);
+    let account_id = acct.id();
+    super::record_last_account(&account_id);
 
     let attempt_span = info_span!(
       "attempt",
       attempt,
-      account = %acct.id,
+      account = %account_id,
       provider = %acct.provider.info().id,
       %endpoint,
       upstream_endpoint = %upstream_endpoint,
@@ -135,7 +136,7 @@ where
     debug!(parent: &attempt_span, "upstream accepted");
     acct.mark_success();
     if let Some(id) = session_id {
-      state.pool.record_session(id, &acct.id);
+      state.pool.record_session(id, &acct.id());
     }
     let outbound = capture.get().cloned();
     return Ok(DispatchOk {
@@ -153,7 +154,7 @@ where
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::config::{Account as AccountCfg, Config, ZaiAccountConfig};
+  use crate::config::{Account as AccountCfg, AuthType, Config};
   use crate::server::build_state;
   use crate::util::secret::Secret;
   use bytes::Bytes;
@@ -182,13 +183,23 @@ mod tests {
     cfg.accounts.push(AccountCfg {
       id: "acct".into(),
       provider: "zai-coding-plan".into(),
-      github_token: None,
-      api_token: None,
-      api_token_expires_at: None,
+      enabled: true,
+      tags: Vec::new(),
+      label: None,
+      base_url: None,
+      headers: Default::default(),
+      auth_type: Some(AuthType::Bearer),
+      username: None,
       api_key: Some(Secret::new("sk-test".into())),
-      copilot: None,
-      zai: Some(ZaiAccountConfig { base_url: None }),
-      behave_as: None,
+      api_key_expires_at: None,
+      access_token: None,
+      access_token_expires_at: None,
+      id_token: None,
+      refresh_token: None,
+      extra: Default::default(),
+      refresh_url: None,
+      last_refresh: None,
+      settings: toml::Table::new(),
     });
     cfg.db.enabled = false;
     let state = build_state(&cfg, None).unwrap();

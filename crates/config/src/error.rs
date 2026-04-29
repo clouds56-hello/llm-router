@@ -52,17 +52,8 @@ pub enum Error {
   #[snafu(display("header {name:?} is reserved and cannot be set via extra_headers"))]
   ReservedHeader { name: String },
 
-  #[snafu(display("[copilot].{field} must be non-empty"))]
-  EmptyField { field: &'static str },
-
-  #[snafu(display("account `{id}`: provider 'github-copilot' requires `github_token`"))]
-  MissingGithubToken { id: String },
-
-  #[snafu(display("account `{id}`: provider '{provider}' requires `api_key` (Z.ai dashboard API key)"))]
-  MissingApiKey { id: String, provider: String },
-
-  #[snafu(display("account `{id}`: invalid [copilot] override"))]
-  AccountOverride { id: String, source: Box<Error> },
+  #[snafu(display("account `{id}` is invalid: {message}"))]
+  InvalidAccount { id: String, message: String },
 
   #[snafu(display("validation failed: edited config no longer parses"))]
   EditValidate { source: toml::de::Error },

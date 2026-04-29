@@ -59,26 +59,6 @@ failure_cooldown_secs = 60
 [usage]
 enabled = true
 
-[copilot]
-editor_version         = "vscode/1.95.0"
-editor_plugin_version  = "copilot-chat/0.20.0"
-user_agent             = "GitHubCopilotChat/0.20.0"
-copilot_integration_id = "vscode-chat"
-openai_intent          = "conversation-panel"
-# How to populate the `X-Initiator` header on outbound chat requests.
-# - "auto"         (default) classify per request: "user" for a fresh human turn,
-#                  "agent" for tool-result follow-ups. Avoids being billed once
-#                  per tool round-trip on Copilot's premium models.
-# - "always_user"
-# - "always_agent"
-initiator_mode = "auto"
-
-# Optional persona overlay. When set, header values from the matching profile
-# in `profiles.toml` are merged in *before* the explicit fields above (so
-# anything you pin in `[copilot]` still wins). The downstream client may also
-# send `X-Behave-As: <persona>` per request, which overrides this.
-# behave_as = "opencode"
-
 # Optional outbound HTTP/HTTPS/SOCKS5 proxy. Omit the section entirely to make
 # a direct connection. Setting `system = true` defers to the standard
 # HTTP_PROXY / HTTPS_PROXY env vars.
@@ -91,15 +71,28 @@ initiator_mode = "auto"
 [[accounts]]
 id = "personal"
 provider = "github-copilot"   # default — see "Providers" below for others
-github_token = "gho_..."
+auth_type = "bearer"
+refresh_token = "gho_..."
+access_token = "tid=..."
+access_token_expires_at = 1730000000
+refresh_url = "https://api.github.com/copilot_internal/v2/token"
+
+[accounts.settings]
+editor_version         = "vscode/1.95.0"
+editor_plugin_version  = "copilot-chat/0.20.0"
+user_agent             = "GitHubCopilotChat/0.20.0"
+copilot_integration_id = "vscode-chat"
+openai_intent          = "conversation-panel"
+initiator_mode         = "auto"
+# behave_as = "opencode"
 ```
 
 The downstream client may also send `X-Initiator: user|agent` per request,
 which overrides the auto-classifier and the config setting.
 
 If Copilot starts rejecting requests with 401/403 + HTML, your editor identity
-headers are likely stale. Bump `[copilot]` to match the current VS Code Copilot
-Chat extension and restart.
+headers are likely stale. Bump the account's `[accounts.settings]` values to
+match the current VS Code Copilot Chat extension and restart.
 
 ## Commands
 
@@ -119,11 +112,10 @@ llm-router config list | edit | edit-profiles | path [--profiles] | list-profile
 | id | auth | notes |
 |---|---|---|
 | `github-copilot` (default) | GitHub OAuth device flow → short-lived API token | identity headers + persona overlay; auto-classified `X-Initiator` |
-| `zai-coding-plan` / `zai` / `zhipuai-coding-plan` / `zhipuai` | static API key (`Authorization: Bearer ...`) | OpenAI-compatible upstream; auto-injects `thinking: { type: "enabled", clear_thinking: false }` for any model whose static catalogue entry has `capabilities.reasoning = true` (and for any unknown `glm-*` id) |
+| `zai-coding-plan` / `zai` / `zhipuai-coding-plan` / `zhipuai` | static API key (`Authorization: Bearer ...`) | Four provider ids sharing one implementation; OpenAI-compatible upstream; auto-injects `thinking: { type: "enabled", clear_thinking: false }` for reasoning models |
 
-The four Z.ai aliases all route to the same backend implementation but
-preserve their alias verbatim on the saved account so usage logs and
-`/v1/models` reflect the operator's chosen ID. The default upstream is
+The four Z.ai provider ids share one backend implementation, but each id is
+registered independently. The default upstream is
 `https://api.z.ai/api/coding/paas/v4`; override per-account for the
 China-mainland endpoint:
 
@@ -131,9 +123,8 @@ China-mainland endpoint:
 [[accounts]]
 id = "coding-plan"
 provider = "zai-coding-plan"
+auth_type = "bearer"
 api_key = "sk-..."
-
-[accounts.zai]                   # optional
 base_url = "https://open.bigmodel.cn/api/paas/v4"
 ```
 
@@ -173,10 +164,8 @@ upstream-specific scope matches).
 Built-in personas: `copilot` (verified), `opencode`, `codex`, `openclaw`
 (placeholders — PRs welcome with verified header values).
 
-Selection precedence (low → high):
-compile-time defaults → `[copilot] behave_as` → `[[accounts]] behave_as` →
-inbound `X-Behave-As` → user-explicit `[copilot]` fields →
-per-account `[copilot]` overrides.
+Set an account persona with `settings.behave_as` under that account. The
+downstream client may also send `X-Behave-As: <persona>` per request.
 
 ## License
 

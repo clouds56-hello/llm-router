@@ -23,7 +23,7 @@ pub async fn list_models(State(s): State<AppState>) -> Result<Json<Value>, ApiEr
 
   for acct in accounts {
     let provider = acct.provider.clone();
-    debug!(account = %acct.id, provider = %provider.info().id, "list_models: querying account");
+    debug!(account = %acct.id(), provider = %provider.info().id, "list_models: querying account");
     match provider.list_models(&s.http).await {
       Ok(v) => {
         let arr = v.get("data").and_then(|d| d.as_array()).cloned().unwrap_or_default();
@@ -36,10 +36,10 @@ pub async fn list_models(State(s): State<AppState>) -> Result<Json<Value>, ApiEr
           enrich(&mut m, &id, provider.as_ref());
           out.push(m);
         }
-        debug!(account = %acct.id, added = out.len() - before, "list_models: account models merged");
+        debug!(account = %acct.id(), added = out.len() - before, "list_models: account models merged");
       }
       Err(e) => {
-        tracing::warn!(account = %acct.id, error = %e, "list_models failed");
+        tracing::warn!(account = %acct.id(), error = %e, "list_models failed");
         last_err = Some(e.to_string());
       }
     }

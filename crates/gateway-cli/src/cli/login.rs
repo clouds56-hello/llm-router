@@ -1,5 +1,5 @@
-use crate::config::{Account, Config, ProxyConfig};
-use crate::provider::{github_copilot as gh, zai, ID_GITHUB_COPILOT, ID_ZAI_CODING_PLAN, ZAI_ALIASES};
+use crate::config::{Account, AuthType, Config, ProxyConfig};
+use crate::provider::{github_copilot as gh, zai, ID_GITHUB_COPILOT, ID_ZAI_CODING_PLAN, ZAI_PROVIDERS};
 use crate::util::http::build_client;
 use crate::util::secret::Secret;
 use anyhow::{anyhow, Context, Result};
@@ -45,12 +45,12 @@ pub async fn run(cfg_path: Option<PathBuf>, args: LoginArgs) -> Result<()> {
 
   let account = match provider.as_str() {
     ID_GITHUB_COPILOT => copilot_login(&client, &cfg, args.id).await?,
-    p if ZAI_ALIASES.contains(&p) => zai_login(&client, p, args.id).await?,
+    p if ZAI_PROVIDERS.contains(&p) => zai_login(&client, p, args.id).await?,
     other => {
       return Err(anyhow!(
         "unknown provider '{other}'. Try one of: {}, {}",
         ID_GITHUB_COPILOT,
-        ZAI_ALIASES.join(" | ")
+        ZAI_PROVIDERS.join(" | ")
       ));
     }
   };
@@ -72,12 +72,12 @@ fn pick_provider_interactive() -> Result<String> {
     return Err(anyhow!(
       "no --provider given and stdin is not a TTY; pass --provider <id> (one of: {}, {})",
       ID_GITHUB_COPILOT,
-      ZAI_ALIASES.join(" | ")
+      ZAI_PROVIDERS.join(" | ")
     ));
   }
-  let mut options: Vec<&'static str> = Vec::with_capacity(1 + ZAI_ALIASES.len());
+  let mut options: Vec<&'static str> = Vec::with_capacity(1 + ZAI_PROVIDERS.len());
   options.push(ID_GITHUB_COPILOT);
-  options.extend(ZAI_ALIASES.iter().copied());
+  options.extend(ZAI_PROVIDERS.iter().copied());
 
   let pick = inquire::Select::new("Pick a provider:", options)
     .with_starting_cursor(0) // github-copilot
@@ -87,7 +87,7 @@ fn pick_provider_interactive() -> Result<String> {
   Ok(pick.to_string())
 }
 
-async fn copilot_login(client: &reqwest::Client, cfg: &Config, id_override: Option<String>) -> Result<Account> {
+async fn copilot_login(client: &reqwest::Client, _cfg: &Config, id_override: Option<String>) -> Result<Account> {
   println!("Requesting device code from GitHub…");
   let dc = gh::oauth::request_device_code(client).await?;
   println!();
@@ -99,7 +99,7 @@ async fn copilot_login(client: &reqwest::Client, cfg: &Config, id_override: Opti
   let gh_token = gh::oauth::poll_for_token(client, &dc).await?;
   println!("Got GitHub token. Verifying Copilot access…");
 
-  let headers = llm_provider_copilot::config::CopilotHeaders::from_value(&cfg.copilot)?;
+  let headers = llm_provider_copilot::config::CopilotHeaders::default();
   let resp = gh::token::exchange(client, &gh_token, &headers).await?;
 
   let id = match id_override {
@@ -112,13 +112,23 @@ async fn copilot_login(client: &reqwest::Client, cfg: &Config, id_override: Opti
   Ok(Account {
     id,
     provider: ID_GITHUB_COPILOT.into(),
-    github_token: Some(Secret::new(gh_token)),
-    api_token: Some(Secret::new(resp.token)),
-    api_token_expires_at: Some(resp.expires_at),
+    enabled: true,
+    tags: Vec::new(),
+    label: None,
+    base_url: None,
+    headers: Default::default(),
+    auth_type: Some(AuthType::Bearer),
+    username: None,
     api_key: None,
-    copilot: None,
-    zai: None,
-    behave_as: None,
+    api_key_expires_at: None,
+    access_token: Some(Secret::new(resp.token)),
+    access_token_expires_at: Some(resp.expires_at),
+    id_token: None,
+    refresh_token: Some(Secret::new(gh_token)),
+    extra: Default::default(),
+    refresh_url: Some(gh::TOKEN_EXCHANGE_URL.into()),
+    last_refresh: Some(time::OffsetDateTime::now_utc().unix_timestamp()),
+    settings: toml::Table::new(),
   })
 }
 
@@ -149,13 +159,23 @@ async fn zai_login(client: &reqwest::Client, provider_alias: &str, id_override: 
   Ok(Account {
     id,
     provider: provider_alias.into(),
-    github_token: None,
-    api_token: None,
-    api_token_expires_at: None,
+    enabled: true,
+    tags: Vec::new(),
+    label: None,
+    base_url: Some(zai::default_base_url(provider_alias).into()),
+    headers: Default::default(),
+    auth_type: Some(AuthType::Bearer),
+    username: None,
     api_key: Some(Secret::new(key)),
-    copilot: None,
-    zai: None,
-    behave_as: None,
+    api_key_expires_at: None,
+    access_token: None,
+    access_token_expires_at: None,
+    id_token: None,
+    refresh_token: None,
+    extra: Default::default(),
+    refresh_url: None,
+    last_refresh: None,
+    settings: toml::Table::new(),
   })
 }
 

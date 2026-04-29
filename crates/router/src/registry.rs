@@ -1,19 +1,50 @@
-use llm_core::account::Account;
-use llm_core::provider::{error, Provider, Result, ID_GITHUB_COPILOT, ZAI_ALIASES};
-use llm_provider_copilot::config::CopilotHeaders;
+use llm_core::account::AccountConfig;
+use llm_core::provider::{error, Provider, ProviderDescriptor, Result};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
-pub fn build_for_account(a: &Account, global_headers: &serde_json::Value) -> Result<Arc<dyn Provider>> {
-  match a.provider.as_str() {
-    ID_GITHUB_COPILOT => {
-      let headers = CopilotHeaders::from_value(global_headers)?;
-      llm_provider_copilot::build(a, &headers)
-    }
-    id if ZAI_ALIASES.contains(&id) => llm_provider_zai::build(a),
-    other => error::UnknownProviderSnafu {
-      id: other.to_string(),
-      account: a.id.clone(),
-    }
-    .fail(),
+pub struct Registry {
+  descriptors: BTreeMap<&'static str, &'static ProviderDescriptor>,
+}
+
+impl Registry {
+  pub fn builtin() -> Self {
+    let mut r = Self {
+      descriptors: BTreeMap::new(),
+    };
+    r.register(&llm_provider_copilot::DESCRIPTOR);
+    r.register(&llm_provider_zai::DESCRIPTOR_ZAI);
+    r.register(&llm_provider_zai::DESCRIPTOR_ZAI_CODING_PLAN);
+    r.register(&llm_provider_zai::DESCRIPTOR_ZHIPUAI);
+    r.register(&llm_provider_zai::DESCRIPTOR_ZHIPUAI_CODING_PLAN);
+    r
   }
+
+  pub fn register(&mut self, descriptor: &'static ProviderDescriptor) {
+    self.descriptors.insert(descriptor.id, descriptor);
+  }
+
+  pub fn resolve(&self, id: &str) -> Option<&'static ProviderDescriptor> {
+    self.descriptors.get(id).copied()
+  }
+
+  pub fn validate(&self, account: &AccountConfig) -> Result<()> {
+    let descriptor = self
+      .resolve(&account.provider)
+      .ok_or_else(|| error::Error::UnknownProvider {
+        id: account.provider.clone(),
+        account: account.id.clone(),
+      })?;
+    (descriptor.validate)(account)
+  }
+
+  pub fn build(&self, account: Arc<AccountConfig>) -> Result<Arc<dyn Provider>> {
+    self.validate(&account)?;
+    let descriptor = self.resolve(&account.provider).expect("validated provider descriptor");
+    (descriptor.build)(account)
+  }
+}
+
+pub fn build_for_account(account: Arc<AccountConfig>) -> Result<Arc<dyn Provider>> {
+  Registry::builtin().build(account)
 }

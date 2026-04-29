@@ -150,7 +150,7 @@ async fn health() -> &'static str {
 
 pub fn build_state(cfg: &Config, db: Option<Arc<dyn DbStore>>) -> Result<AppState> {
   cfg.validate()?;
-  let pool = AccountPool::from_config_with(cfg, |a| crate::registry::build_for_account(a, &cfg.copilot))?;
+  let pool = AccountPool::from_config_with(cfg, crate::registry::build_for_account)?;
   let http = llm_core::util::http::build_client(&cfg.proxy.to_http_options())?;
   Ok(AppState { pool, http, db })
 }
