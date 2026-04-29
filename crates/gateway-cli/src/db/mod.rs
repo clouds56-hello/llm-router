@@ -7,10 +7,8 @@ use bytes::Bytes;
 use snafu::Snafu;
 use tokio::sync::{mpsc, oneshot};
 
+pub use llm_core::db::{CallRecord, DbOptions, DbPaths, HttpSnapshot, MessageRecord, PartRecord};
 pub use usage::UsageDb;
-pub use llm_core::db::{
-  CallRecord, DbOptions, DbPaths, HttpSnapshot, MessageRecord, PartRecord,
-};
 
 #[cfg(test)]
 pub use llm_core::db::SessionSource;
@@ -90,18 +88,6 @@ impl DbStore {
     Ok(Self { tx, body_max_bytes })
   }
 
-  pub fn body_max_bytes(&self) -> usize {
-    self.body_max_bytes
-  }
-
-  pub fn record(&self, record: CallRecord) {
-    match self.tx.try_send(WriteOp::Record(Box::new(record))) {
-      Ok(()) => {}
-      Err(mpsc::error::TrySendError::Full(_)) => tracing::warn!("db queue full, dropping record"),
-      Err(mpsc::error::TrySendError::Closed(_)) => tracing::warn!("db queue closed, dropping record"),
-    }
-  }
-
   pub async fn shutdown(&self) -> Result<()> {
     let (tx, rx) = oneshot::channel();
     self
@@ -116,11 +102,15 @@ impl DbStore {
 
 impl llm_core::db::DbStore for DbStore {
   fn body_max_bytes(&self) -> usize {
-    self.body_max_bytes()
+    self.body_max_bytes
   }
 
   fn record(&self, record: CallRecord) {
-    self.record(record);
+    match self.tx.try_send(WriteOp::Record(Box::new(record))) {
+      Ok(()) => {}
+      Err(mpsc::error::TrySendError::Full(_)) => tracing::warn!("db queue full, dropping record"),
+      Err(mpsc::error::TrySendError::Closed(_)) => tracing::warn!("db queue closed, dropping record"),
+    }
   }
 }
 

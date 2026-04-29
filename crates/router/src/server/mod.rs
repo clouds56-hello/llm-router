@@ -7,13 +7,13 @@ pub mod models;
 pub mod responses;
 
 use crate::pool::AccountPool;
-use llm_core::config::Config;
-use llm_core::db::DbStore;
 use anyhow::Result;
 use axum::http::{HeaderName, Request, Response};
 use axum::middleware::{self, Next};
 use axum::routing::{get, post};
 use axum::Router;
+use llm_config::Config;
+use llm_core::db::DbStore;
 use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::Duration;
@@ -149,8 +149,9 @@ async fn health() -> &'static str {
 }
 
 pub fn build_state(cfg: &Config, db: Option<Arc<dyn DbStore>>) -> Result<AppState> {
+  cfg.validate()?;
   let pool = AccountPool::from_config_with(cfg, |a| crate::registry::build_for_account(a, &cfg.copilot))?;
-  let http = llm_core::util::http::build_client(&cfg.proxy)?;
+  let http = llm_core::util::http::build_client(&cfg.proxy.to_http_options())?;
   Ok(AppState { pool, http, db })
 }
 

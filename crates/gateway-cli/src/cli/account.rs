@@ -134,8 +134,11 @@ async fn fetch_quota(http: reqwest::Client, account: Account, timeout: Duration)
     let Some(gh) = account.github_token.clone() else {
       return QuotaResult::None;
     };
-    let headers = account.copilot.clone().unwrap_or_default();
-    let core_headers: llm_core::config::CopilotHeaders = headers.clone().into();
+    let header_value = account.copilot.clone().unwrap_or_else(|| serde_json::json!({}));
+    let core_headers = match llm_provider_copilot::config::CopilotHeaders::from_value(&header_value) {
+      Ok(h) => h,
+      Err(e) => return QuotaResult::Err(short_err(&e)),
+    };
     // Two parallel probes:
     //   1. token exchange — refreshes api_token (always needed on `list`)
     //   2. user-info     — quota_snapshots (Plus/Business plans)

@@ -18,10 +18,10 @@ pub mod models;
 pub mod quota;
 pub mod transform;
 
-use crate::config::Account;
 use crate::util::redact::token_fingerprint;
 use crate::util::secret::Secret;
 use async_trait::async_trait;
+use llm_core::account::Account;
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use serde_json::Value;
 use snafu::ResultExt;

@@ -1,8 +1,14 @@
-use crate::config::ProxyConfig;
 use anyhow::{Context, Result};
 use std::time::Duration;
 
-pub fn build_client(proxy: &ProxyConfig) -> Result<reqwest::Client> {
+#[derive(Debug, Clone, Default)]
+pub struct HttpClientOptions {
+  pub url: Option<String>,
+  pub no_proxy: Vec<String>,
+  pub system: bool,
+}
+
+pub fn build_client(proxy: &HttpClientOptions) -> Result<reqwest::Client> {
   let mut b = reqwest::Client::builder()
     .connect_timeout(Duration::from_secs(15))
     .timeout(Duration::from_secs(600))

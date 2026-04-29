@@ -70,9 +70,6 @@ pub enum Error {
   #[snafu(display("validation failed: {section}"))]
   EditValidateSection { section: &'static str, source: Box<Error> },
 
-  /// Catch-all used during the snafu migration so closures passed to
-  /// `edit_in_place` (in CLI) can keep returning anyhow without rewrites.
-  /// To be removed once cli is migrated.
   #[snafu(display("{message}"))]
   Other { message: String },
 }

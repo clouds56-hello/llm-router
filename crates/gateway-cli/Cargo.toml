@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 llm-core = { workspace = true }
+llm-config = { workspace = true }
 llm-catalogue = { workspace = true }
 llm-convert = { workspace = true }
 llm-router = { workspace = true }

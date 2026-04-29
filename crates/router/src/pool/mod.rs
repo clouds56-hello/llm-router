@@ -5,7 +5,8 @@
 pub mod affinity;
 
 use crate::pool::affinity::{Affinity, Lookup};
-use llm_core::config::{Account as AccountConfig, Config};
+use llm_config::Config;
+use llm_core::account::Account as AccountConfig;
 use llm_core::provider::{Endpoint, Provider};
 use parking_lot::RwLock;
 use snafu::{ResultExt, Snafu};
@@ -27,7 +28,10 @@ pub enum Error {
   NoAccounts,
 
   #[snafu(display("failed to build provider for account `{id}`"))]
-  BuildAccount { id: String, source: llm_core::provider::Error },
+  BuildAccount {
+    id: String,
+    source: llm_core::provider::Error,
+  },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

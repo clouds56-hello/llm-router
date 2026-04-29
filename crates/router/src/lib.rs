@@ -1,7 +1,8 @@
 pub mod pool;
-pub mod profiles;
 pub mod registry;
 pub mod server;
 
-pub use llm_core::{config, db, provider, util};
+pub use llm_config as config;
+pub use llm_config::profiles;
 pub use llm_convert as convert;
+pub use llm_core::{db, provider, util};

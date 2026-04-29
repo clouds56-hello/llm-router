@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "crates/core",
+  "crates/config",
   "crates/catalogue",
   "crates/convert",
   "crates/router",
@@ -12,6 +13,7 @@ resolver = "2"
 
 [workspace.dependencies]
 llm-core = { path = "crates/core" }
+llm-config = { path = "crates/config" }
 llm-catalogue = { path = "crates/catalogue" }
 llm-convert = { path = "crates/convert" }
 llm-router = { path = "crates/router" }

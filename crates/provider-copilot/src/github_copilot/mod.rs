@@ -6,10 +6,11 @@ pub mod oauth;
 pub mod token;
 pub mod user;
 
-use crate::config::{Account, CopilotHeaders, InitiatorMode};
+use crate::config::{CopilotHeaders, InitiatorMode};
 use crate::util::redact::{token_fingerprint, BehaveAs};
 use crate::util::secret::Secret;
 use async_trait::async_trait;
+use llm_core::account::Account;
 use parking_lot::RwLock;
 use reqwest::header::HeaderMap;
 use serde_json::Value;
@@ -66,7 +67,7 @@ impl CopilotProvider {
     Ok(Self {
       id: format!("github-copilot:{}", a.id),
       github_token: gh,
-      headers: global.merged(a.copilot.as_ref()),
+      headers: global.merged(a.copilot.as_ref().map(CopilotHeaders::from_value).transpose()?.as_ref()),
       refresh_lock: AsyncMutex::new(()),
       cache: RwLock::new(ApiToken {
         token: a.api_token.clone(),
@@ -135,7 +136,10 @@ impl CopilotProvider {
     if Some(persona) == self.headers.behave_as.as_deref() {
       return self.headers.clone();
     }
-    warn!(persona, "inbound X-Behave-As persona override requires router-level profile resolution; using account headers");
+    warn!(
+      persona,
+      "inbound X-Behave-As persona override requires router-level profile resolution; using account headers"
+    );
     self.headers.clone()
   }
 

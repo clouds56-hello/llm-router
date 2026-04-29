@@ -1,0 +1,49 @@
+# Built-in persona profiles. The user may extend or override these by adding
+# matching sections to ~/.config/llm-router/profiles.toml.
+
+[copilot.default]
+verified = true
+editor-version          = "vscode/1.95.0"
+editor-plugin-version   = "copilot-chat/0.20.0"
+user-agent              = "GitHubCopilotChat/0.20.0"
+copilot-integration-id  = "vscode-chat"
+openai-intent           = "conversation-panel"
+
+[opencode.default]
+verified = false
+user-agent = "opencode/0.x"
+
+[opencode.general]
+verified = false
+
+[opencode.github-copilot]
+verified = false
+editor-version          = "opencode/0.x"
+editor-plugin-version   = "opencode/0.x"
+user-agent              = "opencode/0.x"
+copilot-integration-id  = "vscode-chat"
+openai-intent           = "conversation-panel"
+
+[codex.default]
+verified = false
+user-agent = "codex-cli/0.x"
+
+[codex.github-copilot]
+verified = false
+editor-version          = "codex-cli/0.x"
+editor-plugin-version   = "codex-cli/0.x"
+user-agent              = "codex-cli/0.x"
+copilot-integration-id  = "vscode-chat"
+openai-intent           = "conversation-panel"
+
+[openclaw.default]
+verified = false
+user-agent = "openclaw/0.x"
+
+[openclaw.github-copilot]
+verified = false
+editor-version          = "openclaw/0.x"
+editor-plugin-version   = "openclaw/0.x"
+user-agent              = "openclaw/0.x"
+copilot-integration-id  = "vscode-chat"
+openai-intent           = "conversation-panel"

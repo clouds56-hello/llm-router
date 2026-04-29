@@ -34,8 +34,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: ServeArgs) -> Result<()> {
   }
 
   let db = build_db(&cfg)?;
-  let core_cfg: llm_core::config::Config = cfg.clone().into();
-  let state = llm_router::server::build_state(&core_cfg, db.clone().map(|db| db as Arc<dyn llm_core::db::DbStore>))?;
+  let state = llm_router::server::build_state(&cfg, db.clone().map(|db| db as Arc<dyn llm_core::db::DbStore>))?;
   let n = state.pool.len();
   let app = llm_router::server::router(state);
 

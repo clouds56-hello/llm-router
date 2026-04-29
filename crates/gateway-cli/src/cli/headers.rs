@@ -13,7 +13,7 @@ pub struct HeadersArgs {
 pub async fn run(cfg_path: Option<PathBuf>, args: HeadersArgs) -> Result<()> {
   let (cfg, _) = Config::load(cfg_path.as_deref())?;
   let headers = match args.account {
-    None => cfg.copilot.clone(),
+    None => llm_provider_copilot::config::CopilotHeaders::from_value(&cfg.copilot)?,
     Some(id) => {
       let a = cfg
         .accounts
@@ -28,7 +28,13 @@ pub async fn run(cfg_path: Option<PathBuf>, args: HeadersArgs) -> Result<()> {
         println!("(headers are only relevant for the github-copilot provider)");
         return Ok(());
       }
-      cfg.copilot.merged(a.copilot.as_ref())
+      let global = llm_provider_copilot::config::CopilotHeaders::from_value(&cfg.copilot)?;
+      let account = a
+        .copilot
+        .as_ref()
+        .map(llm_provider_copilot::config::CopilotHeaders::from_value)
+        .transpose()?;
+      global.merged(account.as_ref())
     }
   };
   println!("editor-version:         {}", headers.editor_version);

@@ -99,8 +99,8 @@ async fn copilot_login(client: &reqwest::Client, cfg: &Config, id_override: Opti
   let gh_token = gh::oauth::poll_for_token(client, &dc).await?;
   println!("Got GitHub token. Verifying Copilot access…");
 
-  let core_headers: llm_core::config::CopilotHeaders = cfg.copilot.clone().into();
-  let resp = gh::token::exchange(client, &gh_token, &core_headers).await?;
+  let headers = llm_provider_copilot::config::CopilotHeaders::from_value(&cfg.copilot)?;
+  let resp = gh::token::exchange(client, &gh_token, &headers).await?;
 
   let id = match id_override {
     Some(s) => s,

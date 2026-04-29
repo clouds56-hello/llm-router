@@ -233,7 +233,7 @@ fn cmd_edit_profiles() -> Result<()> {
   }
   open_in_editor(&path)?;
   let raw = std::fs::read_to_string(&path)?;
-  Profiles::parse(&raw).context("validation failed: edited profiles.toml is invalid")?;
+  Profiles::parse(&raw).map_err(|e| anyhow!("validation failed: edited profiles.toml is invalid: {e}"))?;
   println!("ok");
   Ok(())
 }
