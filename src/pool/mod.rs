@@ -95,8 +95,15 @@ struct ProviderBucket {
   cursor: AtomicUsize,
 }
 
+#[allow(dead_code)]
 pub enum SessionAcquire {
   Account(Arc<Account>),
+  SessionExpired,
+  None,
+}
+
+pub enum EndpointAcquire {
+  Account { acct: Arc<Account>, endpoint: Endpoint },
   SessionExpired,
   None,
 }
@@ -156,6 +163,7 @@ impl AccountPool {
     self.cooldown_base
   }
 
+  #[allow(dead_code)]
   pub fn acquire_for_session(
     &self,
     session_id: Option<&str>,
@@ -187,6 +195,39 @@ impl AccountPool {
     }
   }
 
+  pub fn acquire_for_session_convertible(
+    &self,
+    session_id: Option<&str>,
+    model: Option<&str>,
+    requested: Endpoint,
+  ) -> EndpointAcquire {
+    if let Some(id) = session_id {
+      match self.affinity.lookup(id) {
+        Lookup::Hit(account_id) => {
+          if let Some(acct) = self.account_by_id(&account_id) {
+            if acct.is_healthy() {
+              if let Some(endpoint) = self.account_matching_endpoint(&acct, model, requested) {
+                return EndpointAcquire::Account { acct, endpoint };
+              }
+            }
+          }
+        }
+        Lookup::Expired => return EndpointAcquire::SessionExpired,
+        Lookup::Unknown => {}
+      }
+    }
+
+    match self.acquire_from_buckets_convertible(model, requested) {
+      Some((acct, endpoint)) => {
+        if let Some(id) = session_id {
+          self.record_session(id, &acct.id);
+        }
+        EndpointAcquire::Account { acct, endpoint }
+      }
+      None => EndpointAcquire::None,
+    }
+  }
+
   pub fn record_session(&self, session_id: &str, account_id: &str) {
     self.affinity.record(session_id, account_id);
   }
@@ -195,6 +236,7 @@ impl AccountPool {
     &self.accounts
   }
 
+  #[allow(dead_code)]
   fn acquire_from_buckets(&self, model: Option<&str>, endpoint: Endpoint) -> Option<Arc<Account>> {
     let mut candidates = Vec::new();
     for bucket in self.buckets.values() {
@@ -222,6 +264,42 @@ impl AccountPool {
     best
   }
 
+  fn acquire_from_buckets_convertible(
+    &self,
+    model: Option<&str>,
+    requested: Endpoint,
+  ) -> Option<(Arc<Account>, Endpoint)> {
+    for endpoint in fallback_order(requested) {
+      let mut candidates = Vec::new();
+      for bucket in self.buckets.values() {
+        if bucket.matches(model, endpoint) {
+          candidates.push(bucket);
+        }
+      }
+
+      for bucket in &candidates {
+        if let Some(acct) = bucket.pick_healthy() {
+          return Some((acct, endpoint));
+        }
+      }
+
+      let mut best: Option<Arc<Account>> = None;
+      let mut best_t: Option<Instant> = None;
+      for bucket in candidates {
+        if let Some((acct, t)) = bucket.pick_earliest_cooldown() {
+          if best.is_none() || t < best_t {
+            best = Some(acct);
+            best_t = t;
+          }
+        }
+      }
+      if let Some(acct) = best {
+        return Some((acct, endpoint));
+      }
+    }
+    None
+  }
+
   fn account_by_id(&self, id: &str) -> Option<Arc<Account>> {
     self.accounts.iter().find(|a| a.id == id).cloned()
   }
@@ -229,6 +307,20 @@ impl AccountPool {
   fn account_matches(&self, acct: &Account, model: Option<&str>, endpoint: Endpoint) -> bool {
     let model = model.unwrap_or("");
     (model.is_empty() || acct.provider.model_info(model).is_some()) && acct.provider.supports(model, endpoint)
+  }
+
+  fn account_matching_endpoint(&self, acct: &Account, model: Option<&str>, requested: Endpoint) -> Option<Endpoint> {
+    fallback_order(requested)
+      .into_iter()
+      .find(|endpoint| self.account_matches(acct, model, *endpoint))
+  }
+}
+
+fn fallback_order(requested: Endpoint) -> Vec<Endpoint> {
+  match requested {
+    Endpoint::ChatCompletions => vec![Endpoint::ChatCompletions, Endpoint::Responses, Endpoint::Messages],
+    Endpoint::Responses => vec![Endpoint::Responses, Endpoint::ChatCompletions, Endpoint::Messages],
+    Endpoint::Messages => vec![Endpoint::Messages, Endpoint::ChatCompletions, Endpoint::Responses],
   }
 }
 

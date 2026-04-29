@@ -32,6 +32,7 @@ pub(crate) async fn buffered_response(
   acct: Arc<Account>,
   resp: reqwest::Response,
   endpoint: Endpoint,
+  upstream_endpoint: Endpoint,
   model: String,
   initiator: String,
   session_id: Option<String>,
@@ -59,6 +60,19 @@ pub(crate) async fn buffered_response(
       headers.insert(super::SESSION_ID_HEADER, value);
     }
   }
+
+  let bytes = if upstream_endpoint == endpoint {
+    bytes
+  } else {
+    match serde_json::from_slice::<Value>(&bytes)
+      .map_err(|e| e.to_string())
+      .and_then(|v| crate::convert::convert_response(upstream_endpoint, endpoint, &v).map_err(|e| e.to_string()))
+      .and_then(|v| serde_json::to_vec(&v).map(Bytes::from).map_err(|e| e.to_string()))
+    {
+      Ok(bytes) => bytes,
+      Err(e) => return ApiError::bad_gateway(format!("response conversion failed: {e}")).into_response(),
+    }
+  };
 
   let (pt, ct) = parse_usage_any_json(&bytes);
   record_call(
@@ -94,6 +108,7 @@ pub(crate) async fn stream_response(
   acct: Arc<Account>,
   resp: reqwest::Response,
   endpoint: Endpoint,
+  upstream_endpoint: Endpoint,
   model: String,
   initiator: String,
   session_id: Option<String>,
@@ -133,7 +148,11 @@ pub(crate) async fn stream_response(
   headers.insert(axum::http::header::CONNECTION, HeaderValue::from_static("keep-alive"));
   let inbound_resp_headers = headers.clone();
 
-  let upstream = resp.bytes_stream();
+  let upstream: Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>> = if upstream_endpoint == endpoint {
+    Box::pin(resp.bytes_stream().map(|r| r.map_err(std::io::Error::other)))
+  } else {
+    crate::convert::sse::translate_stream(upstream_endpoint, endpoint, resp)
+  };
   let mut buffer = Vec::<u8>::new();
 
   let mapped = upstream.map(move |chunk| match chunk {

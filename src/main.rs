@@ -5,6 +5,7 @@ use std::process::ExitCode;
 mod catalogue;
 mod cli;
 mod config;
+mod convert;
 mod db;
 mod error;
 mod logging;

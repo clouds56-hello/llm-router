@@ -15,9 +15,10 @@
 use super::error::ApiError;
 use super::AppState;
 use crate::db::OutboundSnapshot;
-use crate::pool::{Account, SessionAcquire};
+use crate::pool::{Account, EndpointAcquire};
 use crate::provider::{new_outbound_capture, Endpoint, OutboundCapture};
 use axum::http::StatusCode;
+use serde_json::Value;
 use std::future::Future;
 use std::sync::Arc;
 use tracing::{debug, info_span, warn, Instrument};
@@ -27,6 +28,7 @@ const MAX_RETRIES: usize = 2;
 pub(crate) struct DispatchOk {
   pub acct: Arc<Account>,
   pub resp: reqwest::Response,
+  pub upstream_endpoint: Endpoint,
   /// The outbound snapshot captured by the provider during the *successful*
   /// attempt, if any. `None` if the provider didn't call
   /// `RequestCtx::capture_outbound` (e.g. it returned `Err` before reaching
@@ -46,23 +48,27 @@ pub(crate) async fn dispatch<F, Fut>(
   session_id: Option<&str>,
   model: &str,
   endpoint: Endpoint,
+  body: Arc<Value>,
   send: F,
 ) -> Result<DispatchOk, ApiError>
 where
-  F: Fn(Arc<Account>, OutboundCapture) -> Fut,
+  F: Fn(Arc<Account>, Endpoint, Arc<Value>, OutboundCapture) -> Fut,
   Fut: Future<Output = crate::provider::Result<reqwest::Response>>,
 {
   let mut last_err: Option<(StatusCode, String)> = None;
 
   for attempt in 0..=MAX_RETRIES {
-    let acct = match state.pool.acquire_for_session(session_id, Some(model), endpoint) {
-      SessionAcquire::Account(acct) => acct,
-      SessionAcquire::SessionExpired => {
+    let (acct, upstream_endpoint) = match state
+      .pool
+      .acquire_for_session_convertible(session_id, Some(model), endpoint)
+    {
+      EndpointAcquire::Account { acct, endpoint } => (acct, endpoint),
+      EndpointAcquire::SessionExpired => {
         let id = session_id.unwrap_or_default();
         warn!(%endpoint, %model, session_id = %id, attempt, "session expired");
         return Err(ApiError::session_expired(id));
       }
-      SessionAcquire::None => {
+      EndpointAcquire::None => {
         // No account in the pool advertises this endpoint at all — this
         // is a configuration / capability mismatch, not a transient
         // failure, so don't retry.
@@ -78,14 +84,23 @@ where
       account = %acct.id,
       provider = %acct.provider.info().id,
       %endpoint,
+      upstream_endpoint = %upstream_endpoint,
       %model,
       status = tracing::field::Empty,
     );
 
     let capture = new_outbound_capture();
+    let upstream_body = if upstream_endpoint == endpoint {
+      body.clone()
+    } else {
+      match crate::convert::convert_request(endpoint, upstream_endpoint, &body) {
+        Ok(v) => Arc::new(v),
+        Err(e) => return Err(ApiError::bad_gateway(format!("request conversion failed: {e}"))),
+      }
+    };
     let result = async {
       debug!("sending upstream request");
-      send(acct.clone(), capture.clone()).await
+      send(acct.clone(), upstream_endpoint, upstream_body.clone(), capture.clone()).await
     }
     .instrument(attempt_span.clone())
     .await;
@@ -123,7 +138,12 @@ where
       state.pool.record_session(id, &acct.id);
     }
     let outbound = capture.get().cloned();
-    return Ok(DispatchOk { acct, resp, outbound });
+    return Ok(DispatchOk {
+      acct,
+      resp,
+      upstream_endpoint,
+      outbound,
+    });
   }
 
   let (status, msg) = last_err.unwrap_or((StatusCode::BAD_GATEWAY, "all attempts failed".into()));
@@ -175,39 +195,46 @@ mod tests {
     let attempts = Arc::new(AtomicUsize::new(0));
     let url = format!("http://{addr}/probe");
     let http = state.http.clone();
-    let result = dispatch(&state, None, "", Endpoint::ChatCompletions, {
-      let attempts = attempts.clone();
-      let url = url.clone();
-      let http = http.clone();
-      move |_acct, capture| {
+    let result = dispatch(
+      &state,
+      None,
+      "",
+      Endpoint::ChatCompletions,
+      Arc::new(serde_json::json!({ "messages": [] })),
+      {
         let attempts = attempts.clone();
         let url = url.clone();
         let http = http.clone();
-        async move {
-          let n = attempts.fetch_add(1, Ordering::SeqCst) + 1;
-          let mut headers = reqwest::header::HeaderMap::new();
-          headers.insert(
-            "x-attempt",
-            reqwest::header::HeaderValue::from_str(&n.to_string()).unwrap(),
-          );
-          let _ = capture.set(crate::db::OutboundSnapshot {
-            method: Some("POST".into()),
-            url: Some(url.clone()),
-            status: None,
-            headers,
-            body: Bytes::from(format!("attempt-{n}")),
-          });
-          http
-            .get(&url)
-            .send()
-            .await
-            .map_err(|source| crate::provider::error::Error::Http {
-              what: "dispatch test",
-              source,
-            })
+        move |_acct, _endpoint, _body, capture| {
+          let attempts = attempts.clone();
+          let url = url.clone();
+          let http = http.clone();
+          async move {
+            let n = attempts.fetch_add(1, Ordering::SeqCst) + 1;
+            let mut headers = reqwest::header::HeaderMap::new();
+            headers.insert(
+              "x-attempt",
+              reqwest::header::HeaderValue::from_str(&n.to_string()).unwrap(),
+            );
+            let _ = capture.set(crate::db::OutboundSnapshot {
+              method: Some("POST".into()),
+              url: Some(url.clone()),
+              status: None,
+              headers,
+              body: Bytes::from(format!("attempt-{n}")),
+            });
+            http
+              .get(&url)
+              .send()
+              .await
+              .map_err(|source| crate::provider::error::Error::Http {
+                what: "dispatch test",
+                source,
+              })
+          }
         }
-      }
-    })
+      },
+    )
     .await
     .unwrap();
     server.await.unwrap();

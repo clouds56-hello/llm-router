@@ -1,9 +1,8 @@
-//! `POST /v1/responses` — OpenAI Responses API passthrough.
+//! `POST /v1/responses` — OpenAI Responses API surface.
 //!
-//! No translation: the inbound JSON body is forwarded verbatim to whichever
-//! provider in the pool natively speaks `/responses` for the requested model
-//! (today: GitHub Copilot for the gpt-5 / o-series families). If no
-//! configured account supports the endpoint, the dispatcher returns 501.
+//! Native `/responses` providers are preferred. Otherwise dispatch can route
+//! through another supported chat-like endpoint and convert request/response
+//! bodies via `crate::convert`.
 
 use super::dispatch::{dispatch, DispatchOk};
 use super::error::ApiError;
@@ -89,31 +88,40 @@ pub async fn responses(
   let inbound = Arc::new(inbound);
   let initiator_arc = Arc::new(initiator.clone());
 
-  let DispatchOk { acct, resp, outbound } = {
+  let DispatchOk {
+    acct,
+    resp,
+    upstream_endpoint,
+    outbound,
+  } = {
     let s_for_closure = s.clone();
     dispatch(
       &s,
       session_id.as_deref(),
       &model,
       Endpoint::Responses,
-      move |acct, capture| {
-        let body = body.clone();
+      body.clone(),
+      move |acct, upstream_endpoint, upstream_body, capture| {
         let inbound = inbound.clone();
         let initiator_arc = initiator_arc.clone();
         let behave_as = behave_as_inbound.clone();
         let http = s_for_closure.http.clone();
         async move {
           let ctx = RequestCtx {
-            endpoint: Endpoint::Responses,
+            endpoint: upstream_endpoint,
             http: &http,
-            body: &body,
+            body: &upstream_body,
             stream,
             initiator: initiator_arc.as_str(),
             inbound_headers: &inbound,
             behave_as: behave_as.as_deref().map(|s| s.as_str()),
             outbound: Some(capture),
           };
-          acct.provider.responses(ctx).await
+          match upstream_endpoint {
+            Endpoint::ChatCompletions => acct.provider.chat(ctx).await,
+            Endpoint::Responses => acct.provider.responses(ctx).await,
+            Endpoint::Messages => acct.provider.messages(ctx).await,
+          }
         }
       },
     )
@@ -127,6 +135,7 @@ pub async fn responses(
         acct,
         resp,
         Endpoint::Responses,
+        upstream_endpoint,
         model,
         initiator,
         session_id,
@@ -144,6 +153,7 @@ pub async fn responses(
         acct,
         resp,
         Endpoint::Responses,
+        upstream_endpoint,
         model,
         initiator,
         session_id,

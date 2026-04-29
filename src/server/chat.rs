@@ -1,3 +1,9 @@
+// `POST /v1/chat/completions` — OpenAI Chat Completions surface.
+//
+// Requests are sent to a provider that natively supports chat completions
+// when possible. If only another chat-like surface is available for the
+// chosen account/model, dispatch converts through `crate::convert`.
+
 use super::dispatch::{dispatch, DispatchOk};
 use super::error::ApiError;
 use super::forward::{buffered_response, stream_response};
@@ -84,31 +90,40 @@ pub async fn chat_completions(
   let inbound = Arc::new(inbound);
   let initiator_arc = Arc::new(initiator.clone());
 
-  let DispatchOk { acct, resp, outbound } = {
+  let DispatchOk {
+    acct,
+    resp,
+    upstream_endpoint,
+    outbound,
+  } = {
     let s_for_closure = s.clone();
     dispatch(
       &s,
       session_id.as_deref(),
       &model,
       Endpoint::ChatCompletions,
-      move |acct, capture| {
-        let body = body.clone();
+      body.clone(),
+      move |acct, upstream_endpoint, upstream_body, capture| {
         let inbound = inbound.clone();
         let initiator_arc = initiator_arc.clone();
         let behave_as = behave_as_inbound.clone();
         let http = s_for_closure.http.clone();
         async move {
           let ctx = RequestCtx {
-            endpoint: Endpoint::ChatCompletions,
+            endpoint: upstream_endpoint,
             http: &http,
-            body: &body,
+            body: &upstream_body,
             stream,
             initiator: initiator_arc.as_str(),
             inbound_headers: &inbound,
             behave_as: behave_as.as_deref().map(|s| s.as_str()),
             outbound: Some(capture),
           };
-          acct.provider.chat(ctx).await
+          match upstream_endpoint {
+            Endpoint::ChatCompletions => acct.provider.chat(ctx).await,
+            Endpoint::Responses => acct.provider.responses(ctx).await,
+            Endpoint::Messages => acct.provider.messages(ctx).await,
+          }
         }
       },
     )
@@ -122,6 +137,7 @@ pub async fn chat_completions(
         acct,
         resp,
         Endpoint::ChatCompletions,
+        upstream_endpoint,
         model,
         initiator,
         session_id,
@@ -139,6 +155,7 @@ pub async fn chat_completions(
         acct,
         resp,
         Endpoint::ChatCompletions,
+        upstream_endpoint,
         model,
         initiator,
         session_id,
