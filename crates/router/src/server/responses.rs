@@ -7,7 +7,7 @@
 use super::dispatch::{dispatch, DispatchOk};
 use super::error::ApiError;
 use super::forward::{buffered_response, stream_response};
-use super::AppState;
+use super::{first_header, AppState, PROJECT_ID_HEADERS, REQUEST_ID_HEADERS, SESSION_ID_HEADERS};
 use crate::provider::{Endpoint, RequestCtx};
 use crate::util::initiator::classify_initiator_responses;
 use crate::util::redact::BehaveAs;
@@ -45,12 +45,9 @@ pub async fn responses(
   let span = tracing::Span::current();
   span.record("model", model.as_str());
   span.record("stream", stream);
-  let session_id = inbound
-    .get(super::SESSION_ID_HEADER)
-    .and_then(|v| v.to_str().ok())
-    .map(str::trim)
-    .filter(|s| !s.is_empty())
-    .map(str::to_string);
+  let session_id = first_header(&inbound, SESSION_ID_HEADERS).map(str::to_string);
+  let request_id = first_header(&inbound, REQUEST_ID_HEADERS).map(str::to_string);
+  let project_id = first_header(&inbound, PROJECT_ID_HEADERS).map(str::to_string);
 
   // Responses-bodies use `input` not `messages`; honour an explicit
   // X-Initiator override before falling back to the input-aware classifier.
@@ -139,6 +136,8 @@ pub async fn responses(
         model,
         initiator,
         session_id,
+        request_id,
+        project_id,
         req_headers,
         req_body,
         outbound,
@@ -157,6 +156,8 @@ pub async fn responses(
         model,
         initiator,
         session_id,
+        request_id,
+        project_id,
         req_headers,
         req_body,
         outbound,

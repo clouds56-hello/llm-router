@@ -3,11 +3,18 @@ use rusqlite::{params, Connection};
 use std::path::Path;
 
 const BOOTSTRAP: &str = include_str!("../../../../scripts/migrations/usage/000_bootstrap.sql");
-const MIGRATIONS: &[migrate::Migration] = &[migrate::Migration {
-  version: 1,
-  name: "initial",
-  sql: include_str!("../../../../scripts/migrations/usage/001_initial.sql"),
-}];
+const MIGRATIONS: &[migrate::Migration] = &[
+  migrate::Migration {
+    version: 1,
+    name: "initial",
+    sql: include_str!("../../../../scripts/migrations/usage/001_initial.sql"),
+  },
+  migrate::Migration {
+    version: 2,
+    name: "add_correlation_ids",
+    sql: include_str!("../../../../scripts/migrations/usage/002_add_correlation_ids.sql"),
+  },
+];
 
 pub fn latest_version() -> u32 {
   migrate::latest_version(MIGRATIONS)
@@ -37,10 +44,13 @@ impl UsageDb {
 
   pub fn record(&mut self, r: &CallRecord) -> Result<()> {
     self.conn.execute(
-      "INSERT INTO requests (ts, account_id, provider_id, model, initiator, prompt_tok, completion_tok, latency_ms, status, stream)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+      "INSERT INTO requests (ts, session_id, request_id, project_id, account_id, provider_id, model, initiator, prompt_tok, completion_tok, latency_ms, status, stream)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
       params![
         r.ts,
+        r.session_id,
+        r.request_id,
+        r.project_id,
         r.account_id,
         r.provider_id,
         r.model,
@@ -121,4 +131,51 @@ pub struct RowSummary {
   pub prompt_tokens: u64,
   pub completion_tokens: u64,
   pub avg_latency_ms: f64,
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::db::{HttpSnapshot, SessionSource};
+  use llm_core::db::CallRecord;
+
+  #[test]
+  fn fresh_usage_db_records_correlation_ids() {
+    let dir = std::env::temp_dir().join(format!("llm-router-usage-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("usage.db");
+    let mut db = UsageDb::open(&path).unwrap();
+
+    db.record(&CallRecord {
+      ts: 100,
+      session_id: "session-1".into(),
+      session_source: SessionSource::Header,
+      request_id: Some("request-1".into()),
+      project_id: Some("project-1".into()),
+      endpoint: "chat_completions".into(),
+      account_id: "account".into(),
+      provider_id: "provider".into(),
+      model: "model".into(),
+      initiator: "user".into(),
+      status: 200,
+      stream: false,
+      latency_ms: 1,
+      prompt_tokens: None,
+      completion_tokens: None,
+      inbound_req: HttpSnapshot::default(),
+      outbound_req: None,
+      outbound_resp: None,
+      inbound_resp: HttpSnapshot::default(),
+      messages: Vec::new(),
+    })
+    .unwrap();
+
+    let row: (String, String, String) = db
+      .conn
+      .query_row("SELECT session_id, request_id, project_id FROM requests", [], |r| {
+        Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+      })
+      .unwrap();
+    assert_eq!(row, ("session-1".into(), "request-1".into(), "project-1".into()));
+  }
 }

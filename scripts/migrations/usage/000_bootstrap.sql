@@ -6,6 +6,9 @@
 CREATE TABLE requests (
   id             INTEGER PRIMARY KEY,
   ts             INTEGER NOT NULL,
+  session_id     TEXT,
+  request_id     TEXT,
+  project_id     TEXT,
   account_id     TEXT    NOT NULL,
   provider_id    TEXT    NOT NULL DEFAULT '',
   model          TEXT    NOT NULL,
@@ -17,4 +20,7 @@ CREATE TABLE requests (
   stream         INTEGER NOT NULL
 );
 CREATE INDEX idx_requests_ts      ON requests(ts);
+CREATE INDEX idx_requests_session ON requests(session_id);
+CREATE INDEX idx_requests_request ON requests(request_id);
+CREATE INDEX idx_requests_project ON requests(project_id);
 CREATE INDEX idx_requests_account ON requests(account_id);

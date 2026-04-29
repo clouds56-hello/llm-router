@@ -8,7 +8,7 @@ pub mod responses;
 
 use crate::pool::AccountPool;
 use anyhow::Result;
-use axum::http::{HeaderName, Request, Response};
+use axum::http::{HeaderMap, HeaderName, Request, Response};
 use axum::middleware::{self, Next};
 use axum::routing::{get, post};
 use axum::Router;
@@ -31,6 +31,25 @@ pub struct AppState {
 /// Header name used for request ids. Honors inbound `x-request-id` if present.
 pub const REQUEST_ID_HEADER: &str = "x-request-id";
 pub const SESSION_ID_HEADER: &str = "x-session-id";
+pub const SESSION_ID_HEADERS: &[&str] = &[
+  "x-session-id",
+  "x-client-session-id",
+  "session_id",
+  "x-session-affinity",
+  "x-opencode-session",
+];
+pub const REQUEST_ID_HEADERS: &[&str] = &["x-request-id", "x-interaction-id", "x-opencode-request"];
+pub const PROJECT_ID_HEADERS: &[&str] = &["x-opencode-project"];
+
+pub(crate) fn first_header<'a>(headers: &'a HeaderMap, names: &[&str]) -> Option<&'a str> {
+  names.iter().find_map(|name| {
+    headers
+      .get(*name)
+      .and_then(|v| v.to_str().ok())
+      .map(str::trim)
+      .filter(|s| !s.is_empty())
+  })
+}
 
 tokio::task_local! {
   static REQUEST_TRACKING: Mutex<RequestTracking>;
@@ -206,5 +225,15 @@ mod tests {
       .unwrap();
     // MakeRequestUuid emits a hyphenated uuid v4.
     assert!(uuid::Uuid::parse_str(id).is_ok(), "not a uuid: {id}");
+  }
+
+  #[test]
+  fn first_header_uses_priority_and_ignores_empty_values() {
+    let mut headers = HeaderMap::new();
+    headers.insert("x-session-id", "   ".parse().unwrap());
+    headers.insert("x-client-session-id", " client-session ".parse().unwrap());
+    headers.insert("x-opencode-session", "opencode-session".parse().unwrap());
+
+    assert_eq!(first_header(&headers, SESSION_ID_HEADERS), Some("client-session"));
   }
 }

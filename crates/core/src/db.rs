@@ -35,6 +35,8 @@ pub struct CallRecord {
   pub ts: i64,
   pub session_id: String,
   pub session_source: SessionSource,
+  pub request_id: Option<String>,
+  pub project_id: Option<String>,
   pub endpoint: String,
   pub account_id: String,
   pub provider_id: String,

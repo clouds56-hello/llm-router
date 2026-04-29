@@ -36,6 +36,8 @@ pub(crate) async fn buffered_response(
   model: String,
   initiator: String,
   session_id: Option<String>,
+  request_id: Option<String>,
+  project_id: Option<String>,
   req_headers: HeaderMap,
   req_body: Value,
   outbound: Option<OutboundSnapshot>,
@@ -83,6 +85,8 @@ pub(crate) async fn buffered_response(
     &model,
     &initiator,
     session_id.as_deref(),
+    request_id.as_deref(),
+    project_id.as_deref(),
     &req_headers,
     &req_body,
     Some(&resp_headers),
@@ -112,6 +116,8 @@ pub(crate) async fn stream_response(
   model: String,
   initiator: String,
   session_id: Option<String>,
+  request_id: Option<String>,
+  project_id: Option<String>,
   req_headers: HeaderMap,
   req_body: Value,
   outbound: Option<OutboundSnapshot>,
@@ -130,6 +136,8 @@ pub(crate) async fn stream_response(
   let model_clone = model.clone();
   let initiator_clone = initiator.clone();
   let session_id_clone = session_id.clone();
+  let request_id_clone = request_id.clone();
+  let project_id_clone = project_id.clone();
   let req_headers_clone = req_headers.clone();
   let req_body_clone = req_body.clone();
   let s_clone = s.clone();
@@ -218,6 +226,8 @@ pub(crate) async fn stream_response(
       &model_clone,
       &initiator_clone,
       session_id_clone.as_deref(),
+      request_id_clone.as_deref(),
+      project_id_clone.as_deref(),
       &req_headers_clone,
       &req_body_clone,
       Some(&resp_headers),
@@ -297,6 +307,8 @@ fn record_call(
   model: &str,
   initiator: &str,
   session_id: Option<&str>,
+  request_id: Option<&str>,
+  project_id: Option<&str>,
   req_headers: &HeaderMap,
   req_body: &Value,
   resp_headers: Option<&HeaderMap>,
@@ -333,6 +345,8 @@ fn record_call(
     ts: time::OffsetDateTime::now_utc().unix_timestamp(),
     session_id: effective_id,
     session_source: source,
+    request_id: request_id.map(str::to_string),
+    project_id: project_id.map(str::to_string),
     endpoint: endpoint.to_string(),
     account_id: account_id.to_string(),
     provider_id: provider_id.to_string(),
@@ -653,6 +667,8 @@ mod tests {
       "glm-4.6",
       "user",
       None,
+      None,
+      None,
       &HeaderMap::new(),
       &req_body,
       Some(&HeaderMap::new()),
@@ -674,5 +690,63 @@ mod tests {
       .iter()
       .flat_map(|m| &m.parts)
       .any(|p| p.part_type == "raw" && p.content.as_ref() == resp_body.as_ref()));
+  }
+
+  #[tokio::test]
+  async fn record_call_persists_header_session_request_and_project_ids() {
+    let mut cfg = Config::default();
+    cfg.accounts.push(AccountCfg {
+      id: "acct".into(),
+      provider: "zai-coding-plan".into(),
+      enabled: true,
+      tags: Vec::new(),
+      label: None,
+      base_url: None,
+      headers: Default::default(),
+      auth_type: Some(AuthType::Bearer),
+      username: None,
+      api_key: Some(Secret::new("sk-test".into())),
+      api_key_expires_at: None,
+      access_token: None,
+      access_token_expires_at: None,
+      id_token: None,
+      refresh_token: None,
+      extra: Default::default(),
+      refresh_url: None,
+      last_refresh: None,
+      settings: toml::Table::new(),
+    });
+    let db = Arc::new(FakeDb::default());
+    let state = build_state(&cfg, Some(db.clone())).unwrap();
+    let req_body = json!({ "model": "glm-4.6", "messages": [] });
+
+    record_call(
+      &state,
+      "acct",
+      "zai-coding-plan",
+      Endpoint::ChatCompletions,
+      "glm-4.6",
+      "user",
+      Some("client-session"),
+      Some("request-123"),
+      Some("project-456"),
+      &HeaderMap::new(),
+      &req_body,
+      None,
+      None,
+      &HeaderMap::new(),
+      None,
+      None,
+      None,
+      Instant::now(),
+      200,
+      false,
+    );
+
+    let records = db.records.lock().unwrap();
+    assert_eq!(records[0].session_id, "client-session");
+    assert_eq!(records[0].session_source, SessionSource::Header);
+    assert_eq!(records[0].request_id.as_deref(), Some("request-123"));
+    assert_eq!(records[0].project_id.as_deref(), Some("project-456"));
   }
 }
