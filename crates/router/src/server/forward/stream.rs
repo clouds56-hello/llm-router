@@ -72,6 +72,9 @@ pub(crate) async fn stream_response(
   };
   let mut buffer = Vec::<u8>::new();
 
+  let stream_failed = Arc::new(parking_lot::Mutex::new(false));
+  let stream_failed_for_stream = stream_failed.clone();
+
   let mapped = upstream.map(move |chunk| match chunk {
     Ok(b) => {
       if max_body > 0 {
@@ -109,7 +112,10 @@ pub(crate) async fn stream_response(
       }
       Ok::<Bytes, std::io::Error>(b)
     }
-    Err(e) => Err(std::io::Error::other(e)),
+    Err(e) => {
+      *stream_failed_for_stream.lock() = true;
+      Err(std::io::Error::other(e))
+    }
   });
 
   let recorded = Arc::new(parking_lot::Mutex::new(false));
@@ -123,6 +129,11 @@ pub(crate) async fn stream_response(
     let (pt, ct) = *usage_holder.lock();
     let captured = bytes::Bytes::from(resp_body_holder.lock().clone());
     let outbound_taken = outbound_for_end.lock().take();
+    let request_error = if *stream_failed.lock() {
+      Some("stream terminated before completion")
+    } else {
+      None
+    };
     record_call(
       &s_clone,
       &acct_id,
@@ -132,6 +143,7 @@ pub(crate) async fn stream_response(
       &initiator_clone,
       session_id_clone.as_deref(),
       request_id_clone.as_deref(),
+      request_error,
       project_id_clone.as_deref(),
       &req_headers_clone,
       &req_body_clone,

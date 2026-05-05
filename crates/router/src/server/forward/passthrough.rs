@@ -44,6 +44,7 @@ pub(crate) fn record_passthrough_call(
     &initiator,
     crate::server::first_header(req_headers, crate::server::SESSION_ID_HEADERS),
     crate::server::first_header(req_headers, crate::server::REQUEST_ID_HEADERS),
+    None,
     crate::server::first_header(req_headers, crate::server::PROJECT_ID_HEADERS),
     req_body,
     endpoint,

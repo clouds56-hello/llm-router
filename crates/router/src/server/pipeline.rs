@@ -7,7 +7,7 @@ use crate::route::RouteResolution;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 use llm_config::RouteMode;
-use llm_core::pipeline::{ParsedRequest, RequestMeta};
+use llm_core::pipeline::{OutputTransformer, ParsedRequest, RequestMeta, RequestResolver, RequestSender};
 use serde_json::Value;
 use std::sync::Arc;
 use std::time::Instant;
@@ -125,32 +125,6 @@ struct UpstreamResponse {
   started: Instant,
 }
 
-trait RequestResolver: Send + Sync {
-  fn resolve(&self, state: &AppState, parsed: ParsedRequest, attempt: usize) -> Result<ResolvedRequest, ApiError>;
-}
-
-trait RequestSender: Send + Sync {
-  fn send<'a>(
-    &'a self,
-    state: &'a AppState,
-    req: &'a PreparedRequest,
-  ) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::provider::Result<reqwest::Response>> + Send + 'a>>;
-}
-
-trait OutputTransformer: Send + Sync {
-  fn transform_result<'a>(
-    &'a self,
-    state: AppState,
-    upstream: UpstreamResponse,
-  ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Response> + Send + 'a>>;
-
-  fn transform_sse<'a>(
-    &'a self,
-    state: AppState,
-    upstream: UpstreamResponse,
-  ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Response> + Send + 'a>>;
-}
-
 trait RequestReporter: Send + Sync {
   fn report_buffered<'a>(
     &'a self,
@@ -171,12 +145,21 @@ struct EndpointOutputTransformer;
 struct DbReporter;
 
 impl RequestResolver for PoolResolver {
+  type State = AppState;
+  type Resolved = ResolvedRequest;
+  type Error = ApiError;
+
   fn resolve(&self, state: &AppState, parsed: ParsedRequest, attempt: usize) -> Result<ResolvedRequest, ApiError> {
     resolve_request(state, parsed, attempt)
   }
 }
 
 impl RequestSender for ProviderSender {
+  type State = AppState;
+  type Request = PreparedRequest;
+  type Response = reqwest::Response;
+  type Error = crate::provider::error::Error;
+
   fn send<'a>(
     &'a self,
     state: &'a AppState,
@@ -187,6 +170,10 @@ impl RequestSender for ProviderSender {
 }
 
 impl OutputTransformer for EndpointOutputTransformer {
+  type State = AppState;
+  type Upstream = UpstreamResponse;
+  type Output = Response;
+
   fn transform_result<'a>(
     &'a self,
     state: AppState,
@@ -442,4 +429,167 @@ fn rewrite_model(body: &Value, model: &str) -> Value {
     obj.insert("model".into(), Value::String(model.to_string()));
   }
   body
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::config::{Account as AccountCfg, Config};
+  use crate::provider::{Endpoint, Provider};
+  use crate::server::build_state;
+  use crate::util::secret::Secret;
+  use axum::http::HeaderValue;
+  use llm_core::pipeline::InputTransformer;
+  use serde_json::json;
+
+  fn zai_account() -> AccountCfg {
+    AccountCfg {
+      id: "acct".into(),
+      provider: "zai-coding-plan".into(),
+      enabled: true,
+      tags: Vec::new(),
+      label: None,
+      base_url: None,
+      headers: Default::default(),
+      auth_type: None,
+      username: None,
+      api_key: Some(Secret::new("sk-test".into())),
+      api_key_expires_at: None,
+      access_token: None,
+      access_token_expires_at: None,
+      id_token: None,
+      refresh_token: None,
+      extra: Default::default(),
+      refresh_url: None,
+      last_refresh: None,
+      settings: toml::Table::new(),
+    }
+  }
+
+  #[test]
+  fn chat_parser_reads_request_metadata() {
+    let mut headers = HeaderMap::new();
+    headers.insert("x-session-id", HeaderValue::from_static("session-1"));
+    headers.insert("x-request-id", HeaderValue::from_static("request-1"));
+    headers.insert("x-opencode-project", HeaderValue::from_static("project-1"));
+    headers.insert("x-behave-as", HeaderValue::from_static("architect"));
+    let body = json!({
+      "model": "gpt-4.1",
+      "stream": true,
+      "messages": [{"role": "user", "content": "hi"}]
+    });
+
+    let parsed = ChatParser.parse(headers.clone(), body.clone());
+
+    assert_eq!(parsed.meta.endpoint, Endpoint::ChatCompletions);
+    assert_eq!(parsed.meta.upstream_endpoint, Endpoint::ChatCompletions);
+    assert_eq!(parsed.meta.model, "gpt-4.1");
+    assert_eq!(parsed.meta.upstream_model, "gpt-4.1");
+    assert!(parsed.meta.stream);
+    assert_eq!(parsed.meta.session_id.as_deref(), Some("session-1"));
+    assert_eq!(parsed.meta.request_id.as_deref(), Some("request-1"));
+    assert_eq!(parsed.meta.project_id.as_deref(), Some("project-1"));
+    assert_eq!(parsed.meta.behave_as.as_deref(), Some("architect"));
+    assert_eq!(parsed.meta.initiator, "user");
+    assert_eq!(parsed.body, body);
+    assert_eq!(
+      parsed.meta.inbound_headers.get("x-session-id"),
+      headers.get("x-session-id")
+    );
+  }
+
+  #[test]
+  fn prepare_request_converts_endpoint_and_applies_provider_transform() {
+    let mut cfg = Config::default();
+    cfg.accounts.push(zai_account());
+    let state = build_state(&cfg, None).unwrap();
+    let account = state.pool.all()[0].clone();
+    let route = state.route.resolve("glm-4.6", None).unwrap();
+    let req = ResolvedRequest {
+      meta: RequestMeta {
+        endpoint: Endpoint::Responses,
+        upstream_endpoint: Endpoint::ChatCompletions,
+        model: "glm-4.6".into(),
+        upstream_model: "glm-4.6".into(),
+        stream: false,
+        session_id: Some("session-1".into()),
+        request_id: Some("request-1".into()),
+        project_id: Some("project-1".into()),
+        initiator: "user".into(),
+        behave_as: None,
+        inbound_headers: HeaderMap::new(),
+      },
+      body: json!({
+        "model": "glm-4.6",
+        "input": "hi"
+      }),
+      route,
+      account,
+    };
+
+    let prepared = prepare_request(req).unwrap();
+
+    assert_eq!(prepared.meta.endpoint, Endpoint::Responses);
+    assert_eq!(prepared.meta.upstream_endpoint, Endpoint::ChatCompletions);
+    assert_eq!(prepared.inbound_body["input"], json!("hi"));
+    assert_eq!(prepared.upstream_body["model"], json!("glm-4.6"));
+    assert!(
+      prepared.upstream_body.get("messages").is_some(),
+      "converted body missing messages"
+    );
+    assert_eq!(
+      prepared
+        .upstream_body
+        .get("thinking")
+        .and_then(|v| v.get("type"))
+        .and_then(|v| v.as_str()),
+      Some("enabled")
+    );
+  }
+
+  #[test]
+  fn copilot_transformer_is_identity() {
+    let mut cfg = Config::default();
+    cfg.accounts.push(AccountCfg {
+      id: "acct".into(),
+      provider: "github-copilot".into(),
+      enabled: true,
+      tags: Vec::new(),
+      label: None,
+      base_url: None,
+      headers: Default::default(),
+      auth_type: None,
+      username: None,
+      api_key: None,
+      api_key_expires_at: None,
+      access_token: None,
+      access_token_expires_at: None,
+      id_token: None,
+      refresh_token: Some(Secret::new("refresh-token".into())),
+      extra: Default::default(),
+      refresh_url: None,
+      last_refresh: None,
+      settings: toml::Table::new(),
+    });
+    let state = build_state(&cfg, None).unwrap();
+    let provider: &dyn Provider = state.pool.all()[0].provider.as_ref();
+    let transformer: &dyn InputTransformer = provider.input_transformer().expect("copilot transformer");
+    let body = json!({"model": "gpt-4.1", "messages": [{"role": "user", "content": "hi"}]});
+    let meta = RequestMeta {
+      endpoint: Endpoint::ChatCompletions,
+      upstream_endpoint: Endpoint::ChatCompletions,
+      model: "gpt-4.1".into(),
+      upstream_model: "gpt-4.1".into(),
+      stream: false,
+      session_id: None,
+      request_id: None,
+      project_id: None,
+      initiator: "user".into(),
+      behave_as: None,
+      inbound_headers: HeaderMap::new(),
+    };
+
+    let transformed = transformer.transform_input(&meta, body.clone()).unwrap();
+    assert_eq!(transformed, body);
+  }
 }

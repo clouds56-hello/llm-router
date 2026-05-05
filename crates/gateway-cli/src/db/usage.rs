@@ -151,6 +151,7 @@ mod tests {
       session_id: "session-1".into(),
       session_source: SessionSource::Header,
       request_id: Some("request-1".into()),
+      request_error: None,
       project_id: Some("project-1".into()),
       endpoint: "chat_completions".into(),
       account_id: "account".into(),

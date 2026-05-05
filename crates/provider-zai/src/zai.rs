@@ -204,12 +204,10 @@ impl Provider for ZaiProvider {
     span.record("model", model_id);
     span.record("reasoning", reasoning);
 
-    let body = transform::shape_request(ctx.body, reasoning);
-
     let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
     debug!(%url, "POST zai chat");
     let headers = self.auth_headers(ctx.stream)?;
-    let body_bytes = Bytes::from(serde_json::to_vec(&body).unwrap_or_default());
+    let body_bytes = Bytes::from(serde_json::to_vec(ctx.body).unwrap_or_default());
     let resp = crate::util::http::send(
       ctx.http,
       Method::POST,
@@ -310,6 +308,40 @@ mod tests {
     assert_eq!(p.base_url, "https://open.bigmodel.cn/api/paas/v4");
   }
 
+  #[test]
+  fn input_transformer_injects_thinking_once() {
+    let provider = ZaiProvider::from_account(std::sync::Arc::new(acct("zai-coding-plan", Some("sk-test")))).unwrap();
+    let meta = RequestMeta {
+      endpoint: Endpoint::ChatCompletions,
+      upstream_endpoint: Endpoint::ChatCompletions,
+      model: "glm-4.6".into(),
+      upstream_model: "glm-4.6".into(),
+      stream: false,
+      session_id: None,
+      request_id: None,
+      project_id: None,
+      initiator: "user".into(),
+      behave_as: None,
+      inbound_headers: HeaderMap::new(),
+    };
+    let body = serde_json::json!({
+      "model": "glm-4.6",
+      "messages": [{ "role": "user", "content": "hi" }]
+    });
+
+    let once = provider.transform_input(&meta, body).unwrap();
+    let twice = provider.transform_input(&meta, once.clone()).unwrap();
+
+    assert_eq!(once, twice);
+    assert_eq!(
+      once
+        .get("thinking")
+        .and_then(|v| v.get("type"))
+        .and_then(|v| v.as_str()),
+      Some("enabled")
+    );
+  }
+
   #[tokio::test]
   async fn captures_transformed_outbound_body() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -329,7 +361,25 @@ mod tests {
     cfg.base_url = Some(format!("http://{addr}"));
     let provider = ZaiProvider::from_account(std::sync::Arc::new(cfg)).unwrap();
     let http = reqwest::Client::new();
-    let body = serde_json::json!({ "model": "glm-4.6", "messages": [{ "role": "user", "content": "hi" }] });
+    let meta = RequestMeta {
+      endpoint: Endpoint::ChatCompletions,
+      upstream_endpoint: Endpoint::ChatCompletions,
+      model: "glm-4.6".into(),
+      upstream_model: "glm-4.6".into(),
+      stream: false,
+      session_id: None,
+      request_id: None,
+      project_id: None,
+      initiator: "user".into(),
+      behave_as: None,
+      inbound_headers: HeaderMap::new(),
+    };
+    let body = provider
+      .transform_input(
+        &meta,
+        serde_json::json!({ "model": "glm-4.6", "messages": [{ "role": "user", "content": "hi" }] }),
+      )
+      .unwrap();
     let inbound = HeaderMap::new();
     let capture = new_outbound_capture();
     let ctx = RequestCtx {

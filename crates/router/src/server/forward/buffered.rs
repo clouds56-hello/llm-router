@@ -72,6 +72,7 @@ pub(crate) async fn buffered_response(
     &initiator,
     session_id.as_deref(),
     request_id.as_deref(),
+    None,
     project_id.as_deref(),
     &req_headers,
     &req_body,

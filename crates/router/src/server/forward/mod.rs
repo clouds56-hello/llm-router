@@ -136,6 +136,7 @@ mod tests {
       None,
       None,
       None,
+      None,
       &HeaderMap::new(),
       &req_body,
       Some(&HeaderMap::new()),
@@ -196,6 +197,7 @@ mod tests {
       "user",
       Some("client-session"),
       Some("request-123"),
+      Some("stream terminated before completion"),
       Some("project-456"),
       &HeaderMap::new(),
       &req_body,
@@ -214,6 +216,10 @@ mod tests {
     assert_eq!(records[0].session_id, "client-session");
     assert_eq!(records[0].session_source, SessionSource::Header);
     assert_eq!(records[0].request_id.as_deref(), Some("request-123"));
+    assert_eq!(
+      records[0].request_error.as_deref(),
+      Some("stream terminated before completion")
+    );
     assert_eq!(records[0].project_id.as_deref(), Some("project-456"));
   }
 
