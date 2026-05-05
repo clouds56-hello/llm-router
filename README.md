@@ -102,10 +102,60 @@ llm-router import --from gh|copilot-plugin|env [--provider PROVIDER] [--env-var 
 llm-router account list|remove ID|show ID
 llm-router headers [--account ID]   # inspect resolved Copilot identity headers
 llm-router serve [--port N] [--no-proxy] [--allow-remote]
+llm-router proxy [start] [--port N] [--no-proxy] [--allow-remote]
+llm-router proxy env [--shell sh|fish|pwsh]
+llm-router proxy ca path|show|regenerate
 llm-router usage [--since 24h] [--account ID]
 llm-router config get|set|unset KEY [--account ID] [--add]
 llm-router config list | edit | edit-profiles | path [--profiles] | list-profiles
 ```
+
+## Proxy Mode
+
+`proxy` runs a local HTTP CONNECT forward proxy that MITMs a small allowlist of
+LLM API hosts and routes those requests through llm-router's existing account
+pool.
+
+First run generates a local CA under `~/.config/llm-router/ca/`:
+
+```sh
+llm-router proxy
+llm-router proxy ca show
+```
+
+Then trust the printed CA cert and inject proxy + CA env vars into your shell:
+
+```sh
+eval "$(llm-router proxy env)"
+```
+
+The emitted env block sets:
+
+- `HTTPS_PROXY` / `HTTP_PROXY`
+- `SSL_CERT_FILE`
+- `NODE_EXTRA_CA_CERTS`
+- `REQUESTS_CA_BUNDLE`
+- `CURL_CA_BUNDLE`
+- `GIT_SSL_CAINFO`
+
+Config:
+
+```toml
+[proxy_mode]
+host = "127.0.0.1"
+port = 4142
+
+# optional; defaults to ~/.config/llm-router/ca
+# ca_dir = "/some/path"
+
+# extend the built-in MITM allowlist
+# intercept_hosts = ["my-llm-gateway.example.com"]
+
+# force selected hosts to pass through untouched
+# passthrough_hosts = ["api.githubcopilot.com"]
+```
+
+Requests to hosts outside the allowlist are tunneled through untouched.
 
 ## Providers
 

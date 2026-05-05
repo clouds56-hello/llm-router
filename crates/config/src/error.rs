@@ -46,6 +46,12 @@ pub enum Error {
   #[snafu(display("[proxy].url has unsupported scheme: {scheme}"))]
   ProxyScheme { scheme: String },
 
+  #[snafu(display("[proxy_mode].intercept_hosts contains an invalid hostname: {host:?}"))]
+  ProxyInterceptHost { host: String },
+
+  #[snafu(display("[proxy_mode].passthrough_hosts contains an invalid hostname: {host:?}"))]
+  ProxyPassthroughHost { host: String },
+
   #[snafu(display("invalid header name in [copilot.extra_headers]: {name:?}"))]
   InvalidHeaderName { name: String },
 

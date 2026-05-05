@@ -11,6 +11,7 @@ mod headers;
 mod import;
 mod login;
 mod migration;
+mod proxy;
 mod serve;
 mod update;
 mod usage;
@@ -41,6 +42,8 @@ pub enum Cmd {
   Headers(headers::HeadersArgs),
   /// Run the local OpenAI-compatible server
   Serve(serve::ServeArgs),
+  /// Run the local MITM forward proxy or print proxy env exports
+  Proxy(proxy::ProxyArgs),
   /// Query usage statistics from the local SQLite log
   Usage(usage::UsageArgs),
   /// Get/set/list config values (git-style); preserves comments
@@ -74,6 +77,7 @@ impl Cli {
       Cmd::Account(c) => account::run(cfg_path, c).await,
       Cmd::Headers(a) => headers::run(cfg_path, a).await,
       Cmd::Serve(a) => serve::run(cfg_path, a).await,
+      Cmd::Proxy(a) => proxy::run(cfg_path, a).await,
       Cmd::Usage(a) => usage::run(cfg_path, a).await,
       Cmd::Config(a) => config_cmd::run(cfg_path, a).await,
       Cmd::Update(a) => update::run(a).await,
@@ -89,7 +93,7 @@ impl Cli {
 fn run_mode_for(cmd: &Cmd) -> RunMode {
   use config_cmd::ConfigCmd::*;
   match cmd {
-    Cmd::Serve(_) => RunMode::Server,
+    Cmd::Serve(_) | Cmd::Proxy(_) => RunMode::Server,
     Cmd::Login(_) | Cmd::Import(_) | Cmd::Update(_) | Cmd::Migration(_) => RunMode::MutatingCli,
     Cmd::Config(args) => match args.cmd {
       Set(_) | Unset(_) | Edit | EditProfiles => RunMode::MutatingCli,

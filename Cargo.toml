@@ -31,11 +31,16 @@ eventsource-stream = "0.2"
 futures = "0.3"
 futures-util = "0.3"
 http = "1"
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
 humantime = "2"
 inquire = { version = "0.7", default-features = false, features = ["crossterm"] }
 notify = "6"
 parking_lot = "0.12"
+rcgen = { version = "0.14", features = ["crypto", "pem"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "socks"] }
+rustls = "0.23"
+rustls-pemfile = "2"
 rpassword = "7"
 rusqlite = { version = "0.31", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
@@ -44,6 +49,7 @@ sha2 = "0.10.9"
 snafu = "0.8"
 time = { version = "0.3", features = ["formatting", "parsing", "macros"] }
 tokio = { version = "1", features = ["full"] }
+tokio-rustls = "0.26"
 toml = "0.8"
 toml_edit = "0.22"
 tower = "0.5"

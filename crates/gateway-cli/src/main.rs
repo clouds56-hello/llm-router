@@ -8,6 +8,7 @@ mod db;
 mod error;
 mod logging;
 mod provider;
+mod server_runtime;
 mod util;
 
 #[tokio::main]

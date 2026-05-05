@@ -26,3 +26,8 @@ pub fn default_requests_dir() -> Result<PathBuf> {
 pub fn default_logs_dir() -> Result<PathBuf> {
   Ok(data_dir()?.join("logs"))
 }
+
+pub fn default_ca_dir() -> Result<PathBuf> {
+  let dirs = super::project_dirs()?;
+  Ok(dirs.config_dir().join("ca"))
+}

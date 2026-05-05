@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 
 pub const DEFAULT_PORT: u16 = 4141;
 pub const DEFAULT_HOST: &str = "127.0.0.1";
+pub const DEFAULT_PROXY_PORT: u16 = 4142;
 pub const DEFAULT_PROVIDER: &str = ID_GITHUB_COPILOT;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -25,6 +26,8 @@ pub struct Config {
   pub db: DbConfig,
   #[serde(default)]
   pub proxy: ProxyConfig,
+  #[serde(default)]
+  pub proxy_mode: ProxyModeConfig,
   #[serde(default)]
   pub logging: LoggingConfig,
   #[serde(default)]
@@ -62,6 +65,10 @@ fn default_host() -> String {
 
 fn default_port() -> u16 {
   DEFAULT_PORT
+}
+
+fn default_proxy_port() -> u16 {
+  DEFAULT_PROXY_PORT
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -196,6 +203,52 @@ impl ProxyConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProxyModeConfig {
+  #[serde(default = "default_host")]
+  pub host: String,
+  #[serde(default = "default_proxy_port")]
+  pub port: u16,
+  #[serde(default)]
+  pub ca_dir: Option<PathBuf>,
+  #[serde(default)]
+  pub intercept_hosts: Vec<String>,
+  #[serde(default)]
+  pub passthrough_hosts: Vec<String>,
+}
+
+impl Default for ProxyModeConfig {
+  fn default() -> Self {
+    Self {
+      host: default_host(),
+      port: default_proxy_port(),
+      ca_dir: None,
+      intercept_hosts: Vec::new(),
+      passthrough_hosts: Vec::new(),
+    }
+  }
+}
+
+impl ProxyModeConfig {
+  pub fn validate(&self) -> Result<()> {
+    for host in &self.intercept_hosts {
+      if !is_proxy_host(host) {
+        return error::ProxyInterceptHostSnafu { host: host.clone() }.fail();
+      }
+    }
+    for host in &self.passthrough_hosts {
+      if !is_proxy_host(host) {
+        return error::ProxyPassthroughHostSnafu { host: host.clone() }.fail();
+      }
+    }
+    Ok(())
+  }
+
+  pub fn resolved_ca_dir(&self) -> Result<PathBuf> {
+    self.ca_dir.clone().map(Ok).unwrap_or_else(paths::default_ca_dir)
+  }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoggingConfig {
   #[serde(default = "default_log_level")]
   pub level: String,
@@ -270,6 +323,7 @@ impl Config {
 
   pub fn validate(&self) -> Result<()> {
     self.proxy.validate()?;
+    self.proxy_mode.validate()?;
     for a in &self.accounts {
       validate_account_common(a)?;
     }
@@ -307,6 +361,10 @@ impl Config {
     let cfg: Config = toml::from_str(&serialised).context(error::EditValidateSnafu)?;
     cfg.proxy.validate().map_err(|e| Error::EditValidateSection {
       section: "[proxy]",
+      source: Box::new(e),
+    })?;
+    cfg.proxy_mode.validate().map_err(|e| Error::EditValidateSection {
+      section: "[proxy_mode]",
       source: Box::new(e),
     })?;
     for a in &cfg.accounts {
@@ -363,6 +421,14 @@ fn is_token(s: &str) -> bool {
             | b'-' | b'.' | b'^' | b'_' | b'`' | b'|' | b'~'
             | b'0'..=b'9' | b'A'..=b'Z' | b'a'..=b'z')
     })
+}
+
+fn is_proxy_host(s: &str) -> bool {
+  let trimmed = s.trim();
+  !trimmed.is_empty()
+    && trimmed
+      .bytes()
+      .all(|b| matches!(b, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'.' | b'-' | b'*'))
 }
 
 pub fn project_dirs() -> Result<ProjectDirs> {
