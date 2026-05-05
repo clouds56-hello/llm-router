@@ -27,6 +27,7 @@ use tokio_rustls::TlsAcceptor;
 
 const CA_CERT_FILE: &str = "ca.crt";
 const CA_KEY_FILE: &str = "ca.key";
+const CA_BUNDLE_FILE: &str = "ca-bundle.crt";
 const CONNECT_OK: &[u8] = b"HTTP/1.1 200 Connection Established\r\n\r\n";
 const BAD_CONNECT: &[u8] = b"HTTP/1.1 405 Method Not Allowed\r\ncontent-length: 0\r\n\r\n";
 const DEFAULT_INTERCEPT_HOSTS: &[&str] = &[
@@ -159,6 +160,10 @@ impl ProxyCa {
     self.dir.join(CA_CERT_FILE)
   }
 
+  pub fn bundle_path(&self) -> PathBuf {
+    self.dir.join(CA_BUNDLE_FILE)
+  }
+
   pub fn key_path(&self) -> PathBuf {
     self.dir.join(CA_KEY_FILE)
   }
@@ -166,6 +171,25 @@ impl ProxyCa {
   pub fn fingerprint_sha256(&self) -> String {
     let digest = Sha256::digest(self.cert_pem.as_bytes());
     hexify(&digest)
+  }
+
+  pub fn ensure_bundle(&self) -> Result<PathBuf> {
+    let bundle_path = self.bundle_path();
+    let mut bundle = match detect_system_ca_bundle() {
+      Some(path) => std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?,
+      None => String::new(),
+    };
+    if !bundle.is_empty() && !bundle.ends_with('\n') {
+      bundle.push('\n');
+    }
+    if !bundle.contains(&self.cert_pem) {
+      bundle.push_str(&self.cert_pem);
+      if !bundle.ends_with('\n') {
+        bundle.push('\n');
+      }
+    }
+    write_ca_file(&bundle_path, bundle.as_bytes(), 0o644)?;
+    Ok(bundle_path)
   }
 
   fn certified_key_for(&self, host: &str) -> Result<Arc<CertifiedKey>> {
@@ -198,6 +222,22 @@ impl ProxyCa {
     self.cert_cache.lock().insert(host.to_string(), certified.clone());
     Ok(certified)
   }
+}
+
+fn detect_system_ca_bundle() -> Option<PathBuf> {
+  let env_path = std::env::var_os("SSL_CERT_FILE").map(PathBuf::from);
+  let mut candidates = env_path
+    .into_iter()
+    .chain([
+      "/etc/ssl/certs/ca-certificates.crt",
+      "/etc/pki/tls/certs/ca-bundle.crt",
+      "/etc/ssl/ca-bundle.pem",
+      "/etc/pki/tls/cacert.pem",
+      "/etc/ssl/cert.pem",
+    ]
+    .into_iter()
+    .map(PathBuf::from));
+  candidates.find(|path| path.is_file())
 }
 
 impl fmt::Debug for ProxyCa {

@@ -104,6 +104,7 @@ llm-router headers [--account ID]   # inspect resolved Copilot identity headers
 llm-router serve [--port N] [--no-proxy] [--allow-remote]
 llm-router proxy [start] [--port N] [--no-proxy] [--allow-remote]
 llm-router proxy env [--shell sh|fish|pwsh]
+llm-router proxy shell [--shell /path/to/shell]
 llm-router proxy ca path|show|regenerate
 llm-router usage [--since 24h] [--account ID]
 llm-router config get|set|unset KEY [--account ID] [--add]
@@ -129,14 +130,27 @@ Then trust the printed CA cert and inject proxy + CA env vars into your shell:
 eval "$(llm-router proxy env)"
 ```
 
+Or spawn a subshell with those variables already set:
+
+```sh
+llm-router proxy shell
+```
+
+`proxy shell` uses `SHELL` when available and falls back to `/bin/sh`. Pass
+`--shell /path/to/shell` to override detection.
+
 The emitted env block sets:
 
 - `HTTPS_PROXY` / `HTTP_PROXY`
-- `SSL_CERT_FILE`
+- `SSL_CERT_FILE` (to a generated merged bundle containing system roots + the llm-router CA)
 - `NODE_EXTRA_CA_CERTS`
-- `REQUESTS_CA_BUNDLE`
-- `CURL_CA_BUNDLE`
-- `GIT_SSL_CAINFO`
+- `REQUESTS_CA_BUNDLE` (merged bundle)
+- `CURL_CA_BUNDLE` (merged bundle)
+- `GIT_SSL_CAINFO` (merged bundle)
+
+`NODE_EXTRA_CA_CERTS` still points at the local `ca.crt` because Node appends it to
+the built-in trust store. The other variables point at `ca-bundle.crt` so they do
+not drop system roots.
 
 Config:
 
