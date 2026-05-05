@@ -17,7 +17,7 @@ pub(crate) use stream::stream_response;
 #[cfg(test)]
 mod tests {
   use super::passthrough::record_passthrough_call;
-  use super::recording::{extract_request_messages, record_call};
+  use super::recording::{build_call_record, extract_request_messages};
   use super::usage::parse_usage_any_value;
   use crate::config::{Account as AccountCfg, AuthType, Config};
   use crate::db::{CallRecord, SessionSource};
@@ -26,6 +26,7 @@ mod tests {
   use crate::util::secret::Secret;
   use axum::http::{HeaderMap, Method};
   use bytes::Bytes;
+  use llm_core::db::DbStore;
   use serde_json::json;
   use std::sync::{Arc, Mutex};
   use std::time::Instant;
@@ -99,7 +100,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn record_call_generates_auto_session_and_assistant_raw_part() {
+  async fn build_call_record_generates_auto_session_and_assistant_raw_part() {
     let mut cfg = Config::default();
     cfg.accounts.push(AccountCfg {
       id: "acct".into(),
@@ -123,11 +124,10 @@ mod tests {
       settings: toml::Table::new(),
     });
     let db = Arc::new(FakeDb::default());
-    let state = build_state(&cfg, Some(db.clone())).unwrap();
     let req_body = json!({ "model": "glm-4.6", "messages": [{ "role": "user", "content": "hi" }] });
     let resp_body = Bytes::from_static(br#"{"id":"r1"}"#);
-    record_call(
-      &state,
+    let record = build_call_record(
+      db.body_max_bytes(),
       "acct",
       "zai-coding-plan",
       Endpoint::ChatCompletions,
@@ -149,11 +149,9 @@ mod tests {
       200,
       false,
     );
-    let records = db.records.lock().unwrap();
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].session_source, SessionSource::Auto);
-    Uuid::parse_str(&records[0].session_id).unwrap();
-    assert!(records[0]
+    assert_eq!(record.session_source, SessionSource::Auto);
+    Uuid::parse_str(&record.session_id).unwrap();
+    assert!(record
       .messages
       .iter()
       .flat_map(|m| &m.parts)
@@ -161,7 +159,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn record_call_persists_header_session_request_and_project_ids() {
+  async fn build_call_record_persists_header_session_request_and_project_ids() {
     let mut cfg = Config::default();
     cfg.accounts.push(AccountCfg {
       id: "acct".into(),
@@ -185,11 +183,10 @@ mod tests {
       settings: toml::Table::new(),
     });
     let db = Arc::new(FakeDb::default());
-    let state = build_state(&cfg, Some(db.clone())).unwrap();
     let req_body = json!({ "model": "glm-4.6", "messages": [] });
 
-    record_call(
-      &state,
+    let record = build_call_record(
+      db.body_max_bytes(),
       "acct",
       "zai-coding-plan",
       Endpoint::ChatCompletions,
@@ -212,15 +209,14 @@ mod tests {
       false,
     );
 
-    let records = db.records.lock().unwrap();
-    assert_eq!(records[0].session_id, "client-session");
-    assert_eq!(records[0].session_source, SessionSource::Header);
-    assert_eq!(records[0].request_id.as_deref(), Some("request-123"));
+    assert_eq!(record.session_id, "client-session");
+    assert_eq!(record.session_source, SessionSource::Header);
+    assert_eq!(record.request_id.as_deref(), Some("request-123"));
     assert_eq!(
-      records[0].request_error.as_deref(),
+      record.request_error.as_deref(),
       Some("stream terminated before completion")
     );
-    assert_eq!(records[0].project_id.as_deref(), Some("project-456"));
+    assert_eq!(record.project_id.as_deref(), Some("project-456"));
   }
 
   #[tokio::test]

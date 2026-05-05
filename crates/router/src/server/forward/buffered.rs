@@ -1,5 +1,6 @@
-use super::recording::record_call;
+use super::recording::build_call_record;
 use super::usage::parse_usage_any_json;
+use crate::db::CallRecord;
 use crate::db::OutboundSnapshot;
 use crate::pool::AccountHandle;
 use crate::provider::Endpoint;
@@ -28,13 +29,15 @@ pub(crate) async fn buffered_response(
   req_body: Value,
   outbound: Option<OutboundSnapshot>,
   started: Instant,
-) -> Response {
+) -> (Response, CallRecord) {
   let status = resp.status();
   let resp_headers = resp.headers().clone();
+  let mut request_error = None;
   let bytes = match resp.bytes().await {
     Ok(b) => b,
     Err(e) => {
-      return ApiError::bad_gateway(format!("reading upstream body: {e}")).into_response();
+      request_error = Some(format!("reading upstream body: {e}"));
+      Bytes::new()
     }
   };
 
@@ -58,13 +61,16 @@ pub(crate) async fn buffered_response(
       .and_then(|v| serde_json::to_vec(&v).map(Bytes::from).map_err(|e| e.to_string()))
     {
       Ok(bytes) => bytes,
-      Err(e) => return ApiError::bad_gateway(format!("response conversion failed: {e}")).into_response(),
+      Err(e) => {
+        request_error = Some(format!("response conversion failed: {e}"));
+        Bytes::new()
+      }
     }
   };
 
   let (pt, ct) = parse_usage_any_json(&bytes);
-  record_call(
-    &s,
+  let record = build_call_record(
+    s.db.as_ref().map(|db| db.body_max_bytes()).unwrap_or(0),
     &acct.id(),
     acct.provider.info().id.as_str(),
     endpoint,
@@ -72,7 +78,7 @@ pub(crate) async fn buffered_response(
     &initiator,
     session_id.as_deref(),
     request_id.as_deref(),
-    None,
+    request_error.as_deref(),
     project_id.as_deref(),
     &req_headers,
     &req_body,
@@ -87,5 +93,11 @@ pub(crate) async fn buffered_response(
     false,
   );
 
-  (status, headers, bytes).into_response()
+  let response = if let Some(error) = request_error {
+    ApiError::bad_gateway(error).into_response()
+  } else {
+    (status, headers, bytes).into_response()
+  };
+
+  (response, record)
 }

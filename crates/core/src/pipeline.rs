@@ -1,8 +1,11 @@
+use crate::db::CallRecord;
 use crate::provider::Endpoint;
+use async_trait::async_trait;
 use reqwest::header::HeaderMap;
 use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 
 #[derive(Clone, Debug)]
 pub struct RequestMeta {
@@ -50,20 +53,22 @@ pub trait RequestSender: Send + Sync {
   ) -> Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send + 'a>>;
 }
 
+#[async_trait]
 pub trait OutputTransformer: Send + Sync {
   type State;
   type Upstream;
   type Output;
 
-  fn transform_result<'a>(
-    &'a self,
-    state: Self::State,
-    upstream: Self::Upstream,
-  ) -> Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
+  async fn transform_result(&self, state: Self::State, upstream: Self::Upstream) -> (Self::Output, CallRecord);
 
-  fn transform_sse<'a>(
-    &'a self,
+  async fn transform_sse(
+    &self,
     state: Self::State,
     upstream: Self::Upstream,
-  ) -> Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
+    reporter: Arc<dyn RequestReporter>,
+  ) -> Self::Output;
+}
+
+pub trait RequestReporter: Send + Sync {
+  fn report(&self, record: CallRecord);
 }

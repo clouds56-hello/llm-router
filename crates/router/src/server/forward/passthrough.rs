@@ -1,4 +1,4 @@
-use super::recording::record_call_with_snapshots;
+use super::recording::build_call_record_with_snapshots;
 use super::usage::parse_usage_any_json;
 use crate::db::HttpSnapshot;
 use crate::provider::Endpoint;
@@ -23,6 +23,7 @@ pub(crate) fn record_passthrough_call(
   status: u16,
   started: Instant,
 ) {
+  let Some(db) = s.db.as_ref() else { return };
   let path = path_and_query.split('?').next().unwrap_or(path_and_query);
   let logical_path = crate::proxy::rewrite_target(host, path, method).unwrap_or(path);
   let endpoint = passthrough_endpoint(method, logical_path);
@@ -35,8 +36,8 @@ pub(crate) fn record_passthrough_call(
   let stream = req_body_json.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
   let initiator = classify_passthrough_initiator(req_headers, endpoint, &req_body_json).to_string();
 
-  record_call_with_snapshots(
-    s,
+  let record = build_call_record_with_snapshots(
+    db.body_max_bytes(),
     "passthrough",
     host,
     endpoint.map(Endpoint::as_str).unwrap_or(logical_path),
@@ -81,6 +82,7 @@ pub(crate) fn record_passthrough_call(
     status,
     stream,
   );
+  db.record(record);
 }
 
 fn passthrough_endpoint(method: &Method, path: &str) -> Option<Endpoint> {

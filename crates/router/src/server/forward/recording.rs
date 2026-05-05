@@ -1,14 +1,13 @@
 use crate::db::{CallRecord, HttpSnapshot, MessageRecord, OutboundSnapshot, PartRecord, SessionSource};
 use crate::provider::Endpoint;
-use crate::server::AppState;
 use bytes::Bytes;
 use serde_json::Value;
 use std::time::Instant;
 use uuid::Uuid;
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn record_call(
-  s: &AppState,
+pub(crate) fn build_call_record(
+  max_body: usize,
   account_id: &str,
   provider_id: &str,
   endpoint: Endpoint,
@@ -29,13 +28,10 @@ pub(crate) fn record_call(
   started: Instant,
   status: u16,
   stream: bool,
-) {
-  if s.db.is_none() {
-    return;
-  }
+) -> CallRecord {
   let req_body_bytes = serde_json::to_vec(req_body).unwrap_or_default();
-  record_call_with_snapshots(
-    s,
+  build_call_record_with_snapshots(
+    max_body,
     account_id,
     provider_id,
     endpoint.as_str(),
@@ -73,12 +69,12 @@ pub(crate) fn record_call(
     started,
     status,
     stream,
-  );
+  )
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn record_call_with_snapshots(
-  s: &AppState,
+pub(super) fn build_call_record_with_snapshots(
+  max: usize,
   account_id: &str,
   provider_id: &str,
   endpoint: &str,
@@ -98,10 +94,8 @@ pub(super) fn record_call_with_snapshots(
   started: Instant,
   status: u16,
   stream: bool,
-) {
-  let Some(db) = s.db.as_ref() else { return };
+) -> CallRecord {
   let latency_ms = started.elapsed().as_millis() as u64;
-  let max = db.body_max_bytes();
   let req_body_json = serde_json::from_slice::<Value>(req_body).unwrap_or(Value::Null);
   let mut messages = message_endpoint
     .map(|endpoint| extract_request_messages(&req_body_json, endpoint, max))
@@ -120,7 +114,7 @@ pub(super) fn record_call_with_snapshots(
     Some(id) => (id.to_string(), SessionSource::Header),
     None => (Uuid::new_v4().to_string(), SessionSource::Auto),
   };
-  db.record(CallRecord {
+  CallRecord {
     ts: time::OffsetDateTime::now_utc().unix_timestamp(),
     session_id: effective_id,
     session_source: source,
@@ -157,7 +151,7 @@ pub(super) fn record_call_with_snapshots(
       snap
     },
     messages,
-  });
+  }
 }
 
 fn clip_body(body: &[u8], max: usize) -> bytes::Bytes {

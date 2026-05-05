@@ -1,5 +1,6 @@
-use super::recording::record_call;
+use super::recording::build_call_record;
 use super::usage::parse_usage_any_value;
+use crate::db::CallRecord;
 use crate::db::OutboundSnapshot;
 use crate::pool::AccountHandle;
 use crate::provider::Endpoint;
@@ -9,6 +10,7 @@ use axum::http::{HeaderMap, HeaderValue};
 use axum::response::{IntoResponse, Response};
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt};
+use llm_core::pipeline::RequestReporter;
 use serde_json::Value;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -18,6 +20,7 @@ use std::time::Instant;
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn stream_response(
   s: AppState,
+  reporter: Arc<dyn RequestReporter>,
   acct: Arc<AccountHandle>,
   resp: reqwest::Response,
   endpoint: Endpoint,
@@ -50,6 +53,7 @@ pub(crate) async fn stream_response(
   let req_headers_clone = req_headers.clone();
   let req_body_clone = req_body.clone();
   let s_clone = s.clone();
+  let reporter_clone = reporter.clone();
 
   let mut headers = HeaderMap::new();
   headers.insert(
@@ -134,8 +138,8 @@ pub(crate) async fn stream_response(
     } else {
       None
     };
-    record_call(
-      &s_clone,
+    let record: CallRecord = build_call_record(
+      s_clone.db.as_ref().map(|db| db.body_max_bytes()).unwrap_or(0),
       &acct_id,
       &provider_id,
       endpoint,
@@ -157,6 +161,7 @@ pub(crate) async fn stream_response(
       status.as_u16(),
       true,
     );
+    reporter_clone.report(record);
   };
 
   let stream = StreamWithFinalizer::new(mapped, on_end);

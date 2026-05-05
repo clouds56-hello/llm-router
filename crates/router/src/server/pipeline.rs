@@ -4,10 +4,13 @@ use super::{first_header, AppState, PROJECT_ID_HEADERS, REQUEST_ID_HEADERS, SESS
 use crate::pool::{AccountHandle, EndpointAcquire};
 use crate::provider::{new_outbound_capture, Endpoint, RequestCtx};
 use crate::route::RouteResolution;
+use async_trait::async_trait;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 use llm_config::RouteMode;
-use llm_core::pipeline::{OutputTransformer, ParsedRequest, RequestMeta, RequestResolver, RequestSender};
+use llm_core::pipeline::{
+  OutputTransformer, ParsedRequest, RequestMeta, RequestReporter, RequestResolver, RequestSender,
+};
 use serde_json::Value;
 use std::sync::Arc;
 use std::time::Instant;
@@ -125,24 +128,12 @@ struct UpstreamResponse {
   started: Instant,
 }
 
-trait RequestReporter: Send + Sync {
-  fn report_buffered<'a>(
-    &'a self,
-    state: AppState,
-    upstream: UpstreamResponse,
-  ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Response> + Send + 'a>>;
-
-  fn report_stream<'a>(
-    &'a self,
-    state: AppState,
-    upstream: UpstreamResponse,
-  ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Response> + Send + 'a>>;
-}
-
 struct PoolResolver;
 struct ProviderSender;
 struct EndpointOutputTransformer;
-struct DbReporter;
+struct DbReporter {
+  state: AppState,
+}
 
 impl RequestResolver for PoolResolver {
   type State = AppState;
@@ -169,17 +160,14 @@ impl RequestSender for ProviderSender {
   }
 }
 
+#[async_trait]
 impl OutputTransformer for EndpointOutputTransformer {
   type State = AppState;
   type Upstream = UpstreamResponse;
   type Output = Response;
 
-  fn transform_result<'a>(
-    &'a self,
-    state: AppState,
-    upstream: UpstreamResponse,
-  ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Response> + Send + 'a>> {
-    Box::pin(buffered_response(
+  async fn transform_result(&self, state: AppState, upstream: UpstreamResponse) -> (Response, crate::db::CallRecord) {
+    buffered_response(
       state,
       upstream.account,
       upstream.resp,
@@ -194,16 +182,19 @@ impl OutputTransformer for EndpointOutputTransformer {
       upstream.inbound_body,
       upstream.outbound,
       upstream.started,
-    ))
+    )
+    .await
   }
 
-  fn transform_sse<'a>(
-    &'a self,
+  async fn transform_sse(
+    &self,
     state: AppState,
     upstream: UpstreamResponse,
-  ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Response> + Send + 'a>> {
-    Box::pin(stream_response(
+    reporter: Arc<dyn RequestReporter>,
+  ) -> Response {
+    stream_response(
       state,
+      reporter,
       upstream.account,
       upstream.resp,
       upstream.meta.endpoint,
@@ -217,25 +208,16 @@ impl OutputTransformer for EndpointOutputTransformer {
       upstream.inbound_body,
       upstream.outbound,
       upstream.started,
-    ))
+    )
+    .await
   }
 }
 
 impl RequestReporter for DbReporter {
-  fn report_buffered<'a>(
-    &'a self,
-    state: AppState,
-    upstream: UpstreamResponse,
-  ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Response> + Send + 'a>> {
-    EndpointOutputTransformer.transform_result(state, upstream)
-  }
-
-  fn report_stream<'a>(
-    &'a self,
-    state: AppState,
-    upstream: UpstreamResponse,
-  ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Response> + Send + 'a>> {
-    EndpointOutputTransformer.transform_sse(state, upstream)
+  fn report(&self, record: crate::db::CallRecord) {
+    if let Some(db) = self.state.db.as_ref() {
+      db.record(record);
+    }
   }
 }
 
@@ -247,7 +229,8 @@ pub(crate) async fn handle_endpoint(
 ) -> Result<Response, ApiError> {
   let resolver = PoolResolver;
   let sender = ProviderSender;
-  let reporter = DbReporter;
+  let transformer = EndpointOutputTransformer;
+  let reporter = Arc::new(DbReporter { state: state.clone() });
   let parsed = parser.parse(headers, body);
   let started = Instant::now();
 
@@ -329,9 +312,13 @@ pub(crate) async fn handle_endpoint(
       started,
     };
     return Ok(if parsed.meta.stream {
-      reporter.report_stream(state.clone(), upstream).await
+      transformer
+        .transform_sse(state.clone(), upstream, reporter.clone())
+        .await
     } else {
-      reporter.report_buffered(state.clone(), upstream).await
+      let (response, record) = transformer.transform_result(state.clone(), upstream).await;
+      reporter.report(record);
+      response
     });
   }
 
