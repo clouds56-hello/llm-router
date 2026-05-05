@@ -5,6 +5,7 @@
 //! responses, and messages endpoints.
 
 mod buffered;
+mod observers;
 mod passthrough;
 mod recording;
 mod stream;

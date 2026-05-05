@@ -181,6 +181,16 @@ impl CallRecordBuilder {
     self
   }
 
+  pub(crate) fn with_request_error(mut self, request_error: Option<&str>) -> Self {
+    self.request_error = request_error.map(str::to_string);
+    self
+  }
+
+  pub(crate) fn with_response_body(mut self, body: Bytes) -> Self {
+    self.inbound_resp.body = body;
+    self
+  }
+
   pub(crate) fn with_usage(mut self, prompt_tokens: Option<u64>, completion_tokens: Option<u64>) -> Self {
     self.prompt_tokens = prompt_tokens;
     self.completion_tokens = completion_tokens;
