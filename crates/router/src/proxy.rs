@@ -1,3 +1,4 @@
+use crate::route::RouteResolver;
 use crate::server::{self, error::ApiError, AppState};
 use anyhow::{Context, Result};
 use axum::body::Body;
@@ -8,6 +9,7 @@ use http::header::{HeaderValue, HOST};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper_util::rt::TokioIo;
+use llm_config::RouteMode;
 use parking_lot::Mutex;
 use rcgen::{BasicConstraints, CertificateParams, CertifiedIssuer, IsCa, Issuer, KeyPair};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
@@ -52,6 +54,7 @@ pub async fn serve(state: AppState, options: ProxyOptions) -> Result<()> {
     .await
     .with_context(|| format!("bind {}", options.addr))?;
   let ca = Arc::new(load_or_generate_ca(&options.ca_dir, false)?);
+  let route_resolver = state.route.clone();
   let router = proxy_router(state);
   let host_policy = HostPolicy::new(&options);
 
@@ -71,8 +74,9 @@ pub async fn serve(state: AppState, options: ProxyOptions) -> Result<()> {
         let router = router.clone();
         let ca = ca.clone();
         let host_policy = host_policy.clone();
+        let route_resolver = route_resolver.clone();
         tokio::spawn(async move {
-          if let Err(err) = handle_client(stream, peer, router, ca, host_policy).await {
+          if let Err(err) = handle_client(stream, peer, router, ca, host_policy, route_resolver).await {
             tracing::warn!(%peer, error = %err, "proxy connection failed");
           }
         });
@@ -124,7 +128,9 @@ fn generate_ca(dir: &Path) -> Result<ProxyCa> {
 
 fn ca_params() -> CertificateParams {
   let mut params = CertificateParams::default();
-  params.distinguished_name.push(rcgen::DnType::CommonName, "llm-router local proxy");
+  params
+    .distinguished_name
+    .push(rcgen::DnType::CommonName, "llm-router local proxy");
   params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
   params.not_before = OffsetDateTime::now_utc() - TimeDuration::days(1);
   params.not_after = OffsetDateTime::now_utc() + TimeDuration::days(3650);
@@ -209,7 +215,9 @@ impl ProxyCa {
     params.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ServerAuth];
 
     let leaf_key = KeyPair::generate().context("generate leaf key")?;
-    let cert = params.signed_by(&leaf_key, self.issuer.as_ref()).context("sign leaf certificate")?;
+    let cert = params
+      .signed_by(&leaf_key, self.issuer.as_ref())
+      .context("sign leaf certificate")?;
     let private_key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(leaf_key.serialize_der()));
     let certified = Arc::new(
       CertifiedKey::from_der(
@@ -226,9 +234,8 @@ impl ProxyCa {
 
 fn detect_system_ca_bundle() -> Option<PathBuf> {
   let env_path = std::env::var_os("SSL_CERT_FILE").map(PathBuf::from);
-  let mut candidates = env_path
-    .into_iter()
-    .chain([
+  let mut candidates = env_path.into_iter().chain(
+    [
       "/etc/ssl/certs/ca-certificates.crt",
       "/etc/pki/tls/certs/ca-bundle.crt",
       "/etc/ssl/ca-bundle.pem",
@@ -236,7 +243,8 @@ fn detect_system_ca_bundle() -> Option<PathBuf> {
       "/etc/ssl/cert.pem",
     ]
     .into_iter()
-    .map(PathBuf::from));
+    .map(PathBuf::from),
+  );
   candidates.find(|path| path.is_file())
 }
 
@@ -258,7 +266,10 @@ struct HostPolicy {
 
 impl HostPolicy {
   fn new(options: &ProxyOptions) -> Self {
-    let mut intercept = DEFAULT_INTERCEPT_HOSTS.iter().map(|s| s.to_string()).collect::<HashSet<_>>();
+    let mut intercept = DEFAULT_INTERCEPT_HOSTS
+      .iter()
+      .map(|s| s.to_string())
+      .collect::<HashSet<_>>();
     intercept.extend(options.intercept_hosts.iter().map(|s| s.to_ascii_lowercase()));
     for host in &options.passthrough_hosts {
       intercept.remove(&host.to_ascii_lowercase());
@@ -279,6 +290,7 @@ async fn handle_client(
   router: Router,
   ca: Arc<ProxyCa>,
   host_policy: HostPolicy,
+  route_resolver: Arc<RouteResolver>,
 ) -> Result<()> {
   let mut reader = BufReader::new(stream);
   let mut request_line = String::new();
@@ -314,7 +326,7 @@ async fn handle_client(
   if intercept {
     stream.write_all(CONNECT_OK).await?;
     stream.flush().await?;
-    intercept_tls(stream, &host, router, ca).await
+    intercept_tls(stream, &host, router, ca, route_resolver).await
   } else {
     tunnel(stream, &host, port).await
   }
@@ -330,7 +342,13 @@ async fn tunnel(mut client: TcpStream, host: &str, port: u16) -> Result<()> {
   Ok(())
 }
 
-async fn intercept_tls(stream: TcpStream, host: &str, router: Router, ca: Arc<ProxyCa>) -> Result<()> {
+async fn intercept_tls(
+  stream: TcpStream,
+  host: &str,
+  router: Router,
+  ca: Arc<ProxyCa>,
+  route_resolver: Arc<RouteResolver>,
+) -> Result<()> {
   let resolver = Arc::new(DynamicResolver {
     ca,
     fallback_host: host.to_string(),
@@ -344,7 +362,7 @@ async fn intercept_tls(stream: TcpStream, host: &str, router: Router, ca: Arc<Pr
   let mut http = http1::Builder::new();
   http.keep_alive(true).title_case_headers(true);
 
-  let service = service_fn(move |req| route_intercepted_request(router.clone(), req));
+  let service = service_fn(move |req| route_intercepted_request(router.clone(), route_resolver.clone(), req));
   http
     .serve_connection(TokioIo::new(tls_stream), service)
     .await
@@ -352,7 +370,11 @@ async fn intercept_tls(stream: TcpStream, host: &str, router: Router, ca: Arc<Pr
   Ok(())
 }
 
-async fn route_intercepted_request(router: Router, req: Request<hyper::body::Incoming>) -> Result<Response<Body>, std::convert::Infallible> {
+async fn route_intercepted_request(
+  router: Router,
+  route_resolver: Arc<RouteResolver>,
+  req: Request<hyper::body::Incoming>,
+) -> Result<Response<Body>, std::convert::Infallible> {
   let host = req
     .headers()
     .get(HOST)
@@ -362,17 +384,30 @@ async fn route_intercepted_request(router: Router, req: Request<hyper::body::Inc
   let path = req.uri().path().to_string();
   let method = req.method().clone();
 
+  let route_mode = req
+    .headers()
+    .get(RouteResolver::mode_header())
+    .and_then(|v| v.to_str().ok());
+
+  let resolved_mode = route_resolver.resolve_mode(route_mode);
+  if matches!(resolved_mode, Ok(RouteMode::Passthrough)) {
+    return Ok(
+      proxy_passthrough(&host, req)
+        .await
+        .unwrap_or_else(|err| ApiError::bad_gateway(err.to_string()).into_response()),
+    );
+  }
+  if let Err(err) = resolved_mode {
+    return Ok(ApiError::bad_request(err.to_string()).into_response());
+  }
+
   let rewritten = if let Some(rewritten) = rewrite_target(&host, &path, &method) {
     rewritten
   } else {
     return Ok(ApiError::not_implemented(path, host).into_response());
   };
 
-  let path_and_query = req
-    .uri()
-    .path_and_query()
-    .map(|v| v.as_str())
-    .unwrap_or(&path);
+  let path_and_query = req.uri().path_and_query().map(|v| v.as_str()).unwrap_or(&path);
   let rewritten_path_and_query = path_and_query.replacen(&path, rewritten, 1);
   let uri = Uri::builder()
     .path_and_query(rewritten_path_and_query.as_str())
@@ -385,14 +420,53 @@ async fn route_intercepted_request(router: Router, req: Request<hyper::body::Inc
     if key != HOST {
       builder = builder.header(key, value);
     }
-  };
-  builder = builder.header(HOST, HeaderValue::from_str(&host).unwrap_or_else(|_| HeaderValue::from_static("localhost")));
+  }
+  builder = builder.header(
+    HOST,
+    HeaderValue::from_str(&host).unwrap_or_else(|_| HeaderValue::from_static("localhost")),
+  );
   let body = Body::new(body);
   let request = builder.body(body).unwrap_or_else(|_| Request::new(Body::empty()));
 
   use tower::ServiceExt;
-  let response = router.oneshot(request).await.unwrap_or_else(|err| ApiError::bad_gateway(err.to_string()).into_response());
+  let response = router
+    .oneshot(request)
+    .await
+    .unwrap_or_else(|err| ApiError::bad_gateway(err.to_string()).into_response());
   Ok(response)
+}
+
+async fn proxy_passthrough(host: &str, req: Request<hyper::body::Incoming>) -> Result<Response<Body>> {
+  let path_and_query = req.uri().path_and_query().map(|v| v.as_str()).unwrap_or("/");
+  let url = format!("https://{host}{path_and_query}");
+  let (parts, body) = req.into_parts();
+  let body = axum::body::to_bytes(Body::new(body), usize::MAX)
+    .await
+    .context("read passthrough request body")?;
+
+  let client = reqwest::Client::new();
+  let mut upstream = client.request(parts.method, &url).body(body.clone());
+  for (name, value) in &parts.headers {
+    if name != HOST {
+      upstream = upstream.header(name, value);
+    }
+  }
+  upstream = upstream.header(HOST, host);
+
+  let response = upstream.send().await.context("send passthrough upstream request")?;
+  let status = response.status();
+  let headers = response.headers().clone();
+  let body = response.bytes().await.context("read passthrough upstream response")?;
+
+  let mut builder = Response::builder().status(status);
+  for (name, value) in &headers {
+    builder = builder.header(name, value);
+  }
+  Ok(
+    builder
+      .body(Body::from(body))
+      .unwrap_or_else(|_| Response::new(Body::empty())),
+  )
 }
 
 fn rewrite_target(host: &str, path: &str, method: &Method) -> Option<&'static str> {
@@ -417,7 +491,12 @@ fn split_authority(authority: &str) -> Result<(String, u16)> {
   let (host, port) = authority
     .rsplit_once(':')
     .with_context(|| format!("invalid CONNECT authority '{authority}'"))?;
-  Ok((host.to_ascii_lowercase(), port.parse().with_context(|| format!("invalid CONNECT port in '{authority}'"))?))
+  Ok((
+    host.to_ascii_lowercase(),
+    port
+      .parse()
+      .with_context(|| format!("invalid CONNECT port in '{authority}'"))?,
+  ))
 }
 
 fn hexify(bytes: &[u8]) -> String {

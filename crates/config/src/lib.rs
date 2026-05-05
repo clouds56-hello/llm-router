@@ -31,7 +31,26 @@ pub struct Config {
   #[serde(default)]
   pub logging: LoggingConfig,
   #[serde(default)]
+  pub model_families: Vec<ModelFamily>,
+  #[serde(default)]
   pub accounts: Vec<AccountConfig>,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RouteMode {
+  Passthrough,
+  Exact,
+  #[default]
+  Route,
+  Fuzzy,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ModelFamily {
+  pub name: String,
+  #[serde(default)]
+  pub members: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -48,6 +67,8 @@ pub struct ServerConfig {
   pub host: String,
   #[serde(default = "default_port")]
   pub port: u16,
+  #[serde(default)]
+  pub route_mode: RouteMode,
 }
 
 impl Default for ServerConfig {
@@ -55,6 +76,7 @@ impl Default for ServerConfig {
     Self {
       host: default_host(),
       port: default_port(),
+      route_mode: RouteMode::default(),
     }
   }
 }
@@ -324,6 +346,7 @@ impl Config {
   pub fn validate(&self) -> Result<()> {
     self.proxy.validate()?;
     self.proxy_mode.validate()?;
+    validate_model_families(&self.model_families)?;
     for a in &self.accounts {
       validate_account_common(a)?;
     }
@@ -367,6 +390,10 @@ impl Config {
       section: "[proxy_mode]",
       source: Box::new(e),
     })?;
+    validate_model_families(&cfg.model_families).map_err(|e| Error::EditValidateSection {
+      section: "[[model_families]]",
+      source: Box::new(e),
+    })?;
     for a in &cfg.accounts {
       validate_account_common(a).map_err(|e| Error::EditValidateSection {
         section: "[[accounts]]",
@@ -408,6 +435,33 @@ fn validate_account_common(account: &AccountConfig) -> Result<()> {
   for name in account.headers.keys() {
     if !is_token(name) {
       return error::InvalidHeaderNameSnafu { name: name.clone() }.fail();
+    }
+  }
+  Ok(())
+}
+
+fn validate_model_families(families: &[ModelFamily]) -> Result<()> {
+  for family in families {
+    if family.name.trim().is_empty() {
+      return error::InvalidAccountSnafu {
+        id: String::from("model_families"),
+        message: String::from("model family name must be non-empty"),
+      }
+      .fail();
+    }
+    if family.members.is_empty() {
+      return error::InvalidAccountSnafu {
+        id: family.name.clone(),
+        message: String::from("model family must have at least one member"),
+      }
+      .fail();
+    }
+    if family.members.iter().any(|member| member.trim().is_empty()) {
+      return error::InvalidAccountSnafu {
+        id: family.name.clone(),
+        message: String::from("model family members must be non-empty"),
+      }
+      .fail();
     }
   }
   Ok(())

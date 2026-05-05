@@ -17,6 +17,7 @@ use super::AppState;
 use crate::db::OutboundSnapshot;
 use crate::pool::{AccountHandle, EndpointAcquire};
 use crate::provider::{new_outbound_capture, Endpoint, OutboundCapture};
+use crate::route::RouteResolution;
 use axum::http::StatusCode;
 use serde_json::Value;
 use std::future::Future;
@@ -46,7 +47,7 @@ pub(crate) struct DispatchOk {
 pub(crate) async fn dispatch<F, Fut>(
   state: &AppState,
   session_id: Option<&str>,
-  model: &str,
+  route: &RouteResolution,
   endpoint: Endpoint,
   body: Arc<Value>,
   send: F,
@@ -58,22 +59,23 @@ where
   let mut last_err: Option<(StatusCode, String)> = None;
 
   for attempt in 0..=MAX_RETRIES {
-    let (acct, upstream_endpoint) = match state
-      .pool
-      .acquire_for_session_convertible(session_id, Some(model), endpoint)
-    {
+    let resolved_model = &route.upstream_model;
+    let (acct, upstream_endpoint) = match state.pool.acquire_for_route(session_id, route, endpoint) {
       EndpointAcquire::Account { acct, endpoint } => (acct, endpoint),
       EndpointAcquire::SessionExpired => {
         let id = session_id.unwrap_or_default();
-        warn!(%endpoint, %model, session_id = %id, attempt, "session expired");
+        warn!(%endpoint, model = %route.requested_model, session_id = %id, attempt, "session expired");
         return Err(ApiError::session_expired(id));
       }
       EndpointAcquire::None => {
         // No account in the pool advertises this endpoint at all — this
         // is a configuration / capability mismatch, not a transient
         // failure, so don't retry.
-        warn!(%endpoint, %model, attempt, "no account supports endpoint/model");
-        return Err(ApiError::not_implemented(endpoint.to_string(), model.to_string()));
+        warn!(%endpoint, model = %route.requested_model, attempt, "no account supports endpoint/model");
+        return Err(ApiError::not_implemented(
+          endpoint.to_string(),
+          route.requested_model.clone(),
+        ));
       }
     };
     let account_id = acct.id();
@@ -86,15 +88,17 @@ where
       provider = %acct.provider.info().id,
       %endpoint,
       upstream_endpoint = %upstream_endpoint,
-      %model,
+      model = %route.requested_model,
+      upstream_model = %resolved_model,
       status = tracing::field::Empty,
     );
 
     let capture = new_outbound_capture();
+    let routed_body = rewrite_model(body.as_ref(), resolved_model);
     let upstream_body = if upstream_endpoint == endpoint {
-      body.clone()
+      Arc::new(routed_body)
     } else {
-      match crate::convert::convert_request(endpoint, upstream_endpoint, &body) {
+      match crate::convert::convert_request(endpoint, upstream_endpoint, &routed_body) {
         Ok(v) => Arc::new(v),
         Err(e) => return Err(ApiError::bad_gateway(format!("request conversion failed: {e}"))),
       }
@@ -149,6 +153,14 @@ where
 
   let (status, msg) = last_err.unwrap_or((StatusCode::BAD_GATEWAY, "all attempts failed".into()));
   Err(ApiError::upstream(status, msg))
+}
+
+fn rewrite_model(body: &Value, model: &str) -> Value {
+  let mut body = body.clone();
+  if let Some(obj) = body.as_object_mut() {
+    obj.insert("model".into(), Value::String(model.to_string()));
+  }
+  body
 }
 
 #[cfg(test)]
@@ -209,7 +221,12 @@ mod tests {
     let result = dispatch(
       &state,
       None,
-      "",
+      &crate::route::RouteResolution {
+        mode: llm_config::RouteMode::Route,
+        requested_model: "".into(),
+        upstream_model: "".into(),
+        selector: crate::route::RouteSelector::Model,
+      },
       Endpoint::ChatCompletions,
       Arc::new(serde_json::json!({ "messages": [] })),
       {

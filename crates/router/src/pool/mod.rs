@@ -5,6 +5,7 @@
 pub mod affinity;
 
 use crate::pool::affinity::{Affinity, Lookup};
+use crate::route::{RouteResolution, RouteSelector};
 use arc_swap::ArcSwap;
 use llm_config::Config;
 use llm_core::account::AccountConfig;
@@ -244,6 +245,39 @@ impl AccountPool {
     }
   }
 
+  pub fn acquire_for_route(
+    &self,
+    session_id: Option<&str>,
+    route: &RouteResolution,
+    requested: Endpoint,
+  ) -> EndpointAcquire {
+    if let Some(id) = session_id {
+      match self.affinity.lookup(id) {
+        Lookup::Hit(account_id) => {
+          if let Some(acct) = self.account_by_id(&account_id) {
+            if acct.is_healthy() {
+              if let Some(endpoint) = self.account_matching_route_endpoint(&acct, route, requested) {
+                return EndpointAcquire::Account { acct, endpoint };
+              }
+            }
+          }
+        }
+        Lookup::Expired => return EndpointAcquire::SessionExpired,
+        Lookup::Unknown => {}
+      }
+    }
+
+    match self.acquire_from_route(route, requested) {
+      Some((acct, endpoint)) => {
+        if let Some(id) = session_id {
+          self.record_session(id, &acct.id());
+        }
+        EndpointAcquire::Account { acct, endpoint }
+      }
+      None => EndpointAcquire::None,
+    }
+  }
+
   pub fn record_session(&self, session_id: &str, account_id: &str) {
     self.affinity.record(session_id, account_id);
   }
@@ -334,6 +368,100 @@ impl AccountPool {
     fallback_order(requested)
       .into_iter()
       .find(|endpoint| self.account_matches(acct, model, *endpoint))
+  }
+
+  fn account_matching_route_endpoint(
+    &self,
+    acct: &AccountHandle,
+    route: &RouteResolution,
+    requested: Endpoint,
+  ) -> Option<Endpoint> {
+    fallback_order(requested)
+      .into_iter()
+      .find(|endpoint| self.account_matches_route(acct, route, *endpoint))
+  }
+
+  fn account_matches_route(&self, acct: &AccountHandle, route: &RouteResolution, endpoint: Endpoint) -> bool {
+    match &route.selector {
+      RouteSelector::Any => acct.provider.supports(&route.upstream_model, endpoint),
+      RouteSelector::Provider(provider) => {
+        acct.provider.info().id == *provider && self.account_matches(acct, Some(&route.upstream_model), endpoint)
+      }
+      RouteSelector::Model => self.account_matches(acct, Some(&route.upstream_model), endpoint),
+      RouteSelector::Fuzzy { candidates } => candidates
+        .iter()
+        .any(|candidate| self.account_matches(acct, Some(candidate), endpoint)),
+    }
+  }
+
+  fn acquire_from_route(&self, route: &RouteResolution, requested: Endpoint) -> Option<(Arc<AccountHandle>, Endpoint)> {
+    match &route.selector {
+      RouteSelector::Any => self.acquire_any_convertible(requested),
+      RouteSelector::Provider(provider) => {
+        self.acquire_provider_convertible(provider, &route.upstream_model, requested)
+      }
+      RouteSelector::Model => self.acquire_from_buckets_convertible(Some(&route.upstream_model), requested),
+      RouteSelector::Fuzzy { candidates } => {
+        for candidate in candidates {
+          if let Some((acct, endpoint)) = self.acquire_from_buckets_convertible(Some(candidate), requested) {
+            return Some((acct, endpoint));
+          }
+        }
+        None
+      }
+    }
+  }
+
+  fn acquire_any_convertible(&self, requested: Endpoint) -> Option<(Arc<AccountHandle>, Endpoint)> {
+    for endpoint in fallback_order(requested) {
+      for bucket in self.buckets.values() {
+        if bucket.provider.supports("", endpoint) {
+          if let Some(acct) = bucket.pick_healthy() {
+            return Some((acct, endpoint));
+          }
+        }
+      }
+
+      let mut best: Option<Arc<AccountHandle>> = None;
+      let mut best_t: Option<Instant> = None;
+      for bucket in self.buckets.values() {
+        if bucket.provider.supports("", endpoint) {
+          if let Some((acct, t)) = bucket.pick_earliest_cooldown() {
+            if best.is_none() || t < best_t {
+              best = Some(acct);
+              best_t = t;
+            }
+          }
+        }
+      }
+      if let Some(acct) = best {
+        return Some((acct, endpoint));
+      }
+    }
+    None
+  }
+
+  fn acquire_provider_convertible(
+    &self,
+    provider: &str,
+    model: &str,
+    requested: Endpoint,
+  ) -> Option<(Arc<AccountHandle>, Endpoint)> {
+    for endpoint in fallback_order(requested) {
+      let Some(bucket) = self.buckets.get(provider) else {
+        return None;
+      };
+      if !bucket.matches(Some(model), endpoint) {
+        continue;
+      }
+      if let Some(acct) = bucket.pick_healthy() {
+        return Some((acct, endpoint));
+      }
+      if let Some((acct, _)) = bucket.pick_earliest_cooldown() {
+        return Some((acct, endpoint));
+      }
+    }
+    None
   }
 }
 

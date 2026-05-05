@@ -36,10 +36,7 @@ pub fn build_db(cfg: &Config) -> Result<Option<Arc<DbStore>>> {
   })?)))
 }
 
-pub fn build_state(
-  cfg: &Config,
-  db: &Option<Arc<DbStore>>,
-) -> Result<llm_router::server::AppState> {
+pub fn build_state(cfg: &Config, db: &Option<Arc<DbStore>>) -> Result<llm_router::server::AppState> {
   llm_router::server::build_state(cfg, db.clone().map(|db| db as Arc<dyn llm_core::db::DbStore>))
 }
 

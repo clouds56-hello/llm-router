@@ -7,6 +7,7 @@ pub mod models;
 pub mod responses;
 
 use crate::pool::AccountPool;
+use crate::route::RouteResolver;
 use anyhow::Result;
 use axum::http::{HeaderMap, HeaderName, Request, Response};
 use axum::middleware::{self, Next};
@@ -24,6 +25,7 @@ use tracing::{Level, Span};
 #[derive(Clone)]
 pub struct AppState {
   pub pool: Arc<AccountPool>,
+  pub route: Arc<RouteResolver>,
   pub http: reqwest::Client,
   pub db: Option<Arc<dyn DbStore>>,
 }
@@ -170,8 +172,9 @@ async fn health() -> &'static str {
 pub fn build_state(cfg: &Config, db: Option<Arc<dyn DbStore>>) -> Result<AppState> {
   cfg.validate()?;
   let pool = AccountPool::from_config_with(cfg, crate::registry::build_for_account)?;
+  let route = Arc::new(RouteResolver::new(cfg.server.route_mode, &cfg.model_families));
   let http = llm_core::util::http::build_client(&cfg.proxy.to_http_options())?;
-  Ok(AppState { pool, http, db })
+  Ok(AppState { pool, route, http, db })
 }
 
 #[cfg(test)]

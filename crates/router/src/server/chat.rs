@@ -9,12 +9,14 @@ use super::error::ApiError;
 use super::forward::{buffered_response, stream_response};
 use super::{first_header, AppState, PROJECT_ID_HEADERS, REQUEST_ID_HEADERS, SESSION_ID_HEADERS};
 use crate::provider::{Endpoint, RequestCtx};
+use crate::route::RouteResolver;
 use crate::util::initiator::classify_initiator;
 use crate::util::redact::BehaveAs;
 use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::response::Response;
 use axum::Json;
+use llm_config::RouteMode;
 use serde_json::Value;
 use std::sync::Arc;
 use std::time::Instant;
@@ -42,6 +44,16 @@ pub async fn chat_completions(
     .and_then(|v| v.as_str())
     .unwrap_or("unknown")
     .to_string();
+  let route = s
+    .route
+    .resolve(
+      &model,
+      inbound.get(RouteResolver::mode_header()).and_then(|v| v.to_str().ok()),
+    )
+    .map_err(|e| ApiError::bad_request(e.to_string()))?;
+  if route.mode == RouteMode::Passthrough {
+    return Err(ApiError::bad_request("passthrough mode only applies in proxy mode"));
+  }
   let span = tracing::Span::current();
   span.record("model", model.as_str());
   span.record("stream", stream);
@@ -97,7 +109,7 @@ pub async fn chat_completions(
     dispatch(
       &s,
       session_id.as_deref(),
-      &model,
+      &route,
       Endpoint::ChatCompletions,
       body.clone(),
       move |acct, upstream_endpoint, upstream_body, capture| {
