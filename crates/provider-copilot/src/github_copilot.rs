@@ -8,6 +8,7 @@ use crate::util::secret::Secret;
 use async_trait::async_trait;
 use bytes::Bytes;
 use llm_core::account::AccountConfig;
+use llm_core::pipeline::{InputTransformer, RequestMeta};
 use parking_lot::RwLock;
 use reqwest::header::HeaderMap;
 use reqwest::Method;
@@ -172,6 +173,12 @@ impl CopilotProvider {
   }
 }
 
+impl InputTransformer for CopilotProvider {
+  fn transform_input(&self, _meta: &RequestMeta, body: Value) -> Result<Value> {
+    Ok(body)
+  }
+}
+
 #[async_trait]
 impl Provider for CopilotProvider {
   fn id(&self) -> &str {
@@ -180,6 +187,10 @@ impl Provider for CopilotProvider {
 
   fn info(&self) -> &ProviderInfo {
     &self.info
+  }
+
+  fn input_transformer(&self) -> Option<&dyn InputTransformer> {
+    Some(self)
   }
 
   /// Capability matrix for Copilot's three upstream surfaces.

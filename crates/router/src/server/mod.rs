@@ -1,9 +1,9 @@
 pub mod chat;
-pub mod dispatch;
 pub mod error;
 pub mod forward;
 pub mod messages;
 pub mod models;
+pub mod pipeline;
 pub mod responses;
 
 use crate::pool::AccountPool;

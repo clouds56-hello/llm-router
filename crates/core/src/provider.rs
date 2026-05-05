@@ -180,6 +180,10 @@ pub trait Provider: Send + Sync {
   fn id(&self) -> &str;
   fn info(&self) -> &ProviderInfo;
 
+  fn input_transformer(&self) -> Option<&dyn crate::pipeline::InputTransformer> {
+    None
+  }
+
   fn model_info(&self, model: &str) -> Option<&ModelInfo> {
     self.info().default_models.iter().find(|m| m.id == model)
   }

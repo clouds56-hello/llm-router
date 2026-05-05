@@ -21,6 +21,7 @@ use crate::util::secret::Secret;
 use async_trait::async_trait;
 use bytes::Bytes;
 use llm_core::account::AccountConfig;
+use llm_core::pipeline::{InputTransformer, RequestMeta};
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::Method;
 use serde_json::Value;
@@ -116,6 +117,17 @@ impl ZaiProvider {
   }
 }
 
+impl InputTransformer for ZaiProvider {
+  fn transform_input(&self, _meta: &RequestMeta, body: Value) -> Result<Value> {
+    let model_id = body.get("model").and_then(|v| v.as_str()).unwrap_or("");
+    let reasoning = self
+      .model_info(model_id)
+      .map(|m| m.capabilities.reasoning)
+      .unwrap_or_else(|| model_id.starts_with("glm-"));
+    Ok(transform::shape_request(&body, reasoning))
+  }
+}
+
 pub fn default_base_url(_provider: &str) -> &'static str {
   DEFAULT_BASE_URL
 }
@@ -128,6 +140,10 @@ impl Provider for ZaiProvider {
 
   fn info(&self) -> &ProviderInfo {
     &self.info
+  }
+
+  fn input_transformer(&self) -> Option<&dyn InputTransformer> {
+    Some(self)
   }
 
   fn model_info(&self, model: &str) -> Option<&ModelInfo> {
