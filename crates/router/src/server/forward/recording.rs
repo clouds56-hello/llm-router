@@ -5,152 +5,248 @@ use serde_json::Value;
 use std::time::Instant;
 use uuid::Uuid;
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn build_call_record(
-  max_body: usize,
-  account_id: &str,
-  provider_id: &str,
-  endpoint: Endpoint,
-  model: &str,
-  initiator: &str,
-  session_id: Option<&str>,
-  request_id: Option<&str>,
-  request_error: Option<&str>,
-  project_id: Option<&str>,
-  req_headers: &reqwest::header::HeaderMap,
-  req_body: &Value,
-  resp_headers: Option<&reqwest::header::HeaderMap>,
-  resp_body: Option<&bytes::Bytes>,
-  inbound_resp_headers: &reqwest::header::HeaderMap,
-  outbound: Option<OutboundSnapshot>,
-  pt: Option<u64>,
-  ct: Option<u64>,
-  started: Instant,
-  status: u16,
-  stream: bool,
-) -> CallRecord {
-  let req_body_bytes = serde_json::to_vec(req_body).unwrap_or_default();
-  build_call_record_with_snapshots(
-    max_body,
-    account_id,
-    provider_id,
-    endpoint.as_str(),
-    model,
-    initiator,
-    session_id,
-    request_id,
-    request_error,
-    project_id,
-    &req_body_bytes,
-    Some(endpoint),
-    Some(HttpSnapshot {
-      method: None,
-      url: None,
-      status: None,
-      headers: req_headers.clone(),
-      body: Bytes::from(req_body_bytes.clone()),
-    }),
-    outbound,
-    resp_headers.map(|headers| HttpSnapshot {
-      method: None,
-      url: None,
-      status: Some(status),
-      headers: headers.clone(),
-      body: resp_body.cloned().unwrap_or_default(),
-    }),
-    HttpSnapshot {
-      method: None,
-      url: None,
-      status: Some(status),
-      headers: inbound_resp_headers.clone(),
-      body: resp_body.cloned().unwrap_or_default(),
-    },
-    (pt, ct),
-    started,
-    status,
-    stream,
-  )
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(super) fn build_call_record_with_snapshots(
+pub(super) struct CallRecordBuilder {
   max: usize,
-  account_id: &str,
-  provider_id: &str,
-  endpoint: &str,
-  model: &str,
-  initiator: &str,
-  session_id: Option<&str>,
-  request_id: Option<&str>,
-  request_error: Option<&str>,
-  project_id: Option<&str>,
-  req_body: &[u8],
+  account_id: String,
+  provider_id: String,
+  endpoint: String,
+  model: String,
+  initiator: String,
+  session_id: Option<String>,
+  request_id: Option<String>,
+  request_error: Option<String>,
+  project_id: Option<String>,
+  req_body: Bytes,
   message_endpoint: Option<Endpoint>,
   inbound_req: Option<HttpSnapshot>,
   outbound_req: Option<OutboundSnapshot>,
   outbound_resp: Option<HttpSnapshot>,
   inbound_resp: HttpSnapshot,
-  usage: (Option<u64>, Option<u64>),
+  prompt_tokens: Option<u64>,
+  completion_tokens: Option<u64>,
   started: Instant,
   status: u16,
   stream: bool,
-) -> CallRecord {
-  let latency_ms = started.elapsed().as_millis() as u64;
-  let req_body_json = serde_json::from_slice::<Value>(req_body).unwrap_or(Value::Null);
-  let mut messages = message_endpoint
-    .map(|endpoint| extract_request_messages(&req_body_json, endpoint, max))
-    .unwrap_or_default();
-  if !inbound_resp.body.is_empty() && message_endpoint.is_some() {
-    messages.push(MessageRecord {
-      role: "assistant".into(),
-      status: Some(status),
-      parts: vec![PartRecord {
-        part_type: "raw".into(),
-        content: clip_body(&inbound_resp.body, max),
-      }],
-    });
+}
+
+impl CallRecordBuilder {
+  pub(crate) fn for_endpoint(
+    max: usize,
+    account_id: &str,
+    provider_id: &str,
+    endpoint: Endpoint,
+    model: &str,
+    initiator: &str,
+    inbound_resp: HttpSnapshot,
+    started: Instant,
+    status: u16,
+    stream: bool,
+  ) -> Self {
+    Self::new(
+      max,
+      account_id,
+      provider_id,
+      endpoint.as_str(),
+      Some(endpoint),
+      model,
+      initiator,
+      inbound_resp,
+      started,
+      status,
+      stream,
+    )
   }
-  let (effective_id, source) = match session_id {
-    Some(id) => (id.to_string(), SessionSource::Header),
-    None => (Uuid::new_v4().to_string(), SessionSource::Auto),
-  };
-  CallRecord {
-    ts: time::OffsetDateTime::now_utc().unix_timestamp(),
-    session_id: effective_id,
-    session_source: source,
-    request_id: request_id.map(str::to_string),
-    request_error: request_error.map(str::to_string),
-    project_id: project_id.map(str::to_string),
-    endpoint: endpoint.to_string(),
-    account_id: account_id.to_string(),
-    provider_id: provider_id.to_string(),
-    model: model.to_string(),
-    initiator: initiator.to_string(),
-    status,
-    stream,
-    latency_ms,
-    prompt_tokens: usage.0,
-    completion_tokens: usage.1,
-    inbound_req: inbound_req
-      .map(|mut snap| {
-        snap.body = clip_body(snap.body.as_ref(), max);
+
+  pub(crate) fn for_path(
+    max: usize,
+    account_id: &str,
+    provider_id: &str,
+    endpoint: &str,
+    message_endpoint: Option<Endpoint>,
+    model: &str,
+    initiator: &str,
+    inbound_resp: HttpSnapshot,
+    started: Instant,
+    status: u16,
+    stream: bool,
+  ) -> Self {
+    Self::new(
+      max,
+      account_id,
+      provider_id,
+      endpoint,
+      message_endpoint,
+      model,
+      initiator,
+      inbound_resp,
+      started,
+      status,
+      stream,
+    )
+  }
+
+  fn new(
+    max: usize,
+    account_id: &str,
+    provider_id: &str,
+    endpoint: &str,
+    message_endpoint: Option<Endpoint>,
+    model: &str,
+    initiator: &str,
+    inbound_resp: HttpSnapshot,
+    started: Instant,
+    status: u16,
+    stream: bool,
+  ) -> Self {
+    Self {
+      max,
+      account_id: account_id.to_string(),
+      provider_id: provider_id.to_string(),
+      endpoint: endpoint.to_string(),
+      model: model.to_string(),
+      initiator: initiator.to_string(),
+      session_id: None,
+      request_id: None,
+      request_error: None,
+      project_id: None,
+      req_body: Bytes::new(),
+      message_endpoint,
+      inbound_req: None,
+      outbound_req: None,
+      outbound_resp: None,
+      inbound_resp,
+      prompt_tokens: None,
+      completion_tokens: None,
+      started,
+      status,
+      stream,
+    }
+  }
+
+  pub(crate) fn with_ids(
+    mut self,
+    session_id: Option<&str>,
+    request_id: Option<&str>,
+    request_error: Option<&str>,
+    project_id: Option<&str>,
+  ) -> Self {
+    self.session_id = session_id.map(str::to_string);
+    self.request_id = request_id.map(str::to_string);
+    self.request_error = request_error.map(str::to_string);
+    self.project_id = project_id.map(str::to_string);
+    self
+  }
+
+  pub(crate) fn with_request_json(mut self, headers: &reqwest::header::HeaderMap, body: &Value) -> Self {
+    let req_body = serde_json::to_vec(body).unwrap_or_default();
+    self.req_body = Bytes::from(req_body.clone());
+    self.inbound_req = Some(HttpSnapshot {
+      method: None,
+      url: None,
+      status: None,
+      headers: headers.clone(),
+      body: Bytes::from(req_body),
+    });
+    self
+  }
+
+  pub(crate) fn with_request_snapshot(mut self, req_body: impl Into<Bytes>, inbound_req: Option<HttpSnapshot>) -> Self {
+    self.req_body = req_body.into();
+    self.inbound_req = inbound_req;
+    self
+  }
+
+  pub(crate) fn with_outbound_request(mut self, outbound_req: Option<OutboundSnapshot>) -> Self {
+    self.outbound_req = outbound_req;
+    self
+  }
+
+  pub(crate) fn with_outbound_response(
+    mut self,
+    headers: Option<&reqwest::header::HeaderMap>,
+    body: Option<&Bytes>,
+  ) -> Self {
+    self.outbound_resp = headers.map(|headers| HttpSnapshot {
+      method: None,
+      url: None,
+      status: Some(self.status),
+      headers: headers.clone(),
+      body: body.cloned().unwrap_or_default(),
+    });
+    self
+  }
+
+  pub(crate) fn with_response_snapshot(mut self, snapshot: Option<HttpSnapshot>) -> Self {
+    self.outbound_resp = snapshot;
+    self
+  }
+
+  pub(crate) fn with_usage(mut self, prompt_tokens: Option<u64>, completion_tokens: Option<u64>) -> Self {
+    self.prompt_tokens = prompt_tokens;
+    self.completion_tokens = completion_tokens;
+    self
+  }
+
+  pub(crate) fn build(self) -> CallRecord {
+    let latency_ms = self.started.elapsed().as_millis() as u64;
+    let req_body_json = serde_json::from_slice::<Value>(&self.req_body).unwrap_or(Value::Null);
+    let mut messages = self
+      .message_endpoint
+      .map(|endpoint| extract_request_messages(&req_body_json, endpoint, self.max))
+      .unwrap_or_default();
+    if !self.inbound_resp.body.is_empty() && self.message_endpoint.is_some() {
+      messages.push(MessageRecord {
+        role: "assistant".into(),
+        status: Some(self.status),
+        parts: vec![PartRecord {
+          part_type: "raw".into(),
+          content: clip_body(&self.inbound_resp.body, self.max),
+        }],
+      });
+    }
+    let (effective_id, source) = match self.session_id {
+      Some(id) => (id, SessionSource::Header),
+      None => (Uuid::new_v4().to_string(), SessionSource::Auto),
+    };
+    CallRecord {
+      ts: time::OffsetDateTime::now_utc().unix_timestamp(),
+      session_id: effective_id,
+      session_source: source,
+      request_id: self.request_id,
+      request_error: self.request_error,
+      project_id: self.project_id,
+      endpoint: self.endpoint,
+      account_id: self.account_id,
+      provider_id: self.provider_id,
+      model: self.model,
+      initiator: self.initiator,
+      status: self.status,
+      stream: self.stream,
+      latency_ms,
+      prompt_tokens: self.prompt_tokens,
+      completion_tokens: self.completion_tokens,
+      inbound_req: self
+        .inbound_req
+        .map(|mut snap| {
+          snap.body = clip_body(snap.body.as_ref(), self.max);
+          snap
+        })
+        .unwrap_or_default(),
+      outbound_req: self.outbound_req.map(|mut snap| {
+        snap.body = clip_body(snap.body.as_ref(), self.max);
         snap
-      })
-      .unwrap_or_default(),
-    outbound_req: outbound_req.map(|mut snap| {
-      snap.body = clip_body(snap.body.as_ref(), max);
-      snap
-    }),
-    outbound_resp: outbound_resp.map(|mut snap| {
-      snap.body = clip_body(snap.body.as_ref(), max);
-      snap
-    }),
-    inbound_resp: {
-      let mut snap = inbound_resp;
-      snap.body = clip_body(snap.body.as_ref(), max);
-      snap
-    },
-    messages,
+      }),
+      outbound_resp: self.outbound_resp.map(|mut snap| {
+        snap.body = clip_body(snap.body.as_ref(), self.max);
+        snap
+      }),
+      inbound_resp: {
+        let mut snap = self.inbound_resp;
+        snap.body = clip_body(snap.body.as_ref(), self.max);
+        snap
+      },
+      messages,
+    }
   }
 }
 

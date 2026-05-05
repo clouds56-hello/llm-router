@@ -11,25 +11,27 @@ mod stream;
 mod usage;
 
 pub(crate) use buffered::buffered_response;
-pub(crate) use passthrough::record_passthrough_call;
+pub(crate) use passthrough::{is_sse_response, passthrough_streaming_response, record_passthrough_call};
 pub(crate) use stream::stream_response;
 
 #[cfg(test)]
 mod tests {
-  use super::passthrough::record_passthrough_call;
-  use super::recording::{build_call_record, extract_request_messages};
+  use super::passthrough::{is_sse_response, passthrough_streaming_response, record_passthrough_call};
+  use super::recording::{extract_request_messages, CallRecordBuilder};
   use super::usage::parse_usage_any_value;
   use crate::config::{Account as AccountCfg, AuthType, Config};
   use crate::db::{CallRecord, SessionSource};
   use crate::provider::Endpoint;
   use crate::server::build_state;
   use crate::util::secret::Secret;
+  use axum::body::to_bytes;
   use axum::http::{HeaderMap, Method};
   use bytes::Bytes;
   use llm_core::db::DbStore;
   use serde_json::json;
   use std::sync::{Arc, Mutex};
   use std::time::Instant;
+  use tokio::io::{AsyncReadExt, AsyncWriteExt};
   use uuid::Uuid;
 
   #[derive(Default)]
@@ -75,6 +77,17 @@ mod tests {
         "response": { "usage": { "input_tokens": 3, "output_tokens": 4 }}
     });
     assert_eq!(parse_usage_any_value(&v), (Some(3), Some(4)));
+  }
+
+  #[test]
+  fn detects_sse_content_type_with_charset() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+      axum::http::header::CONTENT_TYPE,
+      "text/event-stream; charset=utf-8".parse().unwrap(),
+    );
+
+    assert!(is_sse_response(&headers));
   }
 
   #[test]
@@ -126,29 +139,28 @@ mod tests {
     let db = Arc::new(FakeDb::default());
     let req_body = json!({ "model": "glm-4.6", "messages": [{ "role": "user", "content": "hi" }] });
     let resp_body = Bytes::from_static(br#"{"id":"r1"}"#);
-    let record = build_call_record(
+    let record = CallRecordBuilder::for_endpoint(
       db.body_max_bytes(),
       "acct",
       "zai-coding-plan",
       Endpoint::ChatCompletions,
       "glm-4.6",
       "user",
-      None,
-      None,
-      None,
-      None,
-      &HeaderMap::new(),
-      &req_body,
-      Some(&HeaderMap::new()),
-      Some(&resp_body),
-      &HeaderMap::new(),
-      None,
-      None,
-      None,
+      crate::db::HttpSnapshot {
+        method: None,
+        url: None,
+        status: Some(200),
+        headers: HeaderMap::new(),
+        body: resp_body.clone(),
+      },
       Instant::now(),
       200,
       false,
-    );
+    )
+    .with_ids(None, None, None, None)
+    .with_request_json(&HeaderMap::new(), &req_body)
+    .with_outbound_response(Some(&HeaderMap::new()), Some(&resp_body))
+    .build();
     assert_eq!(record.session_source, SessionSource::Auto);
     Uuid::parse_str(&record.session_id).unwrap();
     assert!(record
@@ -185,29 +197,32 @@ mod tests {
     let db = Arc::new(FakeDb::default());
     let req_body = json!({ "model": "glm-4.6", "messages": [] });
 
-    let record = build_call_record(
+    let record = CallRecordBuilder::for_endpoint(
       db.body_max_bytes(),
       "acct",
       "zai-coding-plan",
       Endpoint::ChatCompletions,
       "glm-4.6",
       "user",
+      crate::db::HttpSnapshot {
+        method: None,
+        url: None,
+        status: Some(200),
+        headers: HeaderMap::new(),
+        body: Bytes::new(),
+      },
+      Instant::now(),
+      200,
+      false,
+    )
+    .with_ids(
       Some("client-session"),
       Some("request-123"),
       Some("stream terminated before completion"),
       Some("project-456"),
-      &HeaderMap::new(),
-      &req_body,
-      None,
-      None,
-      &HeaderMap::new(),
-      None,
-      None,
-      None,
-      Instant::now(),
-      200,
-      false,
-    );
+    )
+    .with_request_json(&HeaderMap::new(), &req_body)
+    .build();
 
     assert_eq!(record.session_id, "client-session");
     assert_eq!(record.session_source, SessionSource::Header);
@@ -288,5 +303,79 @@ mod tests {
       records[0].outbound_req.as_ref().and_then(|s| s.url.as_deref()),
       Some("https://api.openai.com/v1/chat/completions")
     );
+  }
+
+  #[tokio::test]
+  async fn passthrough_streaming_response_records_sse_usage() {
+    let mut cfg = Config::default();
+    cfg.accounts.push(AccountCfg {
+      id: "acct".into(),
+      provider: "zai-coding-plan".into(),
+      enabled: true,
+      tags: Vec::new(),
+      label: None,
+      base_url: None,
+      headers: Default::default(),
+      auth_type: Some(AuthType::Bearer),
+      username: None,
+      api_key: Some(Secret::new("sk-test".into())),
+      api_key_expires_at: None,
+      access_token: None,
+      access_token_expires_at: None,
+      id_token: None,
+      refresh_token: None,
+      extra: Default::default(),
+      refresh_url: None,
+      last_refresh: None,
+      settings: toml::Table::new(),
+    });
+    let db = Arc::new(FakeDb::default());
+    let state = build_state(&cfg, Some(db.clone())).unwrap();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+      let (mut stream, _) = listener.accept().await.unwrap();
+      let mut buf = vec![0_u8; 8192];
+      let _ = stream.read(&mut buf).await.unwrap();
+      stream
+        .write_all(
+          b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\n\r\ndata: {\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":3}}\n\ndata: [DONE]\n\n",
+        )
+        .await
+        .unwrap();
+    });
+
+    let response = reqwest::Client::new()
+      .get(format!("http://{addr}/stream"))
+      .send()
+      .await
+      .unwrap();
+    assert!(is_sse_response(response.headers()));
+
+    let streamed = passthrough_streaming_response(
+      state,
+      "api.openai.com".to_string(),
+      Method::POST,
+      "/v1/chat/completions".to_string(),
+      HeaderMap::new(),
+      Bytes::from_static(br#"{"model":"gpt-4.1","messages":[{"role":"user","content":"hi"}],"stream":true}"#),
+      HeaderMap::new(),
+      response,
+      Instant::now(),
+    );
+    let streamed_body = to_bytes(streamed.into_body(), usize::MAX).await.unwrap();
+    server.await.unwrap();
+
+    let body_text = std::str::from_utf8(&streamed_body).unwrap();
+    assert!(body_text.contains("prompt_tokens"));
+    let records = db.records.lock().unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].prompt_tokens, Some(2));
+    assert_eq!(records[0].completion_tokens, Some(3));
+    assert_eq!(records[0].request_error, None);
+    assert!(std::str::from_utf8(records[0].inbound_resp.body.as_ref())
+      .unwrap()
+      .contains("[DONE]"));
   }
 }

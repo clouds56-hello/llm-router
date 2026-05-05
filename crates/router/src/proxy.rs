@@ -1,5 +1,10 @@
 use crate::route::RouteResolver;
-use crate::server::{self, error::ApiError, forward::record_passthrough_call, AppState};
+use crate::server::{
+  self,
+  error::ApiError,
+  forward::{is_sse_response, passthrough_streaming_response, record_passthrough_call},
+  AppState,
+};
 use anyhow::{Context, Result};
 use axum::body::Body;
 use axum::http::{Method, Request, Response, Uri};
@@ -480,6 +485,19 @@ async fn proxy_passthrough(
   );
 
   let response = upstream.send().await.context("send passthrough upstream request")?;
+  if is_sse_response(response.headers()) {
+    return Ok(passthrough_streaming_response(
+      state.clone(),
+      host.to_string(),
+      parts.method,
+      path_and_query,
+      parts.headers,
+      request_body,
+      outbound_req_headers,
+      response,
+      started,
+    ));
+  }
   let status = response.status();
   let headers = response.headers().clone();
   let response_body = response.bytes().await.context("read passthrough upstream response")?;

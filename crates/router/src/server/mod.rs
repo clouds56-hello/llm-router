@@ -1,10 +1,8 @@
-pub mod chat;
+pub mod endpoints;
 pub mod error;
 pub mod forward;
-pub mod messages;
 pub mod models;
 pub mod pipeline;
-pub mod responses;
 
 use crate::pool::AccountPool;
 use crate::route::RouteResolver;
@@ -150,9 +148,9 @@ pub fn router(state: AppState) -> Router {
 
   Router::new()
     .route("/v1/models", get(models::list_models))
-    .route("/v1/chat/completions", post(chat::chat_completions))
-    .route("/v1/responses", post(responses::responses))
-    .route("/v1/messages", post(messages::messages))
+    .route("/v1/chat/completions", post(endpoints::chat_completions))
+    .route("/v1/responses", post(endpoints::responses))
+    .route("/v1/messages", post(endpoints::messages))
     .route("/healthz", get(health))
     .with_state(state)
     // Layers run outermost-first on request, innermost-first on response.

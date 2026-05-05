@@ -1,4 +1,4 @@
-use super::recording::build_call_record;
+use super::recording::CallRecordBuilder;
 use super::usage::parse_usage_any_json;
 use crate::db::CallRecord;
 use crate::db::OutboundSnapshot;
@@ -69,29 +69,35 @@ pub(crate) async fn buffered_response(
   };
 
   let (pt, ct) = parse_usage_any_json(&bytes);
-  let record = build_call_record(
+  let record = CallRecordBuilder::for_endpoint(
     s.db.as_ref().map(|db| db.body_max_bytes()).unwrap_or(0),
     &acct.id(),
     acct.provider.info().id.as_str(),
     endpoint,
     &model,
     &initiator,
+    crate::db::HttpSnapshot {
+      method: None,
+      url: None,
+      status: Some(status.as_u16()),
+      headers: headers.clone(),
+      body: bytes.clone(),
+    },
+    started,
+    status.as_u16(),
+    false,
+  )
+  .with_ids(
     session_id.as_deref(),
     request_id.as_deref(),
     request_error.as_deref(),
     project_id.as_deref(),
-    &req_headers,
-    &req_body,
-    Some(&resp_headers),
-    Some(&bytes),
-    &headers,
-    outbound,
-    pt,
-    ct,
-    started,
-    status.as_u16(),
-    false,
-  );
+  )
+  .with_request_json(&req_headers, &req_body)
+  .with_outbound_request(outbound)
+  .with_outbound_response(Some(&resp_headers), Some(&bytes))
+  .with_usage(pt, ct)
+  .build();
 
   let response = if let Some(error) = request_error {
     ApiError::bad_gateway(error).into_response()
