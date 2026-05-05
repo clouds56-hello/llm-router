@@ -1,6 +1,7 @@
 use crate::config::{Config, ProxyConfig};
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
+use llm_config::RouteMode;
 use std::net::SocketAddr;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
@@ -10,6 +11,10 @@ use std::process::Command;
 
 #[derive(Args, Debug)]
 pub struct ProxyArgs {
+  /// Route intercepted requests directly to the original upstream with the
+  /// client's own credentials.
+  #[arg(long, global = true)]
+  pub passthrough: bool,
   #[command(subcommand)]
   pub cmd: Option<ProxyCmd>,
 }
@@ -92,18 +97,22 @@ impl Default for StartArgs {
 }
 
 pub async fn run(cfg_path: Option<PathBuf>, args: ProxyArgs) -> Result<()> {
-  match args.cmd.unwrap_or(ProxyCmd::Start(StartArgs::default())) {
-    ProxyCmd::Start(args) => start(cfg_path, args).await,
+  let ProxyArgs { passthrough, cmd } = args;
+  match cmd.unwrap_or(ProxyCmd::Start(StartArgs::default())) {
+    ProxyCmd::Start(args) => start(cfg_path, args, passthrough).await,
     ProxyCmd::Env(args) => env(cfg_path, args).await,
     ProxyCmd::Shell(args) => shell(cfg_path, args).await,
     ProxyCmd::Ca(args) => ca(cfg_path, args).await,
   }
 }
 
-async fn start(cfg_path: Option<PathBuf>, args: StartArgs) -> Result<()> {
+async fn start(cfg_path: Option<PathBuf>, args: StartArgs, passthrough: bool) -> Result<()> {
   let (mut cfg, _) = Config::load(cfg_path.as_deref())?;
   if args.no_proxy {
     cfg.proxy = ProxyConfig::default();
+  }
+  if passthrough {
+    cfg.server.route_mode = RouteMode::Passthrough;
   }
 
   let host = args.host.unwrap_or_else(|| cfg.proxy_mode.host.clone());
@@ -130,6 +139,9 @@ async fn start(cfg_path: Option<PathBuf>, args: StartArgs) -> Result<()> {
   println!("llm-router proxy listening on http://{addr}");
   println!("CA: {} (sha256:{ca_fingerprint})", ca.cert_path().display());
   println!("Trust this CA, then run: eval \"$(llm-gateway proxy env)\"");
+  if passthrough {
+    println!("Route mode: passthrough");
+  }
   println!("Accounts: {n}");
 
   let options = llm_router::proxy::ProxyOptions {

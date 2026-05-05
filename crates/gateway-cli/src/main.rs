@@ -13,6 +13,11 @@ mod util;
 
 #[tokio::main]
 async fn main() -> ExitCode {
+  if let Err(e) = llm_router::install_rustls_crypto_provider() {
+    eprintln!("error: {e}");
+    return ExitCode::FAILURE;
+  }
+
   // The CLI installs its own subscriber once it has loaded config + decided
   // on a [`logging::RunMode`]. We do NOT call `logging::init_basic()` here
   // anymore: that races against the real subscriber.

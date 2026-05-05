@@ -11,8 +11,9 @@ use super::AppState;
 use crate::db::{CallRecord, HttpSnapshot, MessageRecord, OutboundSnapshot, PartRecord, SessionSource};
 use crate::pool::AccountHandle;
 use crate::provider::Endpoint;
+use crate::util::initiator::{classify_initiator, classify_initiator_responses};
 use axum::body::Body;
-use axum::http::{HeaderMap, HeaderValue};
+use axum::http::{HeaderMap, HeaderValue, Method};
 use axum::response::{IntoResponse, Response};
 use bytes::Bytes;
 use futures_util::Stream;
@@ -299,6 +300,103 @@ fn parse_usage_any_json(bytes: &[u8]) -> (Option<u64>, Option<u64>) {
 }
 
 #[allow(clippy::too_many_arguments)]
+pub(crate) fn record_passthrough_call(
+  s: &AppState,
+  host: &str,
+  method: &Method,
+  path_and_query: &str,
+  req_headers: &HeaderMap,
+  req_body: &Bytes,
+  outbound_req_headers: &HeaderMap,
+  resp_headers: &HeaderMap,
+  resp_body: &Bytes,
+  status: u16,
+  started: Instant,
+) {
+  let path = path_and_query.split('?').next().unwrap_or(path_and_query);
+  let logical_path = crate::proxy::rewrite_target(host, path, method).unwrap_or(path);
+  let endpoint = passthrough_endpoint(method, logical_path);
+  let req_body_json = serde_json::from_slice::<Value>(req_body).unwrap_or(Value::Null);
+  let model = req_body_json
+    .get("model")
+    .and_then(|v| v.as_str())
+    .unwrap_or("unknown")
+    .to_string();
+  let stream = req_body_json.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
+  let initiator = classify_passthrough_initiator(req_headers, endpoint, &req_body_json).to_string();
+
+  record_call_with_snapshots(
+    s,
+    "passthrough",
+    host,
+    endpoint.map(Endpoint::as_str).unwrap_or(logical_path),
+    &model,
+    &initiator,
+    super::first_header(req_headers, super::SESSION_ID_HEADERS),
+    super::first_header(req_headers, super::REQUEST_ID_HEADERS),
+    super::first_header(req_headers, super::PROJECT_ID_HEADERS),
+    req_body,
+    endpoint,
+    Some(HttpSnapshot {
+      method: Some(method.to_string()),
+      url: Some(format!("https://{host}{path_and_query}")),
+      status: None,
+      headers: req_headers.clone(),
+      body: req_body.clone(),
+    }),
+    Some(HttpSnapshot {
+      method: Some(method.to_string()),
+      url: Some(format!("https://{host}{path_and_query}")),
+      status: None,
+      headers: outbound_req_headers.clone(),
+      body: req_body.clone(),
+    }),
+    Some(HttpSnapshot {
+      method: None,
+      url: None,
+      status: Some(status),
+      headers: resp_headers.clone(),
+      body: resp_body.clone(),
+    }),
+    HttpSnapshot {
+      method: None,
+      url: None,
+      status: Some(status),
+      headers: resp_headers.clone(),
+      body: resp_body.clone(),
+    },
+    parse_usage_any_json(resp_body),
+    started,
+    status,
+    stream,
+  );
+}
+
+fn passthrough_endpoint(method: &Method, path: &str) -> Option<Endpoint> {
+  match (method, path) {
+    (&Method::POST, "/v1/chat/completions") => Some(Endpoint::ChatCompletions),
+    (&Method::POST, "/v1/responses") => Some(Endpoint::Responses),
+    (&Method::POST, "/v1/messages") => Some(Endpoint::Messages),
+    _ => None,
+  }
+}
+
+fn classify_passthrough_initiator(headers: &HeaderMap, endpoint: Option<Endpoint>, body: &Value) -> &'static str {
+  if let Some(value) = headers.get("x-initiator").and_then(|v| v.to_str().ok()) {
+    match value.trim().to_ascii_lowercase().as_str() {
+      "user" => return "user",
+      "agent" => return "agent",
+      _ => {}
+    }
+  }
+  match endpoint {
+    Some(Endpoint::Responses) => classify_initiator_responses(body),
+    Some(Endpoint::ChatCompletions | Endpoint::Messages) => classify_initiator(body),
+    None => "user",
+  }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn record_call(
   s: &AppState,
   account_id: &str,
@@ -321,19 +419,84 @@ fn record_call(
   status: u16,
   stream: bool,
 ) {
+  let req_body_bytes = serde_json::to_vec(req_body).unwrap_or_default();
+  record_call_with_snapshots(
+    s,
+    account_id,
+    provider_id,
+    endpoint.as_str(),
+    model,
+    initiator,
+    session_id,
+    request_id,
+    project_id,
+    &req_body_bytes,
+    Some(endpoint),
+    Some(HttpSnapshot {
+      method: None,
+      url: None,
+      status: None,
+      headers: req_headers.clone(),
+      body: Bytes::from(req_body_bytes.clone()),
+    }),
+    outbound,
+    resp_headers.map(|headers| HttpSnapshot {
+      method: None,
+      url: None,
+      status: Some(status),
+      headers: headers.clone(),
+      body: resp_body.cloned().unwrap_or_default(),
+    }),
+    HttpSnapshot {
+      method: None,
+      url: None,
+      status: Some(status),
+      headers: inbound_resp_headers.clone(),
+      body: resp_body.cloned().unwrap_or_default(),
+    },
+    (pt, ct),
+    started,
+    status,
+    stream,
+  );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn record_call_with_snapshots(
+  s: &AppState,
+  account_id: &str,
+  provider_id: &str,
+  endpoint: &str,
+  model: &str,
+  initiator: &str,
+  session_id: Option<&str>,
+  request_id: Option<&str>,
+  project_id: Option<&str>,
+  req_body: &[u8],
+  message_endpoint: Option<Endpoint>,
+  inbound_req: Option<HttpSnapshot>,
+  outbound_req: Option<OutboundSnapshot>,
+  outbound_resp: Option<HttpSnapshot>,
+  inbound_resp: HttpSnapshot,
+  usage: (Option<u64>, Option<u64>),
+  started: Instant,
+  status: u16,
+  stream: bool,
+) {
   let Some(db) = s.db.as_ref() else { return };
   let latency_ms = started.elapsed().as_millis() as u64;
   let max = db.body_max_bytes();
-  let req_body_bytes = serde_json::to_vec(req_body).unwrap_or_default();
-  let resp_body_bytes = resp_body.map(|b| b.to_vec()).unwrap_or_default();
-  let mut messages = extract_request_messages(req_body, endpoint, max);
-  if !resp_body_bytes.is_empty() {
+  let req_body_json = serde_json::from_slice::<Value>(req_body).unwrap_or(Value::Null);
+  let mut messages = message_endpoint
+    .map(|endpoint| extract_request_messages(&req_body_json, endpoint, max))
+    .unwrap_or_default();
+  if !inbound_resp.body.is_empty() && message_endpoint.is_some() {
     messages.push(MessageRecord {
       role: "assistant".into(),
       status: Some(status),
       parts: vec![PartRecord {
         part_type: "raw".into(),
-        content: clip_body(&resp_body_bytes, max),
+        content: clip_body(&inbound_resp.body, max),
       }],
     });
   }
@@ -355,32 +518,24 @@ fn record_call(
     status,
     stream,
     latency_ms,
-    prompt_tokens: pt,
-    completion_tokens: ct,
-    inbound_req: HttpSnapshot {
-      method: None,
-      url: None,
-      status: None,
-      headers: req_headers.clone(),
-      body: clip_body(&req_body_bytes, max),
-    },
-    outbound_req: outbound.map(|mut snap| {
+    prompt_tokens: usage.0,
+    completion_tokens: usage.1,
+    inbound_req: inbound_req.map(|mut snap| {
+      snap.body = clip_body(snap.body.as_ref(), max);
+      snap
+    }).unwrap_or_default(),
+    outbound_req: outbound_req.map(|mut snap| {
       snap.body = clip_body(snap.body.as_ref(), max);
       snap
     }),
-    outbound_resp: resp_headers.map(|headers| HttpSnapshot {
-      method: None,
-      url: None,
-      status: Some(status),
-      headers: headers.clone(),
-      body: resp_body.map(|b| clip_body(b, max)).unwrap_or_default(),
+    outbound_resp: outbound_resp.map(|mut snap| {
+      snap.body = clip_body(snap.body.as_ref(), max);
+      snap
     }),
-    inbound_resp: HttpSnapshot {
-      method: None,
-      url: None,
-      status: Some(status),
-      headers: inbound_resp_headers.clone(),
-      body: resp_body.map(|b| clip_body(b, max)).unwrap_or_default(),
+    inbound_resp: {
+      let mut snap = inbound_resp;
+      snap.body = clip_body(snap.body.as_ref(), max);
+      snap
     },
     messages,
   });
@@ -748,5 +903,75 @@ mod tests {
     assert_eq!(records[0].session_source, SessionSource::Header);
     assert_eq!(records[0].request_id.as_deref(), Some("request-123"));
     assert_eq!(records[0].project_id.as_deref(), Some("project-456"));
+  }
+
+  #[tokio::test]
+  async fn record_passthrough_call_persists_requests_row_shape() {
+    let mut cfg = Config::default();
+    cfg.accounts.push(AccountCfg {
+      id: "acct".into(),
+      provider: "zai-coding-plan".into(),
+      enabled: true,
+      tags: Vec::new(),
+      label: None,
+      base_url: None,
+      headers: Default::default(),
+      auth_type: Some(AuthType::Bearer),
+      username: None,
+      api_key: Some(Secret::new("sk-test".into())),
+      api_key_expires_at: None,
+      access_token: None,
+      access_token_expires_at: None,
+      id_token: None,
+      refresh_token: None,
+      extra: Default::default(),
+      refresh_url: None,
+      last_refresh: None,
+      settings: toml::Table::new(),
+    });
+    let db = Arc::new(FakeDb::default());
+    let state = build_state(&cfg, Some(db.clone())).unwrap();
+    let mut req_headers = HeaderMap::new();
+    req_headers.insert("x-session-id", "client-session".parse().unwrap());
+    let mut outbound_req_headers = HeaderMap::new();
+    outbound_req_headers.insert(axum::http::header::HOST, "api.openai.com".parse().unwrap());
+    let req_body = Bytes::from_static(br#"{"model":"gpt-4.1","messages":[{"role":"user","content":"hi"}],"stream":true}"#);
+    let mut resp_headers = HeaderMap::new();
+    resp_headers.insert(axum::http::header::CONTENT_TYPE, "application/json".parse().unwrap());
+    let resp_body = Bytes::from_static(br#"{"usage":{"prompt_tokens":1,"completion_tokens":2}}"#);
+
+    record_passthrough_call(
+      &state,
+      "api.openai.com",
+      &Method::POST,
+      "/v1/chat/completions",
+      &req_headers,
+      &req_body,
+      &outbound_req_headers,
+      &resp_headers,
+      &resp_body,
+      200,
+      Instant::now(),
+    );
+
+    let records = db.records.lock().unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].endpoint, "chat_completions");
+    assert_eq!(records[0].account_id, "passthrough");
+    assert_eq!(records[0].provider_id, "api.openai.com");
+    assert_eq!(records[0].model, "gpt-4.1");
+    assert_eq!(records[0].session_id, "client-session");
+    assert_eq!(records[0].stream, true);
+    assert_eq!(records[0].prompt_tokens, Some(1));
+    assert_eq!(records[0].completion_tokens, Some(2));
+    assert_eq!(records[0].inbound_req.method.as_deref(), Some("POST"));
+    assert_eq!(
+      records[0].inbound_req.url.as_deref(),
+      Some("https://api.openai.com/v1/chat/completions")
+    );
+    assert_eq!(
+      records[0].outbound_req.as_ref().and_then(|s| s.url.as_deref()),
+      Some("https://api.openai.com/v1/chat/completions")
+    );
   }
 }
