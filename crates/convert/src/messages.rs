@@ -50,11 +50,7 @@ pub fn request_from_value(v: &Value) -> Result<IrRequest> {
     },
     reasoning: obj.get("thinking").cloned(),
     stream: obj.get("stream").and_then(Value::as_bool).unwrap_or(false),
-    extras: obj
-      .iter()
-      .filter(|(k, _)| !REQUEST_KEYS.contains(&k.as_str()))
-      .map(|(k, v)| (k.clone(), v.clone()))
-      .collect(),
+    extras: extras_from_object(obj, REQUEST_KEYS),
   })
 }
 
@@ -359,18 +355,6 @@ fn system_to_string(system: Option<&Value>) -> Option<String> {
       (!text.is_empty()).then_some(text)
     }
     _ => None,
-  }
-}
-
-fn insert_opt_f64(out: &mut Map<String, Value>, key: &str, value: Option<f64>) {
-  if let Some(value) = value.and_then(serde_json::Number::from_f64) {
-    out.insert(key.into(), Value::Number(value));
-  }
-}
-
-fn insert_opt_u64(out: &mut Map<String, Value>, key: &str, value: Option<u64>) {
-  if let Some(value) = value {
-    out.insert(key.into(), Value::Number(value.into()));
   }
 }
 

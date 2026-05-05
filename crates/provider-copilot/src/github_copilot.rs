@@ -6,11 +6,12 @@ use crate::config::{CopilotHeaders, InitiatorMode};
 use crate::util::redact::{token_fingerprint, BehaveAs};
 use crate::util::secret::Secret;
 use async_trait::async_trait;
+use bytes::Bytes;
 use llm_core::account::AccountConfig;
 use parking_lot::RwLock;
 use reqwest::header::HeaderMap;
+use reqwest::Method;
 use serde_json::Value;
-use snafu::ResultExt;
 use std::sync::{Arc, OnceLock};
 use tokio::sync::Mutex as AsyncMutex;
 use tracing::{debug, instrument, warn};
@@ -292,18 +293,18 @@ impl CopilotProvider {
       reqwest::header::HeaderValue::from_static("application/json"),
     );
     let url = format!("{COPILOT_API}{path}");
-    // Upstream URL recording is handled by the router when available.
     debug!(%url, "POST upstream");
-    let body_bytes = bytes::Bytes::from(serde_json::to_vec(ctx.body).unwrap_or_default());
-    ctx.capture_outbound("POST", &url, &h, body_bytes.clone());
-    let resp = ctx
-      .http
-      .post(&url)
-      .headers(h)
-      .body(body_bytes)
-      .send()
-      .await
-      .context(error::HttpSnafu { what })?;
+    let body_bytes = Bytes::from(serde_json::to_vec(ctx.body).unwrap_or_default());
+    let resp = crate::util::http::send(
+      ctx.http,
+      Method::POST,
+      &url,
+      h,
+      Some(body_bytes),
+      ctx.outbound.as_ref(),
+      what,
+    )
+    .await?;
     debug!(status = %resp.status(), "upstream returned");
     Ok(resp)
   }

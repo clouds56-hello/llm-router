@@ -37,6 +37,13 @@ pub(crate) struct DispatchOk {
   pub outbound: Option<OutboundSnapshot>,
 }
 
+struct DispatchAttempt {
+  acct: Arc<AccountHandle>,
+  upstream_endpoint: Endpoint,
+  body: Arc<Value>,
+  capture: OutboundCapture,
+}
+
 /// Run up to `MAX_RETRIES + 1` attempts of `send` against accounts the pool
 /// hands us, applying the standard retry / cooldown / credential-invalidation
 /// rules.
@@ -60,24 +67,12 @@ where
 
   for attempt in 0..=MAX_RETRIES {
     let resolved_model = &route.upstream_model;
-    let (acct, upstream_endpoint) = match state.pool.acquire_for_route(session_id, route, endpoint) {
-      EndpointAcquire::Account { acct, endpoint } => (acct, endpoint),
-      EndpointAcquire::SessionExpired => {
-        let id = session_id.unwrap_or_default();
-        warn!(%endpoint, model = %route.requested_model, session_id = %id, attempt, "session expired");
-        return Err(ApiError::session_expired(id));
-      }
-      EndpointAcquire::None => {
-        // No account in the pool advertises this endpoint at all — this
-        // is a configuration / capability mismatch, not a transient
-        // failure, so don't retry.
-        warn!(%endpoint, model = %route.requested_model, attempt, "no account supports endpoint/model");
-        return Err(ApiError::not_implemented(
-          endpoint.to_string(),
-          route.requested_model.clone(),
-        ));
-      }
-    };
+    let DispatchAttempt {
+      acct,
+      upstream_endpoint,
+      body: upstream_body,
+      capture,
+    } = prepare_attempt(state, session_id, route, endpoint, body.as_ref(), attempt)?;
     let account_id = acct.id();
     super::record_last_account(&account_id);
 
@@ -93,16 +88,6 @@ where
       status = tracing::field::Empty,
     );
 
-    let capture = new_outbound_capture();
-    let routed_body = rewrite_model(body.as_ref(), resolved_model);
-    let upstream_body = if upstream_endpoint == endpoint {
-      Arc::new(routed_body)
-    } else {
-      match crate::convert::convert_request(endpoint, upstream_endpoint, &routed_body) {
-        Ok(v) => Arc::new(v),
-        Err(e) => return Err(ApiError::bad_gateway(format!("request conversion failed: {e}"))),
-      }
-    };
     let result = async {
       debug!("sending upstream request");
       send(acct.clone(), upstream_endpoint, upstream_body.clone(), capture.clone()).await
@@ -153,6 +138,65 @@ where
 
   let (status, msg) = last_err.unwrap_or((StatusCode::BAD_GATEWAY, "all attempts failed".into()));
   Err(ApiError::upstream(status, msg))
+}
+
+fn prepare_attempt(
+  state: &AppState,
+  session_id: Option<&str>,
+  route: &RouteResolution,
+  endpoint: Endpoint,
+  body: &Value,
+  attempt: usize,
+) -> Result<DispatchAttempt, ApiError> {
+  let (acct, upstream_endpoint) = acquire_attempt_account(state, session_id, route, endpoint, attempt)?;
+  let capture = new_outbound_capture();
+  let body = prepare_upstream_body(body, &route.upstream_model, endpoint, upstream_endpoint)?;
+  Ok(DispatchAttempt {
+    acct,
+    upstream_endpoint,
+    body,
+    capture,
+  })
+}
+
+fn acquire_attempt_account(
+  state: &AppState,
+  session_id: Option<&str>,
+  route: &RouteResolution,
+  endpoint: Endpoint,
+  attempt: usize,
+) -> Result<(Arc<AccountHandle>, Endpoint), ApiError> {
+  match state.pool.acquire_for_route(session_id, route, endpoint) {
+    EndpointAcquire::Account { acct, endpoint } => Ok((acct, endpoint)),
+    EndpointAcquire::SessionExpired => {
+      let id = session_id.unwrap_or_default();
+      warn!(%endpoint, model = %route.requested_model, session_id = %id, attempt, "session expired");
+      Err(ApiError::session_expired(id))
+    }
+    EndpointAcquire::None => {
+      warn!(%endpoint, model = %route.requested_model, attempt, "no account supports endpoint/model");
+      Err(ApiError::not_implemented(
+        endpoint.to_string(),
+        route.requested_model.clone(),
+      ))
+    }
+  }
+}
+
+fn prepare_upstream_body(
+  body: &Value,
+  resolved_model: &str,
+  endpoint: Endpoint,
+  upstream_endpoint: Endpoint,
+) -> Result<Arc<Value>, ApiError> {
+  let routed_body = rewrite_model(body, resolved_model);
+  if upstream_endpoint == endpoint {
+    return Ok(Arc::new(routed_body));
+  }
+  match crate::convert::convert_request(endpoint, upstream_endpoint, &routed_body) {
+    Ok(v) => Ok(Arc::new(v)),
+    Err(e) => Err(ApiError::bad_gateway(format!("request conversion failed: {e}"))),
+  }
 }
 
 fn rewrite_model(body: &Value, model: &str) -> Value {

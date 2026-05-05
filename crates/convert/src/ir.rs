@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -220,4 +220,24 @@ pub fn usage_to_io(usage: &Usage) -> Value {
     "output_tokens": usage.output_tokens.unwrap_or(0),
     "total_tokens": usage.total_tokens.unwrap_or_else(|| usage.input_tokens.unwrap_or(0) + usage.output_tokens.unwrap_or(0)),
   })
+}
+
+pub fn extras_from_object(obj: &Map<String, Value>, known: &[&str]) -> BTreeMap<String, Value> {
+  obj
+    .iter()
+    .filter(|(k, _)| !known.contains(&k.as_str()))
+    .map(|(k, v)| (k.clone(), v.clone()))
+    .collect()
+}
+
+pub fn insert_opt_f64(out: &mut Map<String, Value>, key: &str, value: Option<f64>) {
+  if let Some(value) = value.and_then(serde_json::Number::from_f64) {
+    out.insert(key.into(), Value::Number(value));
+  }
+}
+
+pub fn insert_opt_u64(out: &mut Map<String, Value>, key: &str, value: Option<u64>) {
+  if let Some(value) = value {
+    out.insert(key.into(), Value::Number(value.into()));
+  }
 }

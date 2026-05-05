@@ -1,0 +1,90 @@
+use super::recording::record_call;
+use super::usage::parse_usage_any_json;
+use crate::db::OutboundSnapshot;
+use crate::pool::AccountHandle;
+use crate::provider::Endpoint;
+use crate::server::error::ApiError;
+use crate::server::AppState;
+use axum::http::{HeaderMap, HeaderValue};
+use axum::response::{IntoResponse, Response};
+use bytes::Bytes;
+use serde_json::Value;
+use std::sync::Arc;
+use std::time::Instant;
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn buffered_response(
+  s: AppState,
+  acct: Arc<AccountHandle>,
+  resp: reqwest::Response,
+  endpoint: Endpoint,
+  upstream_endpoint: Endpoint,
+  model: String,
+  initiator: String,
+  session_id: Option<String>,
+  request_id: Option<String>,
+  project_id: Option<String>,
+  req_headers: HeaderMap,
+  req_body: Value,
+  outbound: Option<OutboundSnapshot>,
+  started: Instant,
+) -> Response {
+  let status = resp.status();
+  let resp_headers = resp.headers().clone();
+  let bytes = match resp.bytes().await {
+    Ok(b) => b,
+    Err(e) => {
+      return ApiError::bad_gateway(format!("reading upstream body: {e}")).into_response();
+    }
+  };
+
+  let mut headers = HeaderMap::new();
+  headers.insert(
+    axum::http::header::CONTENT_TYPE,
+    HeaderValue::from_static("application/json"),
+  );
+  if let Some(id) = session_id.as_deref() {
+    if let Ok(value) = HeaderValue::from_str(id) {
+      headers.insert(crate::server::SESSION_ID_HEADER, value);
+    }
+  }
+
+  let bytes = if upstream_endpoint == endpoint {
+    bytes
+  } else {
+    match serde_json::from_slice::<Value>(&bytes)
+      .map_err(|e| e.to_string())
+      .and_then(|v| crate::convert::convert_response(upstream_endpoint, endpoint, &v).map_err(|e| e.to_string()))
+      .and_then(|v| serde_json::to_vec(&v).map(Bytes::from).map_err(|e| e.to_string()))
+    {
+      Ok(bytes) => bytes,
+      Err(e) => return ApiError::bad_gateway(format!("response conversion failed: {e}")).into_response(),
+    }
+  };
+
+  let (pt, ct) = parse_usage_any_json(&bytes);
+  record_call(
+    &s,
+    &acct.id(),
+    acct.provider.info().id.as_str(),
+    endpoint,
+    &model,
+    &initiator,
+    session_id.as_deref(),
+    request_id.as_deref(),
+    project_id.as_deref(),
+    &req_headers,
+    &req_body,
+    Some(&resp_headers),
+    Some(&bytes),
+    &headers,
+    outbound,
+    pt,
+    ct,
+    started,
+    status.as_u16(),
+    false,
+  );
+
+  (status, headers, bytes).into_response()
+}

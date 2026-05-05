@@ -4,7 +4,7 @@
 //! snapshots, then print current/latest versions and aggregate row counts.
 //! `--commit` applies pending migrations; `--rollback` restores backups.
 
-use crate::config::{paths, Config};
+use crate::config::Config;
 use crate::db::{migrate, requests, requests::RequestsDb, sessions::SessionsDb, usage::UsageDb};
 use anyhow::Result;
 use clap::Args;
@@ -25,24 +25,10 @@ pub struct MigrationArgs {
 
 pub async fn run(cfg_path: Option<PathBuf>, args: MigrationArgs) -> Result<()> {
   let (cfg, _) = Config::load(cfg_path.as_deref())?;
-  let usage_db = cfg
-    .db
-    .usage_db_path
-    .clone()
-    .map(Ok)
-    .unwrap_or_else(paths::default_usage_db)?;
-  let sessions_db = cfg
-    .db
-    .sessions_db_path
-    .clone()
-    .map(Ok)
-    .unwrap_or_else(paths::default_sessions_db)?;
-  let requests_dir = cfg
-    .db
-    .requests_dir
-    .clone()
-    .map(Ok)
-    .unwrap_or_else(paths::default_requests_dir)?;
+  let paths = cfg.db.resolve_paths()?;
+  let usage_db = paths.usage_db;
+  let sessions_db = paths.sessions_db;
+  let requests_dir = paths.requests_dir;
 
   if args.rollback {
     rollback_one("usage", &usage_db)?;

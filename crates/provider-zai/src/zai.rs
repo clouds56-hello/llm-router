@@ -19,8 +19,10 @@ pub use crate::{models, quota, transform};
 use crate::util::redact::token_fingerprint;
 use crate::util::secret::Secret;
 use async_trait::async_trait;
+use bytes::Bytes;
 use llm_core::account::AccountConfig;
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE};
+use reqwest::Method;
 use serde_json::Value;
 use snafu::ResultExt;
 use tracing::{debug, instrument, warn};
@@ -139,31 +141,20 @@ impl Provider for ZaiProvider {
   )]
   async fn list_models(&self, http: &reqwest::Client) -> Result<Value> {
     let url = format!("{}/models", self.base_url.trim_end_matches('/'));
-    // Upstream URL recording is handled by the router when available.
     debug!(%url, "GET zai models");
-    let resp = http
-      .get(&url)
-      .headers(self.auth_headers(false)?)
-      .send()
-      .await
-      .context(error::HttpSnafu { what: "zai /models" })?;
+    let resp = crate::util::http::send(
+      http,
+      Method::GET,
+      &url,
+      self.auth_headers(false)?,
+      None,
+      None,
+      "zai /models",
+    )
+    .await?;
     let status = resp.status();
     tracing::Span::current().record("status", status.as_u16());
-    let body = resp.text().await.unwrap_or_default();
-    if !status.is_success() {
-      return error::HttpStatusSnafu {
-        what: "zai /models",
-        status,
-        body,
-      }
-      .fail();
-    }
-    // Some Z.ai deployments return `{ data: [...] }`, others return a bare
-    // array. Normalise either way.
-    let v: Value = serde_json::from_str(&body).context(error::JsonSnafu {
-      what: "zai /models",
-      body: body.clone(),
-    })?;
+    let v: Value = crate::util::http::read_json(resp, "zai /models").await?;
     let data: Vec<Value> = match &v {
       Value::Object(_) => v.get("data").and_then(|d| d.as_array()).cloned().unwrap_or_default(),
       Value::Array(a) => a.clone(),
@@ -200,19 +191,19 @@ impl Provider for ZaiProvider {
     let body = transform::shape_request(ctx.body, reasoning);
 
     let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
-    // Upstream URL recording is handled by the router when available.
     debug!(%url, "POST zai chat");
     let headers = self.auth_headers(ctx.stream)?;
-    let body_bytes = bytes::Bytes::from(serde_json::to_vec(&body).unwrap_or_default());
-    ctx.capture_outbound("POST", &url, &headers, body_bytes.clone());
-    let resp = ctx
-      .http
-      .post(&url)
-      .headers(headers)
-      .body(body_bytes)
-      .send()
-      .await
-      .context(error::HttpSnafu { what: "zai chat" })?;
+    let body_bytes = Bytes::from(serde_json::to_vec(&body).unwrap_or_default());
+    let resp = crate::util::http::send(
+      ctx.http,
+      Method::POST,
+      &url,
+      headers,
+      Some(body_bytes),
+      ctx.outbound.as_ref(),
+      "zai chat",
+    )
+    .await?;
     span.record("status", resp.status().as_u16());
     Ok(resp)
   }

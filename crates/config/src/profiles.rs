@@ -133,7 +133,7 @@ fn apply(out: &mut ResolvedProfile, scope: &str, sec: &ProfileSection) {
 }
 
 pub fn user_profiles_path() -> Option<PathBuf> {
-  directories::ProjectDirs::from("dev", "llm-router", "llm-router").map(|d| d.config_dir().join("profiles.toml"))
+  llm_core::util::paths::config_dir().map(|dir| dir.join("profiles.toml"))
 }
 
 pub fn warn_if_unverified(persona: &str, upstream: &str, resolved: &ResolvedProfile) {

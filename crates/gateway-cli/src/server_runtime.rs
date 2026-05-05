@@ -7,29 +7,12 @@ pub fn build_db(cfg: &Config) -> Result<Option<Arc<DbStore>>> {
   if !cfg.db.enabled {
     return Ok(None);
   }
-  let usage_db = cfg
-    .db
-    .usage_db_path
-    .clone()
-    .map(Ok)
-    .unwrap_or_else(crate::config::paths::default_usage_db)?;
-  let sessions_db = cfg
-    .db
-    .sessions_db_path
-    .clone()
-    .map(Ok)
-    .unwrap_or_else(crate::config::paths::default_sessions_db)?;
-  let requests_dir = cfg
-    .db
-    .requests_dir
-    .clone()
-    .map(Ok)
-    .unwrap_or_else(crate::config::paths::default_requests_dir)?;
+  let paths = cfg.db.resolve_paths()?;
   Ok(Some(Arc::new(DbStore::spawn(DbOptions {
     paths: DbPaths {
-      usage_db,
-      sessions_db,
-      requests_dir,
+      usage_db: paths.usage_db,
+      sessions_db: paths.sessions_db,
+      requests_dir: paths.requests_dir,
     },
     queue_capacity: cfg.db.write_queue_capacity,
     body_max_bytes: cfg.db.body_max_bytes,
@@ -53,4 +36,11 @@ pub fn is_loopback(host: &str) -> bool {
       .parse::<std::net::IpAddr>()
       .map(|ip| ip.is_loopback())
       .unwrap_or(false)
+}
+
+pub fn ensure_bind_host(host: &str, allow_remote: bool) -> Result<()> {
+  if !allow_remote && !is_loopback(host) {
+    anyhow::bail!("refusing to bind to non-loopback host '{host}' without --allow-remote (no client auth in v1)");
+  }
+  Ok(())
 }

@@ -78,7 +78,7 @@ pub fn request_from_value(v: &Value) -> Result<IrRequest> {
     },
     reasoning: obj.get("reasoning").or_else(|| obj.get("thinking")).cloned(),
     stream: obj.get("stream").and_then(Value::as_bool).unwrap_or(false),
-    extras: extras(obj, REQUEST_KEYS),
+    extras: extras_from_object(obj, REQUEST_KEYS),
   })
 }
 
@@ -399,28 +399,8 @@ pub(crate) fn args_to_string(args: &Value) -> String {
     .unwrap_or_else(|| serde_json::to_string(args).unwrap_or_else(|_| "{}".into()))
 }
 
-fn extras(obj: &Map<String, Value>, known: &[&str]) -> BTreeMap<String, Value> {
-  obj
-    .iter()
-    .filter(|(k, _)| !known.contains(&k.as_str()))
-    .map(|(k, v)| (k.clone(), v.clone()))
-    .collect()
-}
-
 fn insert_opt(out: &mut Map<String, Value>, key: &str, value: Option<Value>) {
   if let Some(value) = value {
     out.insert(key.into(), value);
-  }
-}
-
-fn insert_opt_f64(out: &mut Map<String, Value>, key: &str, value: Option<f64>) {
-  if let Some(value) = value.and_then(serde_json::Number::from_f64) {
-    out.insert(key.into(), Value::Number(value));
-  }
-}
-
-fn insert_opt_u64(out: &mut Map<String, Value>, key: &str, value: Option<u64>) {
-  if let Some(value) = value {
-    out.insert(key.into(), Value::Number(value.into()));
   }
 }

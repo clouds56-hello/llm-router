@@ -61,7 +61,7 @@ static GLOBAL: OnceLock<(Catalogue, Source)> = OnceLock::new();
 
 /// Path of the on-disk catalogue cache, if we can determine an XDG cache dir.
 pub fn cache_path() -> Option<PathBuf> {
-  directories::ProjectDirs::from("", "", "llm-router").map(|d| d.cache_dir().join("catalogue.json"))
+  llm_core::util::paths::cache_dir().map(|dir| dir.join("catalogue.json"))
 }
 
 /// Borrow the global catalogue, loading it on first call.

@@ -69,6 +69,7 @@ pub(crate) fn record_last_account(account: &str) {
   });
 }
 
+#[allow(dead_code)]
 pub(crate) fn record_upstream_url(url: &str) {
   let _ = REQUEST_TRACKING.try_with(|state| {
     state.lock().upstream_url = Some(Arc::from(url));

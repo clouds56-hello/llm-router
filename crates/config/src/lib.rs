@@ -2,10 +2,10 @@ pub mod error;
 pub mod paths;
 pub mod profiles;
 
+use directories::ProjectDirs;
 pub use error::{Error, Result};
 pub use llm_core::account::{Account, AccountConfig, AuthType};
 
-use directories::ProjectDirs;
 use llm_core::provider::ID_GITHUB_COPILOT;
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt;
@@ -169,6 +169,28 @@ impl Default for DbConfig {
       body_max_bytes: default_body_max_bytes(),
       write_queue_capacity: default_write_queue_capacity(),
     }
+  }
+}
+
+impl DbConfig {
+  pub fn resolve_paths(&self) -> Result<llm_core::db::DbPaths> {
+    Ok(llm_core::db::DbPaths {
+      usage_db: self
+        .usage_db_path
+        .clone()
+        .map(Ok)
+        .unwrap_or_else(paths::default_usage_db)?,
+      sessions_db: self
+        .sessions_db_path
+        .clone()
+        .map(Ok)
+        .unwrap_or_else(paths::default_sessions_db)?,
+      requests_dir: self
+        .requests_dir
+        .clone()
+        .map(Ok)
+        .unwrap_or_else(paths::default_requests_dir)?,
+    })
   }
 }
 
@@ -486,7 +508,7 @@ fn is_proxy_host(s: &str) -> bool {
 }
 
 pub fn project_dirs() -> Result<ProjectDirs> {
-  ProjectDirs::from("dev", "llm-router", "llm-router").ok_or(Error::NoProjectDirs)
+  llm_core::util::paths::project_dirs().ok_or(Error::NoProjectDirs)
 }
 
 fn write_atomic(path: &Path, contents: &str) -> Result<()> {

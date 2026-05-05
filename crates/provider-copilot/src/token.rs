@@ -1,8 +1,7 @@
 use crate::config::CopilotHeaders;
-use crate::provider::{error, Result};
+use crate::provider::Result;
 use crate::util::redact::token_fingerprint;
 use serde::Deserialize;
-use snafu::ResultExt;
 use tracing::{debug, instrument};
 
 /// Subset of the `/copilot_internal/v2/token` response that we actually use.
@@ -42,27 +41,19 @@ pub async fn exchange(
 ) -> Result<CopilotTokenResp> {
   let h = crate::headers::token_exchange_headers(github_token, headers)?;
   debug!("posting token exchange");
-  let resp = client
-    .get(crate::github_copilot::TOKEN_EXCHANGE_URL)
-    .headers(h)
-    .send()
-    .await
-    .context(error::HttpSnafu { what: "token exchange" })?;
+  let resp = crate::util::http::send(
+    client,
+    reqwest::Method::GET,
+    crate::github_copilot::TOKEN_EXCHANGE_URL,
+    h,
+    None,
+    None,
+    "token exchange",
+  )
+  .await?;
   let status = resp.status();
   tracing::Span::current().record("status", status.as_u16());
-  let body = resp.text().await.unwrap_or_default();
-  if !status.is_success() {
-    return error::HttpStatusSnafu {
-      what: "token exchange",
-      status,
-      body,
-    }
-    .fail();
-  }
-  let parsed: CopilotTokenResp = serde_json::from_str(&body).context(error::JsonSnafu {
-    what: "token exchange",
-    body: body.clone(),
-  })?;
+  let parsed: CopilotTokenResp = crate::util::http::read_json(resp, "token exchange").await?;
   let span = tracing::Span::current();
   span.record(
     "api_token_fp",

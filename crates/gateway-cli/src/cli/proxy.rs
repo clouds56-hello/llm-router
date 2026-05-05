@@ -123,9 +123,7 @@ async fn start(cfg_path: Option<PathBuf>, args: StartArgs, passthrough: bool) ->
     .map(Ok)
     .unwrap_or_else(|| cfg.proxy_mode.resolved_ca_dir())?;
 
-  if !args.allow_remote && !crate::server_runtime::is_loopback(&host) {
-    anyhow::bail!("refusing to bind to non-loopback host '{host}' without --allow-remote (no client auth in v1)");
-  }
+  crate::server_runtime::ensure_bind_host(&host, args.allow_remote)?;
 
   let db = crate::server_runtime::build_db(&cfg)?;
   let state = crate::server_runtime::build_state(&cfg, &db)?;

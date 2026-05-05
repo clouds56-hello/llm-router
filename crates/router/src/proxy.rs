@@ -474,7 +474,10 @@ async fn proxy_passthrough(
     }
   }
   upstream = upstream.header(HOST, host);
-  outbound_req_headers.insert(HOST, HeaderValue::from_str(host).unwrap_or_else(|_| HeaderValue::from_static("localhost")));
+  outbound_req_headers.insert(
+    HOST,
+    HeaderValue::from_str(host).unwrap_or_else(|_| HeaderValue::from_static("localhost")),
+  );
 
   let response = upstream.send().await.context("send passthrough upstream request")?;
   let status = response.status();
