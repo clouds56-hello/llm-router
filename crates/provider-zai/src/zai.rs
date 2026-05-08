@@ -321,6 +321,7 @@ mod tests {
       request_id: None,
       project_id: None,
       initiator: "user".into(),
+      header_initiator: None,
       behave_as: None,
       inbound_headers: HeaderMap::new(),
     };
@@ -371,6 +372,7 @@ mod tests {
       request_id: None,
       project_id: None,
       initiator: "user".into(),
+      header_initiator: None,
       behave_as: None,
       inbound_headers: HeaderMap::new(),
     };

@@ -128,25 +128,28 @@ impl DbEventHandler {
 impl EventHandler for DbEventHandler {
   fn handle(&mut self, event: &Event) {
     match event {
-      Event::RequestStarted { request_id, ts, endpoint, model, initiator, stream, session_id, project_id, inbound_req } => {
+      Event::RequestStarted { request_id, ts, endpoint, initiator, session_id, project_id, inbound_req } => {
         self.pending.insert(request_id.clone(), PendingRequest {
           ts: *ts,
           session_id: session_id.clone(),
           project_id: project_id.clone(),
           endpoint: endpoint.clone(),
-          model: model.clone(),
-          initiator: initiator.clone(),
-          stream: *stream,
+          model: String::new(),
+          initiator: initiator.clone().unwrap_or_default(),
+          stream: false,
           account_id: String::new(),
           provider_id: String::new(),
           inbound_req: inbound_req.clone(),
           outbound_req: None,
         });
       }
-      Event::RequestParsed { request_id, account_id, provider_id, outbound_req } => {
+      Event::RequestParsed { request_id, account_id, provider_id, model, stream, initiator, outbound_req } => {
         if let Some(p) = self.pending.get_mut(request_id) {
           p.account_id = account_id.clone();
           p.provider_id = provider_id.clone();
+          p.model = model.clone();
+          p.stream = *stream;
+          p.initiator = initiator.clone();
           p.outbound_req = outbound_req.clone();
         }
       }

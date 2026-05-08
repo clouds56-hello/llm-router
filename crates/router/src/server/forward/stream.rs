@@ -1,33 +1,26 @@
-use super::observers::{background_stream_recorder, StreamMeta};
+use super::context::ForwardContext;
+use super::observers::{spawn_stream_recorder, StreamMeta};
 use super::recording::CompletedEventBuilder;
 use crate::db::HttpSnapshot;
-use crate::provider::Endpoint;
 use crate::server::AppState;
 use axum::body::Body;
 use axum::http::{HeaderMap, HeaderValue};
 use axum::response::{IntoResponse, Response};
 use bytes::Bytes;
-use llm_convert::sse::{observer_channel, EndpointTranslator, SsePipeline};
-use serde_json::Value;
-use std::time::Instant;
+use llm_convert::sse::{EndpointTranslator, SsePipeline};
 
-#[allow(clippy::too_many_arguments)]
+use serde_json::Value;
+
 pub(crate) async fn stream_response(
   s: AppState,
   resp: reqwest::Response,
-  endpoint: Endpoint,
-  upstream_endpoint: Endpoint,
-  model: String,
-  session_id: Option<String>,
-  request_id: Option<String>,
-  req_body: Value,
-  started: Instant,
+  ctx: ForwardContext,
+  req_body: &Value,
 ) -> Response {
   let status = resp.status();
   let resp_headers = resp.headers().clone();
   let max_body = s.body_max_bytes;
-  let headers = sse_headers(session_id.as_deref());
-  let inbound_resp_headers = headers.clone();
+  let headers = sse_headers(ctx.session_id.as_deref());
 
   let builder = CompletedEventBuilder::new(
     max_body,
@@ -35,27 +28,27 @@ pub(crate) async fn stream_response(
       method: None,
       url: None,
       status: Some(status.as_u16()),
-      headers: inbound_resp_headers,
+      headers: headers.clone(),
       body: Bytes::new(),
     },
-    started,
+    ctx.started,
     status.as_u16(),
   )
-  .with_ids(session_id.as_deref(), request_id.as_deref(), None)
-  .with_request_body(&req_body, Some(endpoint));
+  .with_ids(ctx.session_id.as_deref(), ctx.request_id.as_deref(), None)
+  .with_request_body(req_body, ctx.endpoint);
 
-  let (tx, rx) = observer_channel();
+  let endpoint = ctx.endpoint.unwrap_or(ctx.upstream_endpoint);
   let meta = StreamMeta {
-    request_id: request_id.clone(),
-    model: model.clone(),
+    request_id: ctx.request_id.clone(),
+    model: ctx.model.clone(),
     endpoint: endpoint.as_str().to_string(),
     events: s.events.clone(),
   };
-  tokio::spawn(background_stream_recorder(rx, builder, resp_headers, s.events.clone(), max_body, meta));
+  let tx = spawn_stream_recorder(builder, resp_headers, s.events.clone(), max_body, meta);
 
   let mut pipeline = SsePipeline::from_response_with_tap(resp, tx);
-  if upstream_endpoint != endpoint {
-    pipeline = pipeline.with_transformer(EndpointTranslator::new(upstream_endpoint, endpoint));
+  if ctx.upstream_endpoint != endpoint {
+    pipeline = pipeline.with_transformer(EndpointTranslator::new(ctx.upstream_endpoint, endpoint));
   }
 
   (status, headers, Body::from_stream(pipeline.run())).into_response()

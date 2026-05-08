@@ -5,6 +5,7 @@
 //! responses, and messages endpoints.
 
 mod buffered;
+pub(crate) mod context;
 mod observers;
 mod passthrough;
 mod recording;
@@ -12,12 +13,14 @@ mod stream;
 mod usage;
 
 pub(crate) use buffered::buffered_response;
-pub(crate) use passthrough::{is_sse_response, passthrough_streaming_response, record_passthrough_call};
+pub(crate) use context::ForwardContext;
+pub(crate) use passthrough::{is_sse_response, passthrough_buffered_response, passthrough_streaming_response};
 pub(crate) use stream::stream_response;
 
 #[cfg(test)]
 mod tests {
-  use super::passthrough::{is_sse_response, passthrough_streaming_response, record_passthrough_call};
+  use super::context::ForwardContext;
+  use super::passthrough::{is_sse_response, passthrough_buffered_response, passthrough_streaming_response};
   use super::recording::{extract_request_messages, CompletedEventBuilder};
   use super::usage::parse_usage_any_value;
   use crate::config::{Account as AccountCfg, AuthType, Config};
@@ -33,7 +36,6 @@ mod tests {
   use std::sync::{Arc, Mutex};
   use std::time::Instant;
   use tokio::io::{AsyncReadExt, AsyncWriteExt};
-  use uuid::Uuid;
 
   /// Shared record collector for tests.
   type Records = Arc<Mutex<Vec<CallRecord>>>;
@@ -53,7 +55,7 @@ mod tests {
   impl EventHandler for CollectingHandler {
     fn handle(&mut self, event: &Event) {
       match event {
-        Event::RequestStarted { request_id, ts, endpoint, model, initiator, stream, session_id, project_id, inbound_req } => {
+        Event::RequestStarted { request_id, ts, endpoint, initiator, session_id, project_id, inbound_req } => {
           self.pending.insert(request_id.clone(), CallRecord {
             ts: *ts,
             session_id: session_id.clone().unwrap_or_default(),
@@ -64,10 +66,10 @@ mod tests {
             endpoint: endpoint.clone(),
             account_id: String::new(),
             provider_id: String::new(),
-            model: model.clone(),
-            initiator: initiator.clone(),
+            model: String::new(),
+            initiator: initiator.clone().unwrap_or_default(),
             status: 0,
-            stream: *stream,
+            stream: false,
             latency_ms: 0,
             prompt_tokens: None,
             completion_tokens: None,
@@ -78,10 +80,13 @@ mod tests {
             messages: Vec::new(),
           });
         }
-        Event::RequestParsed { request_id, account_id, provider_id, outbound_req } => {
+        Event::RequestParsed { request_id, account_id, provider_id, model, stream, initiator, outbound_req } => {
           if let Some(r) = self.pending.get_mut(request_id) {
             r.account_id = account_id.clone();
             r.provider_id = provider_id.clone();
+            r.model = model.clone();
+            r.stream = *stream;
+            r.initiator = initiator.clone();
             r.outbound_req = outbound_req.clone();
           }
         }
@@ -334,27 +339,76 @@ mod tests {
     let state = build_state(&cfg, events.clone()).unwrap();
     let mut req_headers = HeaderMap::new();
     req_headers.insert("x-session-id", "client-session".parse().unwrap());
-    let mut outbound_req_headers = HeaderMap::new();
-    outbound_req_headers.insert(axum::http::header::HOST, "api.openai.com".parse().unwrap());
     let req_body =
       Bytes::from_static(br#"{"model":"gpt-4.1","messages":[{"role":"user","content":"hi"}],"stream":true}"#);
-    let mut resp_headers = HeaderMap::new();
-    resp_headers.insert(axum::http::header::CONTENT_TYPE, "application/json".parse().unwrap());
-    let resp_body = Bytes::from_static(br#"{"usage":{"prompt_tokens":1,"completion_tokens":2}}"#);
 
-    record_passthrough_call(
-      &state,
-      "api.openai.com",
+    let req_body_json: serde_json::Value = serde_json::from_slice(&req_body).unwrap();
+
+    let ctx = ForwardContext::from_passthrough(
       &Method::POST,
       "/v1/chat/completions",
       &req_headers,
-      &req_body,
-      &outbound_req_headers,
-      &resp_headers,
-      &resp_body,
-      200,
+      &req_body_json,
       Instant::now(),
     );
+
+    // Emit lifecycle events as caller would
+    state.events.emit(llm_core::event::Event::RequestStarted {
+      request_id: ctx.request_id.clone().unwrap_or_default(),
+      ts: 0,
+      endpoint: ctx.endpoint.map(|e| e.as_str()).unwrap_or("unknown").to_string(),
+      initiator: None,
+      session_id: ctx.session_id.clone(),
+      project_id: None,
+      inbound_req: crate::db::HttpSnapshot {
+        method: Some("POST".to_string()),
+        url: Some("https://api.openai.com/v1/chat/completions".to_string()),
+        status: None,
+        headers: req_headers.clone(),
+        body: req_body.clone(),
+      },
+    });
+    state.events.emit(llm_core::event::Event::RequestParsed {
+      request_id: ctx.request_id.clone().unwrap_or_default(),
+      account_id: "passthrough".to_string(),
+      provider_id: "api.openai.com".to_string(),
+      model: ctx.model.clone(),
+      stream: true,
+      initiator: "user".to_string(),
+      outbound_req: Some(crate::db::HttpSnapshot {
+        method: Some("POST".to_string()),
+        url: Some("https://api.openai.com/v1/chat/completions".to_string()),
+        status: None,
+        headers: req_headers.clone(),
+        body: req_body.clone(),
+      }),
+    });
+
+    // Set up a mock upstream server
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+      let (mut stream, _) = listener.accept().await.unwrap();
+      let mut buf = vec![0_u8; 8192];
+      let _ = stream.read(&mut buf).await.unwrap();
+      stream
+        .write_all(
+          b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":2}}",
+        )
+        .await
+        .unwrap();
+    });
+
+    let response = reqwest::Client::new()
+      .get(format!("http://{addr}/test"))
+      .send()
+      .await
+      .unwrap();
+
+    let resp = passthrough_buffered_response(&state, &ctx, &req_body_json, response).await;
+    let resp_body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    server.await.unwrap();
+    assert!(std::str::from_utf8(&resp_body).unwrap().contains("prompt_tokens"));
 
     // Shut down event bus to flush
     events.shutdown().await;
@@ -427,16 +481,22 @@ mod tests {
       .unwrap();
     assert!(is_sse_response(response.headers()));
 
+    let req_body_bytes = Bytes::from_static(br#"{"model":"gpt-4.1","messages":[{"role":"user","content":"hi"}],"stream":true}"#);
+    let req_body_json: serde_json::Value = serde_json::from_slice(&req_body_bytes).unwrap();
+
+    let ctx = ForwardContext::from_passthrough(
+      &Method::POST,
+      "/v1/chat/completions",
+      &HeaderMap::new(),
+      &req_body_json,
+      Instant::now(),
+    );
+
     let streamed = passthrough_streaming_response(
       state,
-      "api.openai.com".to_string(),
-      Method::POST,
-      "/v1/chat/completions".to_string(),
-      HeaderMap::new(),
-      Bytes::from_static(br#"{"model":"gpt-4.1","messages":[{"role":"user","content":"hi"}],"stream":true}"#),
-      HeaderMap::new(),
+      ctx,
+      &req_body_json,
       response,
-      Instant::now(),
     );
     let streamed_body = to_bytes(streamed.into_body(), usize::MAX).await.unwrap();
     server.await.unwrap();

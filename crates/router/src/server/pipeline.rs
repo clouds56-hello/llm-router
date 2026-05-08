@@ -1,5 +1,5 @@
 use super::error::ApiError;
-use super::forward::{buffered_response, stream_response};
+use super::forward::{buffered_response, stream_response, ForwardContext};
 use super::{first_header, AppState, PROJECT_ID_HEADERS, REQUEST_ID_HEADERS, SESSION_ID_HEADERS};
 use crate::pool::{AccountHandle, EndpointAcquire};
 use crate::provider::{new_outbound_capture, Endpoint, RequestCtx};
@@ -33,17 +33,12 @@ pub(crate) trait RequestParser: Send + Sync {
     let session_id = first_header(&headers, SESSION_ID_HEADERS).map(str::to_string);
     let request_id = first_header(&headers, REQUEST_ID_HEADERS).map(str::to_string);
     let project_id = first_header(&headers, PROJECT_ID_HEADERS).map(str::to_string);
-    let initiator = match headers.get("x-initiator").and_then(|v| v.to_str().ok()) {
-      Some(v) => {
-        let value = v.trim().to_ascii_lowercase();
-        if value == "user" || value == "agent" {
-          value
-        } else {
-          self.auto_classify_initiator(&body).to_string()
-        }
-      }
-      None => self.auto_classify_initiator(&body).to_string(),
-    };
+    let header_initiator = headers.get("x-initiator")
+      .and_then(|v| v.to_str().ok())
+      .map(|v| v.trim().to_ascii_lowercase())
+      .filter(|v| v == "user" || v == "agent");
+    let initiator = header_initiator.clone()
+      .unwrap_or_else(|| self.auto_classify_initiator(&body).to_string());
     let behave_as = headers
       .get("x-behave-as")
       .and_then(|v| v.to_str().ok())
@@ -61,6 +56,7 @@ pub(crate) trait RequestParser: Send + Sync {
         request_id,
         project_id,
         initiator,
+        header_initiator,
         behave_as,
         inbound_headers: headers,
       },
@@ -162,17 +158,15 @@ impl OutputTransformer for EndpointOutputTransformer {
   type Output = Response;
 
   async fn transform_result(&self, state: AppState, upstream: UpstreamResponse) -> Response {
-    buffered_response(
-      state,
-      upstream.resp,
+    let ctx = ForwardContext::from_pipeline(
       upstream.meta.endpoint,
       upstream.meta.upstream_endpoint,
+      upstream.meta.model,
       upstream.meta.session_id,
       upstream.meta.request_id,
-      upstream.inbound_body,
       upstream.started,
-    )
-    .await
+    );
+    buffered_response(state, upstream.resp, ctx, &upstream.inbound_body).await
   }
 
   async fn transform_sse(
@@ -180,18 +174,15 @@ impl OutputTransformer for EndpointOutputTransformer {
     state: AppState,
     upstream: UpstreamResponse,
   ) -> Response {
-    stream_response(
-      state,
-      upstream.resp,
+    let ctx = ForwardContext::from_pipeline(
       upstream.meta.endpoint,
       upstream.meta.upstream_endpoint,
       upstream.meta.model,
       upstream.meta.session_id,
       upstream.meta.request_id,
-      upstream.inbound_body,
       upstream.started,
-    )
-    .await
+    );
+    stream_response(state, upstream.resp, ctx, &upstream.inbound_body).await
   }
 }
 
@@ -215,10 +206,7 @@ pub(crate) async fn handle_endpoint(
     request_id: request_id.clone(),
     ts: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() as i64,
     endpoint: parser.endpoint().as_str().to_string(),
-    model: parsed.meta.model.clone(),
-    initiator: parsed.meta.initiator.clone(),
-    stream: parsed.meta.stream,
-    session_id: parsed.meta.session_id.clone(),
+    initiator: parsed.meta.header_initiator.clone(),    session_id: parsed.meta.session_id.clone(),
     project_id: parsed.meta.project_id.clone(),
     inbound_req: llm_core::db::HttpSnapshot::default(),
   });
@@ -259,6 +247,9 @@ pub(crate) async fn handle_endpoint(
         request_id: request_id.clone(),
         account_id: prepared.account.id(),
         provider_id: prepared.account.provider.info().id.clone(),
+        model: prepared.meta.model.clone(),
+        stream: prepared.meta.stream,
+        initiator: prepared.meta.initiator.clone(),
         outbound_req: prepared.capture.get().cloned(),
       });
     }
@@ -506,6 +497,7 @@ mod tests {
         request_id: Some("request-1".into()),
         project_id: Some("project-1".into()),
         initiator: "user".into(),
+        header_initiator: None,
         behave_as: None,
         inbound_headers: HeaderMap::new(),
       },
@@ -575,6 +567,7 @@ mod tests {
       request_id: None,
       project_id: None,
       initiator: "user".into(),
+      header_initiator: None,
       behave_as: None,
       inbound_headers: HeaderMap::new(),
     };

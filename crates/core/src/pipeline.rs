@@ -15,7 +15,10 @@ pub struct RequestMeta {
   pub session_id: Option<String>,
   pub request_id: Option<String>,
   pub project_id: Option<String>,
+  /// Merged initiator (header takes precedence over body-derived).
   pub initiator: String,
+  /// Raw initiator from x-initiator header, if valid.
+  pub header_initiator: Option<String>,
   pub behave_as: Option<String>,
   pub inbound_headers: HeaderMap,
 }

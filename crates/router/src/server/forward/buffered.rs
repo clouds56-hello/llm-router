@@ -1,25 +1,19 @@
+use super::context::ForwardContext;
 use super::recording::CompletedEventBuilder;
 use super::usage::parse_usage_any_json;
 use crate::db::HttpSnapshot;
-use crate::provider::Endpoint;
 use crate::server::error::ApiError;
 use crate::server::AppState;
 use axum::http::{HeaderMap, HeaderValue};
 use axum::response::{IntoResponse, Response};
 use bytes::Bytes;
 use serde_json::Value;
-use std::time::Instant;
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) async fn buffered_response(
   s: AppState,
   resp: reqwest::Response,
-  endpoint: Endpoint,
-  upstream_endpoint: Endpoint,
-  session_id: Option<String>,
-  request_id: Option<String>,
-  req_body: Value,
-  started: Instant,
+  ctx: ForwardContext,
+  req_body: &Value,
 ) -> Response {
   let status = resp.status();
   let resp_headers = resp.headers().clone();
@@ -37,18 +31,19 @@ pub(crate) async fn buffered_response(
     axum::http::header::CONTENT_TYPE,
     HeaderValue::from_static("application/json"),
   );
-  if let Some(id) = session_id.as_deref() {
+  if let Some(id) = ctx.session_id.as_deref() {
     if let Ok(value) = HeaderValue::from_str(id) {
       headers.insert(crate::server::SESSION_ID_HEADER, value);
     }
   }
 
-  let bytes = if upstream_endpoint == endpoint {
+  let endpoint = ctx.endpoint.unwrap_or(ctx.upstream_endpoint);
+  let bytes = if ctx.upstream_endpoint == endpoint {
     bytes
   } else {
     match serde_json::from_slice::<Value>(&bytes)
       .map_err(|e| e.to_string())
-      .and_then(|v| crate::convert::convert_response(upstream_endpoint, endpoint, &v).map_err(|e| e.to_string()))
+      .and_then(|v| crate::convert::convert_response(ctx.upstream_endpoint, endpoint, &v).map_err(|e| e.to_string()))
       .and_then(|v| serde_json::to_vec(&v).map(Bytes::from).map_err(|e| e.to_string()))
     {
       Ok(bytes) => bytes,
@@ -61,7 +56,6 @@ pub(crate) async fn buffered_response(
 
   let (pt, ct) = parse_usage_any_json(&bytes);
 
-  // Emit RequestCompleted event directly
   let event = CompletedEventBuilder::new(
     s.body_max_bytes,
     HttpSnapshot {
@@ -71,11 +65,11 @@ pub(crate) async fn buffered_response(
       headers: headers.clone(),
       body: bytes.clone(),
     },
-    started,
+    ctx.started,
     status.as_u16(),
   )
-  .with_ids(session_id.as_deref(), request_id.as_deref(), request_error.as_deref())
-  .with_request_body(&req_body, Some(endpoint))
+  .with_ids(ctx.session_id.as_deref(), ctx.request_id.as_deref(), request_error.as_deref())
+  .with_request_body(req_body, ctx.endpoint)
   .with_outbound_response(Some(&resp_headers), Some(&bytes))
   .with_usage(pt, ct)
   .build();

@@ -2,7 +2,7 @@ use crate::route::RouteResolver;
 use crate::server::{
   self,
   error::ApiError,
-  forward::{is_sse_response, passthrough_streaming_response, record_passthrough_call},
+  forward::{is_sse_response, passthrough_buffered_response, passthrough_streaming_response, ForwardContext},
   AppState,
 };
 use anyhow::{Context, Result};
@@ -531,48 +531,57 @@ async fn proxy_passthrough(
     HeaderValue::from_str(host).unwrap_or_else(|_| HeaderValue::from_static("localhost")),
   );
 
+  // Build ForwardContext from passthrough request data
+  let path = path_and_query.split('?').next().unwrap_or(&path_and_query);
+  let req_body_json = serde_json::from_slice::<serde_json::Value>(&request_body).unwrap_or(serde_json::Value::Null);
+  let ctx = ForwardContext::from_passthrough(&parts.method, path, &parts.headers, &req_body_json, started);
+
+  // Emit lifecycle events (caller owns lifecycle)
+  let project_id = server::first_header(&parts.headers, server::PROJECT_ID_HEADERS).map(|s| s.to_string());
+  let header_initiator = parts.headers.get("x-initiator")
+    .and_then(|v| v.to_str().ok())
+    .map(|v| v.trim().to_ascii_lowercase())
+    .filter(|v| v == "user" || v == "agent");
+  let initiator = header_initiator.clone()
+    .unwrap_or_else(|| crate::util::initiator::classify_initiator(&req_body_json).to_string());
+  state.events.emit(llm_core::event::Event::RequestStarted {
+    request_id: ctx.request_id.clone().unwrap_or_default(),
+    ts: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() as i64,
+    endpoint: ctx.endpoint.map(|e| e.as_str()).unwrap_or(path).to_string(),
+    initiator: header_initiator,
+    session_id: ctx.session_id.clone(),
+    project_id: project_id.clone(),
+    inbound_req: crate::db::HttpSnapshot {
+      method: Some(parts.method.to_string()),
+      url: Some(url.clone()),
+      status: None,
+      headers: parts.headers.clone(),
+      body: request_body.clone(),
+    },
+  });
+  state.events.emit(llm_core::event::Event::RequestParsed {
+    request_id: ctx.request_id.clone().unwrap_or_default(),
+    account_id: "passthrough".to_string(),
+    provider_id: host.to_string(),
+    model: ctx.model.clone(),
+    stream: req_body_json.get("stream").and_then(|v| v.as_bool()).unwrap_or(false),
+    initiator,
+    outbound_req: Some(crate::db::HttpSnapshot {
+      method: Some(parts.method.to_string()),
+      url: Some(url.clone()),
+      status: None,
+      headers: outbound_req_headers.clone(),
+      body: request_body.clone(),
+    }),
+  });
+
   let response = upstream.send().await.context("send passthrough upstream request")?;
 
   if is_sse_response(response.headers()) {
-    return Ok(passthrough_streaming_response(
-      state.clone(),
-      host.to_string(),
-      parts.method,
-      path_and_query,
-      parts.headers,
-      request_body,
-      outbound_req_headers,
-      response,
-      started,
-    ));
+    return Ok(passthrough_streaming_response(state.clone(), ctx, &req_body_json, response));
   }
-  let status = response.status();
-  let headers = response.headers().clone();
-  let response_body = response.bytes().await.context("read passthrough upstream response")?;
 
-  record_passthrough_call(
-    state,
-    host,
-    &parts.method,
-    &path_and_query,
-    &parts.headers,
-    &request_body,
-    &outbound_req_headers,
-    &headers,
-    &response_body,
-    status.as_u16(),
-    started,
-  );
-
-  let mut builder = Response::builder().status(status);
-  for (name, value) in &headers {
-    builder = builder.header(name, value);
-  }
-  Ok(
-    builder
-      .body(Body::from(response_body))
-      .unwrap_or_else(|_| Response::new(Body::empty())),
-  )
+  Ok(passthrough_buffered_response(state, &ctx, &req_body_json, response).await)
 }
 
 pub(crate) fn rewrite_target(host: &str, path: &str, method: &Method) -> Option<&'static str> {

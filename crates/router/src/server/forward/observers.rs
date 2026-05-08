@@ -1,7 +1,7 @@
 use super::recording::CompletedEventBuilder;
 use super::usage::parse_usage_any_value;
 use bytes::Bytes;
-use llm_convert::sse::ObserverMsg;
+use llm_convert::sse::{observer_channel, ObserverMsg, ObserverSender};
 use std::sync::Arc;
 
 /// Metadata for emitting StreamProgress events.
@@ -10,6 +10,20 @@ pub(super) struct StreamMeta {
   pub model: String,
   pub endpoint: String,
   pub events: Arc<llm_core::event::EventBus>,
+}
+
+/// Creates an observer channel, spawns the background stream recorder task,
+/// and returns the sender half for feeding into an SsePipeline.
+pub(super) fn spawn_stream_recorder(
+  builder: CompletedEventBuilder,
+  resp_headers: reqwest::header::HeaderMap,
+  events: Arc<llm_core::event::EventBus>,
+  max_body: usize,
+  meta: StreamMeta,
+) -> ObserverSender {
+  let (tx, rx) = observer_channel();
+  tokio::spawn(background_stream_recorder(rx, builder, resp_headers, events, max_body, meta));
+  tx
 }
 
 /// Background task that processes observer messages to build a completed event.
