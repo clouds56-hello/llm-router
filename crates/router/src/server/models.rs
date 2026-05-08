@@ -1,6 +1,6 @@
 use super::error::ApiError;
 use super::AppState;
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
 use serde_json::{json, Map, Value};
@@ -84,4 +84,16 @@ fn enrich(entry: &mut Value, id: &str, provider: &dyn crate::provider::Provider)
   if let Some(obj) = entry.as_object_mut() {
     obj.insert("x_llm_router".into(), Value::Object(meta));
   }
+}
+
+/// Mode-prefixed variant: `/{mode}/v1/models`
+/// TODO: filter models based on route mode (e.g. fuzzy only shows family names)
+pub async fn list_models_with_mode(
+  State(s): State<AppState>,
+  Path(mode): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+  super::validate_path_mode(&mode)?;
+  // For now, delegate to the standard list_models.
+  // Future: filter based on mode (e.g. exact mode shows provider/model, fuzzy shows families)
+  list_models(State(s)).await
 }

@@ -92,6 +92,18 @@ async fn track_request(req: Request<axum::body::Body>, next: Next) -> Response<a
     .await
 }
 
+/// Validates a route mode string from a path segment.
+pub(crate) fn validate_path_mode(mode: &str) -> Result<(), ApiError> {
+  match mode {
+    "route" | "passthrough" | "exact" | "fuzzy" => Ok(()),
+    _ => Err(error::ApiError::bad_request(format!(
+      "invalid route mode '{mode}' in path; expected route|passthrough|exact|fuzzy"
+    ))),
+  }
+}
+
+use error::ApiError;
+
 pub fn router(state: AppState) -> Router {
   let request_id_header = HeaderName::from_static(REQUEST_ID_HEADER);
 
@@ -146,11 +158,19 @@ pub fn router(state: AppState) -> Router {
       },
     );
 
+  // Mode-prefixed routes: /{mode}/v1/...
+  let mode_routes = Router::new()
+    .route("/{mode}/v1/models", get(models::list_models_with_mode))
+    .route("/{mode}/v1/chat/completions", post(endpoints::chat_completions_with_mode))
+    .route("/{mode}/v1/responses", post(endpoints::responses_with_mode))
+    .route("/{mode}/v1/messages", post(endpoints::messages_with_mode));
+
   Router::new()
     .route("/v1/models", get(models::list_models))
     .route("/v1/chat/completions", post(endpoints::chat_completions))
     .route("/v1/responses", post(endpoints::responses))
     .route("/v1/messages", post(endpoints::messages))
+    .merge(mode_routes)
     .route("/healthz", get(health))
     .with_state(state)
     // Layers run outermost-first on request, innermost-first on response.

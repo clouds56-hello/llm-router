@@ -293,6 +293,28 @@ impl HostPolicy {
   }
 }
 
+/// Extract route mode from Proxy-Authorization Basic header username.
+/// Format: `Proxy-Authorization: Basic <base64(username:password)>`
+/// The username is parsed as a route mode; password is ignored.
+fn extract_proxy_auth_mode(header_value: &str) -> Option<String> {
+  let encoded = header_value.strip_prefix("Basic ").or_else(|| header_value.strip_prefix("basic "))?;
+  let decoded = String::from_utf8(base64_decode(encoded.trim())?).ok()?;
+  let username = decoded.split(':').next().unwrap_or("");
+  if username.is_empty() {
+    return None;
+  }
+  // Validate it's a known mode
+  match username {
+    "route" | "passthrough" | "exact" | "fuzzy" => Some(username.to_string()),
+    _ => None,
+  }
+}
+
+fn base64_decode(input: &str) -> Option<Vec<u8>> {
+  use base64::Engine;
+  base64::engine::general_purpose::STANDARD.decode(input).ok()
+}
+
 async fn handle_client(
   stream: TcpStream,
   peer: SocketAddr,
@@ -314,6 +336,8 @@ async fn handle_client(
   let authority = parts.next().unwrap_or_default();
   let _version = parts.next().unwrap_or_default();
 
+  // Parse CONNECT headers to extract Proxy-Authorization
+  let mut proxy_route_mode: Option<String> = None;
   loop {
     let mut header_line = String::new();
     if reader.read_line(&mut header_line).await? == 0 {
@@ -321,6 +345,12 @@ async fn handle_client(
     }
     if header_line == "\r\n" || header_line == "\n" {
       break;
+    }
+    // Check for Proxy-Authorization header
+    if let Some(value) = header_line.strip_prefix("Proxy-Authorization:").or_else(|| header_line.strip_prefix("proxy-authorization:")) {
+      if let Some(mode) = extract_proxy_auth_mode(value.trim().trim_end_matches(['\r', '\n'])) {
+        proxy_route_mode = Some(mode);
+      }
     }
   }
 
@@ -332,12 +362,12 @@ async fn handle_client(
 
   let (host, port) = split_authority(authority)?;
   let intercept = port == 443 && host_policy.should_intercept(&host);
-  tracing::info!(%peer, host = %host, port, intercept, "proxy_connect");
+  tracing::info!(%peer, host = %host, port, intercept, proxy_route_mode = ?proxy_route_mode, "proxy_connect");
 
   if intercept {
     stream.write_all(CONNECT_OK).await?;
     stream.flush().await?;
-    intercept_tls(stream, &host, state, router, ca, route_resolver, http).await
+    intercept_tls(stream, &host, state, router, ca, route_resolver, http, proxy_route_mode).await
   } else {
     tunnel(stream, &host, port).await
   }
@@ -361,6 +391,7 @@ async fn intercept_tls(
   ca: Arc<ProxyCa>,
   route_resolver: Arc<RouteResolver>,
   http: reqwest::Client,
+  proxy_route_mode: Option<String>,
 ) -> Result<()> {
   let resolver = Arc::new(DynamicResolver {
     ca,
@@ -376,7 +407,7 @@ async fn intercept_tls(
   http1_builder.keep_alive(true).title_case_headers(true);
 
   let service = service_fn(move |req| {
-    route_intercepted_request(state.clone(), router.clone(), route_resolver.clone(), http.clone(), req)
+    route_intercepted_request(state.clone(), router.clone(), route_resolver.clone(), http.clone(), req, proxy_route_mode.clone())
   });
   http1_builder
     .serve_connection(TokioIo::new(tls_stream), service)
@@ -390,8 +421,21 @@ async fn route_intercepted_request(
   router: Router,
   route_resolver: Arc<RouteResolver>,
   http: reqwest::Client,
-  req: Request<hyper::body::Incoming>,
+  mut req: Request<hyper::body::Incoming>,
+  proxy_route_mode: Option<String>,
 ) -> Result<Response<Body>, std::convert::Infallible> {
+  // Inject proxy-auth-derived route mode as X-Route-Mode header if not already set
+  if let Some(ref mode) = proxy_route_mode {
+    if !req.headers().contains_key(RouteResolver::mode_header()) {
+      if let Ok(val) = HeaderValue::from_str(mode) {
+        req.headers_mut().insert(
+          http::header::HeaderName::from_static("x-route-mode"),
+          val,
+        );
+      }
+    }
+  }
+
   let host = req
     .headers()
     .get(HOST)
