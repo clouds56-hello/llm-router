@@ -1,6 +1,5 @@
-use super::recording::CallRecordBuilder;
+use super::recording::CompletedEventBuilder;
 use super::usage::parse_usage_any_value;
-use crate::db::CallRecord;
 use bytes::Bytes;
 use llm_convert::sse::ObserverMsg;
 use std::sync::Arc;
@@ -13,12 +12,12 @@ pub(super) struct StreamMeta {
   pub events: Arc<llm_core::event::EventBus>,
 }
 
-/// Background task that processes observer messages to build a call record.
+/// Background task that processes observer messages to build a completed event.
 /// Emits periodic `StreamProgress` events (~500ms).
 /// Shared between pipeline and passthrough streaming paths.
 pub(super) async fn background_stream_recorder(
   mut rx: llm_convert::sse::ObserverReceiver,
-  base_builder: CallRecordBuilder,
+  base_builder: CompletedEventBuilder,
   resp_headers: reqwest::header::HeaderMap,
   events: Arc<llm_core::event::EventBus>,
   max_body: usize,
@@ -77,25 +76,11 @@ pub(super) async fn background_stream_recorder(
 
   let request_error = had_error.then_some("stream terminated before completion");
   let captured = Bytes::from(body_buf);
-  let record = build_stream_record(
-    base_builder.with_request_error(request_error),
-    usage,
-    captured,
-    &resp_headers,
-  );
-  events.emit(llm_core::event::Event::completed_from_record(&record));
-}
-
-// NOTE: `reporter` was replaced by `events` — emit directly
-pub(super) fn build_stream_record(
-  builder: CallRecordBuilder,
-  usage: (Option<u64>, Option<u64>),
-  captured: Bytes,
-  resp_headers: &reqwest::header::HeaderMap,
-) -> CallRecord {
-  builder
+  let event = base_builder
+    .with_request_error(request_error)
     .with_response_body(captured.clone())
-    .with_outbound_response(Some(resp_headers), Some(&captured))
+    .with_outbound_response(Some(&resp_headers), Some(&captured))
     .with_usage(usage.0, usage.1)
-    .build()
+    .build();
+  events.emit(event);
 }

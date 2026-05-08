@@ -117,49 +117,6 @@ pub enum Event {
   },
 }
 
-impl Event {
-  /// Convert a legacy `CallRecord` into a `RequestCompleted` event.
-  /// Fields that belong to earlier lifecycle events are dropped.
-  pub fn completed_from_record(record: &crate::db::CallRecord) -> Self {
-    Event::RequestCompleted {
-      request_id: record.request_id.clone().unwrap_or_default(),
-      session_source: record.session_source,
-      latency_ms: record.latency_ms,
-      status: record.status,
-      prompt_tokens: record.prompt_tokens,
-      completion_tokens: record.completion_tokens,
-      request_error: record.request_error.clone(),
-      inbound_resp: record.inbound_resp.clone(),
-      outbound_resp: record.outbound_resp.clone(),
-      messages: record.messages.clone(),
-    }
-  }
-
-  /// Emit the full lifecycle (Started + Parsed + Completed) from a legacy CallRecord.
-  /// Use this when the caller has a complete record and the earlier events were not emitted.
-  pub fn emit_record(bus: &EventBus, record: crate::db::CallRecord) {
-    let request_id = record.request_id.clone().unwrap_or_default();
-    bus.emit(Event::RequestStarted {
-      request_id: request_id.clone(),
-      ts: record.ts,
-      endpoint: record.endpoint.clone(),
-      model: record.model.clone(),
-      initiator: record.initiator.clone(),
-      stream: record.stream,
-      session_id: Some(record.session_id.clone()),
-      project_id: record.project_id.clone(),
-      inbound_req: record.inbound_req.clone(),
-    });
-    bus.emit(Event::RequestParsed {
-      request_id: request_id.clone(),
-      account_id: record.account_id.clone(),
-      provider_id: record.provider_id.clone(),
-      outbound_req: record.outbound_req.clone(),
-    });
-    bus.emit(Event::completed_from_record(&record));
-  }
-}
-
 /// Non-blocking event emitter. Cloneable, stored in AppState.
 #[derive(Clone)]
 pub struct EventBus {

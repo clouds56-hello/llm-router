@@ -1,4 +1,3 @@
-use crate::db::CallRecord;
 use crate::provider::Endpoint;
 use async_trait::async_trait;
 use reqwest::header::HeaderMap;
@@ -58,7 +57,7 @@ pub trait OutputTransformer: Send + Sync {
   type Upstream;
   type Output;
 
-  async fn transform_result(&self, state: Self::State, upstream: Self::Upstream) -> (Self::Output, CallRecord);
+  async fn transform_result(&self, state: Self::State, upstream: Self::Upstream) -> Self::Output;
 
   async fn transform_sse(
     &self,

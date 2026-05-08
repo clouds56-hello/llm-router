@@ -518,26 +518,6 @@ async fn proxy_passthrough(
     .await
     .context("read passthrough request body")?;
 
-  // Emit RequestStarted for passthrough requests
-  let req_json = serde_json::from_slice::<serde_json::Value>(&request_body).unwrap_or_default();
-  let model = req_json.get("model").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
-  let endpoint = path_and_query.split('?').next().unwrap_or(&path_and_query).to_string();
-  let request_id = crate::server::first_header(&parts.headers, crate::server::REQUEST_ID_HEADERS)
-    .map(|s| s.to_string())
-    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-  let stream = req_json.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
-  state.events.emit(llm_core::event::Event::RequestStarted {
-    request_id: request_id.clone(),
-    ts: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() as i64,
-    endpoint: endpoint.clone(),
-    model: model.clone(),
-    initiator: "user".to_string(),
-    stream,
-    session_id: crate::server::first_header(&parts.headers, crate::server::SESSION_ID_HEADERS).map(|s| s.to_string()),
-    project_id: crate::server::first_header(&parts.headers, crate::server::PROJECT_ID_HEADERS).map(|s| s.to_string()),
-    inbound_req: llm_core::db::HttpSnapshot::default(),
-  });
-
   let mut upstream = http.request(parts.method.clone(), &url).body(request_body.clone());
   let mut outbound_req_headers = parts.headers.clone();
   for (name, value) in &parts.headers {
@@ -552,21 +532,6 @@ async fn proxy_passthrough(
   );
 
   let response = upstream.send().await.context("send passthrough upstream request")?;
-
-  // Emit RequestParsed for passthrough (account=passthrough, provider=host)
-  state.events.emit(llm_core::event::Event::RequestParsed {
-    request_id: request_id.clone(),
-    account_id: "passthrough".to_string(),
-    provider_id: host.to_string(),
-    outbound_req: None,
-  });
-
-  // Emit RequestResponded
-  state.events.emit(llm_core::event::Event::RequestResponded {
-    request_id: request_id.clone(),
-    status: response.status().as_u16(),
-    resp_headers: response.headers().clone(),
-  });
 
   if is_sse_response(response.headers()) {
     return Ok(passthrough_streaming_response(

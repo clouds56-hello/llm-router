@@ -18,7 +18,7 @@ pub(crate) use stream::stream_response;
 #[cfg(test)]
 mod tests {
   use super::passthrough::{is_sse_response, passthrough_streaming_response, record_passthrough_call};
-  use super::recording::{extract_request_messages, CallRecordBuilder};
+  use super::recording::{extract_request_messages, CompletedEventBuilder};
   use super::usage::parse_usage_any_value;
   use crate::config::{Account as AccountCfg, AuthType, Config};
   use crate::db::{CallRecord, SessionSource};
@@ -224,13 +224,8 @@ mod tests {
     });
     let req_body = json!({ "model": "glm-4.6", "messages": [{ "role": "user", "content": "hi" }] });
     let resp_body = Bytes::from_static(br#"{"id":"r1"}"#);
-    let record = CallRecordBuilder::for_endpoint(
-      1024 * 1024, // body_max_bytes
-      "acct",
-      "zai-coding-plan",
-      Endpoint::ChatCompletions,
-      "glm-4.6",
-      "user",
+    let event = CompletedEventBuilder::new(
+      1024 * 1024,
       crate::db::HttpSnapshot {
         method: None,
         url: None,
@@ -240,19 +235,20 @@ mod tests {
       },
       Instant::now(),
       200,
-      false,
     )
-    .with_ids(None, None, None, None)
-    .with_request_json(&HeaderMap::new(), &req_body)
+    .with_ids(None, None, None)
+    .with_request_body(&req_body, Some(Endpoint::ChatCompletions))
     .with_outbound_response(Some(&HeaderMap::new()), Some(&resp_body))
     .build();
-    assert_eq!(record.session_source, SessionSource::Auto);
-    Uuid::parse_str(&record.session_id).unwrap();
-    assert!(record
-      .messages
-      .iter()
-      .flat_map(|m| &m.parts)
-      .any(|p| p.part_type == "raw" && p.content.as_ref() == resp_body.as_ref()));
+    if let llm_core::event::Event::RequestCompleted { session_source, messages, .. } = &event {
+      assert_eq!(*session_source, SessionSource::Auto);
+      assert!(messages
+        .iter()
+        .flat_map(|m| &m.parts)
+        .any(|p| p.part_type == "raw" && p.content.as_ref() == resp_body.as_ref()));
+    } else {
+      panic!("expected RequestCompleted event");
+    }
   }
 
   #[tokio::test]
@@ -281,13 +277,8 @@ mod tests {
     });
     let req_body = json!({ "model": "glm-4.6", "messages": [] });
 
-    let record = CallRecordBuilder::for_endpoint(
-      1024 * 1024, // body_max_bytes
-      "acct",
-      "zai-coding-plan",
-      Endpoint::ChatCompletions,
-      "glm-4.6",
-      "user",
+    let event = CompletedEventBuilder::new(
+      1024 * 1024,
       crate::db::HttpSnapshot {
         method: None,
         url: None,
@@ -297,25 +288,22 @@ mod tests {
       },
       Instant::now(),
       200,
-      false,
     )
     .with_ids(
       Some("client-session"),
       Some("request-123"),
       Some("stream terminated before completion"),
-      Some("project-456"),
     )
-    .with_request_json(&HeaderMap::new(), &req_body)
+    .with_request_body(&req_body, Some(Endpoint::ChatCompletions))
     .build();
 
-    assert_eq!(record.session_id, "client-session");
-    assert_eq!(record.session_source, SessionSource::Header);
-    assert_eq!(record.request_id.as_deref(), Some("request-123"));
-    assert_eq!(
-      record.request_error.as_deref(),
-      Some("stream terminated before completion")
-    );
-    assert_eq!(record.project_id.as_deref(), Some("project-456"));
+    if let llm_core::event::Event::RequestCompleted { session_source, request_id, request_error, .. } = &event {
+      assert_eq!(*session_source, SessionSource::Header);
+      assert_eq!(request_id, "request-123");
+      assert_eq!(request_error.as_deref(), Some("stream terminated before completion"));
+    } else {
+      panic!("expected RequestCompleted event");
+    }
   }
 
   #[tokio::test]

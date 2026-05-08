@@ -122,9 +122,7 @@ struct PreparedRequest {
 struct UpstreamResponse {
   meta: RequestMeta,
   inbound_body: Value,
-  account: Arc<AccountHandle>,
   resp: reqwest::Response,
-  outbound: Option<crate::db::OutboundSnapshot>,
   started: Instant,
 }
 
@@ -163,21 +161,15 @@ impl OutputTransformer for EndpointOutputTransformer {
   type Upstream = UpstreamResponse;
   type Output = Response;
 
-  async fn transform_result(&self, state: AppState, upstream: UpstreamResponse) -> (Response, crate::db::CallRecord) {
+  async fn transform_result(&self, state: AppState, upstream: UpstreamResponse) -> Response {
     buffered_response(
       state,
-      upstream.account,
       upstream.resp,
       upstream.meta.endpoint,
       upstream.meta.upstream_endpoint,
-      upstream.meta.model,
-      upstream.meta.initiator,
       upstream.meta.session_id,
       upstream.meta.request_id,
-      upstream.meta.project_id,
-      upstream.meta.inbound_headers,
       upstream.inbound_body,
-      upstream.outbound,
       upstream.started,
     )
     .await
@@ -190,18 +182,13 @@ impl OutputTransformer for EndpointOutputTransformer {
   ) -> Response {
     stream_response(
       state,
-      upstream.account,
       upstream.resp,
       upstream.meta.endpoint,
       upstream.meta.upstream_endpoint,
       upstream.meta.model,
-      upstream.meta.initiator,
       upstream.meta.session_id,
       upstream.meta.request_id,
-      upstream.meta.project_id,
-      upstream.meta.inbound_headers,
       upstream.inbound_body,
-      upstream.outbound,
       upstream.started,
     )
     .await
@@ -322,13 +309,10 @@ pub(crate) async fn handle_endpoint(
       resp_headers: resp.headers().clone(),
     });
 
-    let outbound = prepared.capture.get().cloned();
     let upstream = UpstreamResponse {
       meta: prepared.meta,
       inbound_body: prepared.inbound_body,
-      account: prepared.account,
       resp,
-      outbound,
       started,
     };
     return Ok(if parsed.meta.stream {
@@ -336,9 +320,7 @@ pub(crate) async fn handle_endpoint(
         .transform_sse(state.clone(), upstream)
         .await
     } else {
-      let (response, record) = transformer.transform_result(state.clone(), upstream).await;
-      state.events.emit(llm_core::event::Event::completed_from_record(&record));
-      response
+      transformer.transform_result(state.clone(), upstream).await
     });
   }
 
