@@ -1,6 +1,6 @@
-use super::observers::build_stream_record;
+use super::observers::{background_stream_recorder, StreamMeta};
 use super::recording::CallRecordBuilder;
-use super::usage::{parse_usage_any_json, parse_usage_any_value};
+use super::usage::parse_usage_any_json;
 use crate::db::HttpSnapshot;
 use crate::provider::Endpoint;
 use crate::server::AppState;
@@ -10,8 +10,9 @@ use axum::http::header::CONTENT_TYPE;
 use axum::http::{HeaderMap, Method};
 use axum::response::Response;
 use bytes::Bytes;
-use llm_convert::sse::{observer_channel, ObserverMsg, SsePipeline};
+use llm_convert::sse::{observer_channel, SsePipeline};
 use serde_json::Value;
+use std::sync::Arc;
 use std::time::Instant;
 
 pub(crate) fn is_sse_response(headers: &HeaderMap) -> bool {
@@ -89,19 +90,40 @@ pub(crate) fn passthrough_streaming_response(
     None,
   );
 
-  // Create observer channel and spawn background recorder
-  let (tx, rx) = observer_channel();
-  let events = state.events.clone();
-  tokio::spawn(background_stream_recorder(rx, base_builder, record_headers, events, max_body));
+  // Extract metadata for progress events
+  let req_body_json = serde_json::from_slice::<Value>(&req_body).unwrap_or(Value::Null);
+  let progress_model = req_body_json.get("model").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+  let path = path_and_query.split('?').next().unwrap_or(&path_and_query);
+  let progress_endpoint = passthrough_endpoint(&method, path)
+    .map(|e| e.as_str())
+    .unwrap_or("unknown")
+    .to_string();
 
-  // Passthrough uses SsePipeline with tap — no transformers.
-  // From(bytes) tees raw upstream bytes for body accumulation.
-  // Parsed(json) provides pre-parsed JSON for usage extraction.
+  let (tx, rx) = observer_channel();
+  let reporter: Arc<dyn llm_core::pipeline::RequestReporter> =
+    Arc::new(EventBusReporter(state.events.clone()));
+  let meta = StreamMeta {
+    request_id: crate::server::first_header(&req_headers, crate::server::REQUEST_ID_HEADERS).map(|s| s.to_string()),
+    model: progress_model,
+    endpoint: progress_endpoint,
+    events: state.events.clone(),
+  };
+  tokio::spawn(background_stream_recorder(rx, base_builder, record_headers, reporter, max_body, meta));
+
   response_with_body(
     status,
     &headers,
     Body::from_stream(SsePipeline::from_response_with_tap(resp, tx).run()),
   )
+}
+
+/// Reporter that emits RequestCompleted events via the EventBus.
+struct EventBusReporter(Arc<llm_core::event::EventBus>);
+
+impl llm_core::pipeline::RequestReporter for EventBusReporter {
+  fn report(&self, record: crate::db::CallRecord) {
+    self.0.emit(llm_core::event::Event::RequestCompleted { record });
+  }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -188,59 +210,6 @@ fn response_with_body(status: reqwest::StatusCode, headers: &HeaderMap, body: Bo
     builder = builder.header(name, value);
   }
   builder.body(body).unwrap_or_else(|_| Response::new(Body::empty()))
-}
-
-/// Background task for passthrough streaming — accumulates body and extracts usage.
-async fn background_stream_recorder(
-  mut rx: llm_convert::sse::ObserverReceiver,
-  base_builder: CallRecordBuilder,
-  resp_headers: reqwest::header::HeaderMap,
-  events: std::sync::Arc<llm_core::event::EventBus>,
-  max_body: usize,
-) {
-  let mut body_buf: Vec<u8> = Vec::new();
-  let mut usage: (Option<u64>, Option<u64>) = (None, None);
-  let mut had_error = false;
-
-  while let Some(msg) = rx.recv().await {
-    match msg {
-      ObserverMsg::To(bytes) => {
-        // Accumulate body from encoded output bytes (bounded)
-        if max_body > 0 {
-          let remaining = max_body.saturating_sub(body_buf.len());
-          if remaining > 0 {
-            body_buf.extend_from_slice(&bytes[..bytes.len().min(remaining)]);
-          }
-        }
-      }
-      ObserverMsg::Parsed(Some(value)) => {
-        // Extract usage from pre-parsed JSON
-        let (pt, ct) = parse_usage_any_value(&value);
-        if pt.is_some() {
-          usage.0 = pt;
-        }
-        if ct.is_some() {
-          usage.1 = ct;
-        }
-      }
-      ObserverMsg::Done => break,
-      ObserverMsg::Error(_) => {
-        had_error = true;
-        break;
-      }
-      _ => {} // From, Transformed, Parsed(None) — not needed
-    }
-  }
-
-  let request_error = had_error.then_some("stream terminated before completion");
-  let captured = Bytes::from(body_buf);
-  let record = build_stream_record(
-    base_builder.with_request_error(request_error),
-    usage,
-    captured,
-    &resp_headers,
-  );
-  events.emit(llm_core::event::Event::RequestCompleted { record });
 }
 
 fn passthrough_endpoint(method: &Method, path: &str) -> Option<Endpoint> {

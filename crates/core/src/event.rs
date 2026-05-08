@@ -70,6 +70,18 @@ pub enum Event {
   // --- Control ---
   /// Request graceful shutdown; sender receives `()` when drain is complete.
   Shutdown(oneshot::Sender<()>),
+
+  // --- Streaming progress ---
+  /// Periodic progress update from an active streaming response.
+  StreamProgress {
+    request_id: Option<String>,
+    model: String,
+    endpoint: String,
+    prompt_tokens: Option<u64>,
+    completion_tokens: Option<u64>,
+    bytes_streamed: u64,
+    chunks: u64,
+  },
 }
 
 /// Non-blocking event emitter. Cloneable, stored in AppState.
