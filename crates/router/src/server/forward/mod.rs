@@ -381,6 +381,8 @@ mod tests {
 
     let body_text = std::str::from_utf8(&streamed_body).unwrap();
     assert!(body_text.contains("prompt_tokens"));
+    // Allow background recorder task to finish processing
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     // Flush the event bus to ensure the record is captured
     events.shutdown().await;
     let records = records.lock().unwrap();
