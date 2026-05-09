@@ -39,8 +39,8 @@ pub fn build_event_bus(cfg: &Config) -> Result<(Arc<EventBus>, EventReceiver, Ve
   Ok((Arc::new(bus), receiver, handlers))
 }
 
-pub fn build_state(cfg: &Config, events: Arc<EventBus>) -> Result<llm_router::server::AppState> {
-  llm_router::server::build_state(cfg, events)
+pub fn build_state(cfg: &Config, events: Arc<EventBus>) -> Result<llm_router::api::AppState> {
+  llm_router::api::build_state(cfg, events)
 }
 
 pub fn is_loopback(host: &str) -> bool {

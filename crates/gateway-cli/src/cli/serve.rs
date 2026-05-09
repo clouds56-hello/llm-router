@@ -33,7 +33,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: ServeArgs) -> Result<()> {
   let _event_thread = llm_core::event::spawn_event_loop(receiver, handlers);
   let state = crate::server_runtime::build_state(&cfg, events.clone())?;
   let n = state.pool.len();
-  let app = llm_router::server::router(state);
+  let app = llm_router::api::router(state);
 
   let addr: SocketAddr = format!("{host}:{port}")
     .parse()

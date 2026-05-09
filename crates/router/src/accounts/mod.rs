@@ -3,9 +3,10 @@
 //! session-id affinity.
 
 pub mod affinity;
+pub mod registry;
 
-use crate::pool::affinity::{Affinity, Lookup};
-use crate::route::{RouteResolution, RouteSelector};
+use crate::accounts::affinity::{Affinity, Lookup};
+use crate::routing::{RouteResolution, RouteSelector};
 use arc_swap::ArcSwap;
 use llm_config::Config;
 use llm_core::account::AccountConfig;

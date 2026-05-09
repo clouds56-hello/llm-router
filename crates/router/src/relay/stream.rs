@@ -2,7 +2,7 @@ use super::context::ForwardContext;
 use super::observers::{spawn_stream_recorder, StreamMeta};
 use super::recording::CompletedEventBuilder;
 use crate::db::HttpSnapshot;
-use crate::server::AppState;
+use crate::api::AppState;
 use axum::body::Body;
 use axum::http::{HeaderMap, HeaderValue};
 use axum::response::{IntoResponse, Response};
@@ -67,7 +67,7 @@ fn sse_headers(session_id: Option<&str>) -> HeaderMap {
   );
   if let Some(id) = session_id {
     if let Ok(value) = HeaderValue::from_str(id) {
-      headers.insert(crate::server::SESSION_ID_HEADER, value);
+      headers.insert(crate::api::SESSION_ID_HEADER, value);
     }
   }
   headers.insert(axum::http::header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));

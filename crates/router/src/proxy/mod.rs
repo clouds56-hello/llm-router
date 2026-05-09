@@ -1,12 +1,15 @@
-use crate::route::RouteResolver;
-use crate::server::{
-  self,
+mod ca;
+
+pub use ca::{load_or_generate_ca, ProxyCa};
+use ca::DynamicResolver;
+use crate::api::{
   codec::decode_json_request,
   error::ApiError,
-  forward::{is_sse_response, passthrough_buffered_response, passthrough_streaming_response, ForwardContext},
-  pipeline::infer_stream_request,
   AppState,
 };
+use crate::pipeline::infer_stream_request;
+use crate::relay::{is_sse_response, passthrough_buffered_response, passthrough_streaming_response, ForwardContext};
+use crate::routing::RouteResolver;
 use anyhow::{Context, Result};
 use axum::body::Body;
 use axum::http::{Method, Request, Response, Uri};
@@ -18,26 +21,15 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper_util::rt::TokioIo;
 use llm_config::RouteMode;
-use parking_lot::Mutex;
-use rcgen::{BasicConstraints, CertificateParams, CertifiedIssuer, IsCa, Issuer, KeyPair};
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
-use rustls::server::{ClientHello, ResolvesServerCert};
-use rustls::sign::CertifiedKey;
-use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet};
-use std::fmt;
+use std::collections::HashSet;
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
-use time::{Duration as TimeDuration, OffsetDateTime};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 use tokio_rustls::TlsAcceptor;
 
-const CA_CERT_FILE: &str = "ca.crt";
-const CA_KEY_FILE: &str = "ca.key";
-const CA_BUNDLE_FILE: &str = "ca-bundle.crt";
 const CONNECT_OK: &[u8] = b"HTTP/1.1 200 Connection Established\r\n\r\n";
 const BAD_CONNECT: &[u8] = b"HTTP/1.1 405 Method Not Allowed\r\ncontent-length: 0\r\n\r\n";
 const DEFAULT_INTERCEPT_HOSTS: &[&str] = &[
@@ -100,178 +92,6 @@ pub async fn serve(state: AppState, options: ProxyOptions) -> Result<()> {
   }
 
   Ok(())
-}
-
-pub fn load_or_generate_ca(dir: &Path, force_regenerate: bool) -> Result<ProxyCa> {
-  std::fs::create_dir_all(dir).with_context(|| format!("create ca dir {}", dir.display()))?;
-  let cert_path = dir.join(CA_CERT_FILE);
-  let key_path = dir.join(CA_KEY_FILE);
-
-  if force_regenerate || !cert_path.exists() || !key_path.exists() {
-    return generate_ca(dir);
-  }
-
-  let cert_pem = std::fs::read_to_string(&cert_path).with_context(|| format!("read {}", cert_path.display()))?;
-  let key_pem = std::fs::read_to_string(&key_path).with_context(|| format!("read {}", key_path.display()))?;
-  let signing_key = KeyPair::from_pem(&key_pem).context("parse CA private key")?;
-  let issuer = Issuer::new(ca_params(), signing_key);
-  Ok(ProxyCa {
-    dir: dir.to_path_buf(),
-    cert_pem,
-    issuer: Arc::new(issuer),
-    cert_cache: Arc::new(Mutex::new(HashMap::new())),
-  })
-}
-
-fn generate_ca(dir: &Path) -> Result<ProxyCa> {
-  let params = ca_params();
-  let key = KeyPair::generate().context("generate CA key")?;
-  let issuer = CertifiedIssuer::self_signed(params, key).context("generate CA certificate")?;
-
-  let cert_pem = issuer.pem();
-  let key_pem = issuer.key().serialize_pem();
-  write_ca_file(&dir.join(CA_CERT_FILE), cert_pem.as_bytes(), 0o644)?;
-  write_ca_file(&dir.join(CA_KEY_FILE), key_pem.as_bytes(), 0o600)?;
-
-  Ok(ProxyCa {
-    dir: dir.to_path_buf(),
-    cert_pem,
-    issuer: Arc::new(Issuer::new(ca_params(), KeyPair::from_pem(&key_pem)?)),
-    cert_cache: Arc::new(Mutex::new(HashMap::new())),
-  })
-}
-
-fn ca_params() -> CertificateParams {
-  let mut params = CertificateParams::default();
-  params
-    .distinguished_name
-    .push(rcgen::DnType::CommonName, "llm-router local proxy");
-  params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-  params.not_before = OffsetDateTime::now_utc() - TimeDuration::days(1);
-  params.not_after = OffsetDateTime::now_utc() + TimeDuration::days(3650);
-  params.key_usages = vec![
-    rcgen::KeyUsagePurpose::KeyCertSign,
-    rcgen::KeyUsagePurpose::DigitalSignature,
-    rcgen::KeyUsagePurpose::CrlSign,
-  ];
-  params
-}
-
-fn write_ca_file(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
-  std::fs::write(path, bytes).with_context(|| format!("write {}", path.display()))?;
-  #[cfg(unix)]
-  {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
-      .with_context(|| format!("chmod {}", path.display()))?;
-  }
-  Ok(())
-}
-
-#[derive(Clone)]
-pub struct ProxyCa {
-  dir: PathBuf,
-  cert_pem: String,
-  issuer: Arc<Issuer<'static, KeyPair>>,
-  cert_cache: Arc<Mutex<HashMap<String, Arc<CertifiedKey>>>>,
-}
-
-impl ProxyCa {
-  pub fn cert_path(&self) -> PathBuf {
-    self.dir.join(CA_CERT_FILE)
-  }
-
-  pub fn bundle_path(&self) -> PathBuf {
-    self.dir.join(CA_BUNDLE_FILE)
-  }
-
-  pub fn key_path(&self) -> PathBuf {
-    self.dir.join(CA_KEY_FILE)
-  }
-
-  pub fn fingerprint_sha256(&self) -> String {
-    let digest = Sha256::digest(self.cert_pem.as_bytes());
-    hexify(&digest)
-  }
-
-  pub fn ensure_bundle(&self) -> Result<PathBuf> {
-    let bundle_path = self.bundle_path();
-    let mut bundle = match detect_system_ca_bundle() {
-      Some(path) => std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?,
-      None => String::new(),
-    };
-    if !bundle.is_empty() && !bundle.ends_with('\n') {
-      bundle.push('\n');
-    }
-    if !bundle.contains(&self.cert_pem) {
-      bundle.push_str(&self.cert_pem);
-      if !bundle.ends_with('\n') {
-        bundle.push('\n');
-      }
-    }
-    write_ca_file(&bundle_path, bundle.as_bytes(), 0o644)?;
-    Ok(bundle_path)
-  }
-
-  fn certified_key_for(&self, host: &str) -> Result<Arc<CertifiedKey>> {
-    if let Some(existing) = self.cert_cache.lock().get(host).cloned() {
-      return Ok(existing);
-    }
-
-    let mut params = CertificateParams::new(vec![host.to_string()]).context("build leaf certificate params")?;
-    params.distinguished_name.push(rcgen::DnType::CommonName, host);
-    params.not_before = OffsetDateTime::now_utc() - TimeDuration::days(1);
-    params.not_after = OffsetDateTime::now_utc() + TimeDuration::days(7);
-    params.is_ca = IsCa::NoCa;
-    params.key_usages = vec![
-      rcgen::KeyUsagePurpose::DigitalSignature,
-      rcgen::KeyUsagePurpose::KeyEncipherment,
-    ];
-    params.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ServerAuth];
-
-    let leaf_key = KeyPair::generate().context("generate leaf key")?;
-    let cert = params
-      .signed_by(&leaf_key, self.issuer.as_ref())
-      .context("sign leaf certificate")?;
-    let private_key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(leaf_key.serialize_der()));
-    let certified = Arc::new(
-      CertifiedKey::from_der(
-        vec![CertificateDer::from(cert.der().clone())],
-        private_key,
-        &rustls::crypto::ring::default_provider(),
-      )
-      .context("build rustls certified key")?,
-    );
-    self.cert_cache.lock().insert(host.to_string(), certified.clone());
-    Ok(certified)
-  }
-}
-
-fn detect_system_ca_bundle() -> Option<PathBuf> {
-  let env_path = std::env::var_os("SSL_CERT_FILE").map(PathBuf::from);
-  let mut candidates = env_path.into_iter().chain(
-    [
-      "/etc/ssl/certs/ca-certificates.crt",
-      "/etc/pki/tls/certs/ca-bundle.crt",
-      "/etc/ssl/ca-bundle.pem",
-      "/etc/pki/tls/cacert.pem",
-      "/etc/ssl/cert.pem",
-    ]
-    .into_iter()
-    .map(PathBuf::from),
-  );
-  candidates.find(|path| path.is_file())
-}
-
-impl fmt::Debug for ProxyCa {
-  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    f.debug_struct("ProxyCa")
-      .field("dir", &self.dir)
-      .field("cert_path", &self.cert_path())
-      .field("key_path", &self.key_path())
-      .field("key_pem", &"***")
-      .finish()
-  }
 }
 
 #[derive(Clone)]
@@ -555,7 +375,7 @@ async fn proxy_passthrough(
   let ctx = ForwardContext::from_passthrough(&parts.method, path, &parts.headers, &req_body_json, started);
 
   // Emit lifecycle events (caller owns lifecycle)
-  let project_id = server::first_header(&parts.headers, server::PROJECT_ID_HEADERS).map(|s| s.to_string());
+  let project_id = crate::api::first_header(&parts.headers, crate::api::PROJECT_ID_HEADERS).map(|s| s.to_string());
   let header_initiator = parts
     .headers
     .get("x-initiator")
@@ -580,7 +400,7 @@ async fn proxy_passthrough(
       body: request_body.clone(),
     },
   });
-  let mut completion = server::completion::CompletionGuard::new(state.events.clone(), ctx.request_id.clone(), started);
+  let mut completion = crate::api::completion::CompletionGuard::new(state.events.clone(), ctx.request_id.clone(), started);
   let initiator = header_initiator
     .unwrap_or_else(|| crate::util::initiator::classify_initiator(&req_body_json).to_string());
   let stream = infer_stream_request(&parts.headers, &req_body_json);
@@ -646,7 +466,7 @@ pub(crate) fn rewrite_target(host: &str, path: &str, method: &Method) -> Option<
 }
 
 fn proxy_router(state: AppState) -> Router {
-  server::router(state)
+  crate::api::router(state)
 }
 
 fn split_authority(authority: &str) -> Result<(String, u16)> {
@@ -659,26 +479,4 @@ fn split_authority(authority: &str) -> Result<(String, u16)> {
       .parse()
       .with_context(|| format!("invalid CONNECT port in '{authority}'"))?,
   ))
-}
-
-fn hexify(bytes: &[u8]) -> String {
-  let mut out = String::with_capacity(bytes.len() * 2);
-  for b in bytes {
-    use std::fmt::Write as _;
-    let _ = write!(out, "{b:02x}");
-  }
-  out
-}
-
-#[derive(Debug)]
-struct DynamicResolver {
-  ca: Arc<ProxyCa>,
-  fallback_host: String,
-}
-
-impl ResolvesServerCert for DynamicResolver {
-  fn resolve(&self, client_hello: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
-    let host = client_hello.server_name().unwrap_or(&self.fallback_host);
-    self.ca.certified_key_for(host).ok()
-  }
 }

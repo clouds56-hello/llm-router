@@ -2,9 +2,9 @@ use super::context::ForwardContext;
 use super::recording::CompletedEventBuilder;
 use super::usage::parse_usage_any_json;
 use crate::db::HttpSnapshot;
-use crate::server::codec::maybe_compress_buffered_response;
-use crate::server::error::ApiError;
-use crate::server::AppState;
+use crate::api::codec::maybe_compress_buffered_response;
+use crate::api::error::ApiError;
+use crate::api::AppState;
 use axum::http::{HeaderMap, HeaderValue};
 use axum::response::{IntoResponse, Response};
 use bytes::Bytes;
@@ -34,7 +34,7 @@ pub(crate) async fn buffered_response(
   );
   if let Some(id) = ctx.session_id.as_deref() {
     if let Ok(value) = HeaderValue::from_str(id) {
-      headers.insert(crate::server::SESSION_ID_HEADER, value);
+      headers.insert(crate::api::SESSION_ID_HEADER, value);
     }
   }
 

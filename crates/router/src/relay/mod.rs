@@ -26,7 +26,7 @@ mod tests {
   use crate::config::{Account as AccountCfg, AuthType, Config};
   use crate::db::{CallRecord, SessionSource, Usage};
   use crate::provider::Endpoint;
-  use crate::server::build_state;
+  use crate::api::build_state;
   use crate::util::secret::Secret;
   use axum::body::to_bytes;
   use axum::http::{HeaderMap, Method};

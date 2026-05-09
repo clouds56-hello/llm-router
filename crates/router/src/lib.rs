@@ -1,10 +1,11 @@
 use anyhow::{anyhow, Result};
 
-pub mod pool;
+pub mod accounts;
+pub mod api;
+pub mod pipeline;
 pub mod proxy;
-pub mod registry;
-pub mod route;
-pub mod server;
+pub mod relay;
+pub mod routing;
 
 pub use llm_config as config;
 pub use llm_config::profiles;

@@ -1,9 +1,9 @@
-use super::error::ApiError;
-use super::forward::{buffered_response, stream_response, ForwardContext};
-use super::{first_header, AppState, PROJECT_ID_HEADERS, REQUEST_ID_HEADERS, SESSION_ID_HEADERS};
-use crate::pool::{AccountHandle, EndpointAcquire};
+use crate::accounts::{AccountHandle, EndpointAcquire};
+use crate::api::error::ApiError;
+use crate::api::{first_header, AppState, PROJECT_ID_HEADERS, REQUEST_ID_HEADERS, SESSION_ID_HEADERS};
 use crate::provider::{new_outbound_capture, Endpoint, RequestCtx};
-use crate::route::RouteResolution;
+use crate::relay::{buffered_response, stream_response, ForwardContext};
+use crate::routing::RouteResolution;
 use async_trait::async_trait;
 use axum::http::header::ACCEPT;
 use axum::http::{HeaderMap, StatusCode};
@@ -121,7 +121,7 @@ struct ResolvedRequest {
   meta: RequestMeta,
   body: Value,
   raw_body: Bytes,
-  content_encoding: Option<super::codec::ContentEncodingKind>,
+  content_encoding: Option<crate::api::codec::ContentEncodingKind>,
   route: RouteResolution,
   account: Arc<AccountHandle>,
 }
@@ -132,7 +132,7 @@ struct PreparedRequest {
   upstream_body: Value,
   upstream_wire_body: Bytes,
   debug_outbound_body: Bytes,
-  content_encoding: Option<super::codec::ContentEncodingKind>,
+  content_encoding: Option<crate::api::codec::ContentEncodingKind>,
   account: Arc<AccountHandle>,
   capture: crate::provider::OutboundCapture,
 }
@@ -214,7 +214,7 @@ pub(crate) async fn handle_endpoint(
   state: AppState,
   parser: &dyn RequestParser,
   headers: HeaderMap,
-  decoded: super::codec::DecodedJsonRequest,
+  decoded: crate::api::codec::DecodedJsonRequest,
 ) -> Result<Response, ApiError> {
   let resolver = PoolResolver;
   let sender = ProviderSender;
@@ -248,7 +248,7 @@ pub(crate) async fn handle_endpoint(
       body: raw_body,
     },
   });
-  let mut completion = super::completion::CompletionGuard::new(state.events.clone(), request_id.clone(), started);
+  let mut completion = crate::api::completion::CompletionGuard::new(state.events.clone(), request_id.clone(), started);
 
   let span = tracing::Span::current();
   span.record("model", parsed.meta.model.as_str());
@@ -275,7 +275,7 @@ pub(crate) async fn handle_endpoint(
     resolved.raw_body = decoded.raw_body.clone();
     resolved.content_encoding = decoded.encoding;
     let account_id = resolved.account.id();
-    super::record_last_account(&account_id);
+    crate::api::record_last_account(&account_id);
 
     let attempt_span = info_span!(
       "attempt",
@@ -432,7 +432,7 @@ fn resolve_request(state: &AppState, parsed: ParsedRequest, attempt: usize) -> R
       parsed
         .meta
         .inbound_headers
-        .get(crate::route::RouteResolver::mode_header())
+        .get(crate::routing::RouteResolver::mode_header())
         .and_then(|v| v.to_str().ok()),
     )
     .map_err(|e| ApiError::bad_request(e.to_string()))?;
@@ -487,7 +487,7 @@ fn prepare_request(req: ResolvedRequest) -> crate::provider::Result<PreparedRequ
   let upstream_wire_body = if upstream_body == req.body {
     req.raw_body.clone()
   } else {
-    super::codec::encode_body_bytes(debug_outbound_body.as_ref(), req.content_encoding)
+    crate::api::codec::encode_body_bytes(debug_outbound_body.as_ref(), req.content_encoding)
       .map_err(|message| crate::provider::error::Error::Profiles { message })?
   };
   Ok(PreparedRequest {
@@ -535,7 +535,7 @@ mod tests {
   use super::*;
   use crate::config::{Account as AccountCfg, Config};
   use crate::provider::{Endpoint, Provider};
-  use crate::server::build_state;
+  use crate::api::build_state;
   use crate::util::secret::Secret;
   use axum::http::HeaderValue;
   use llm_core::event::EventBus;

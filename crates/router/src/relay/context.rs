@@ -1,5 +1,5 @@
 use crate::provider::Endpoint;
-use crate::server::forward::passthrough::passthrough_endpoint;
+use crate::relay::passthrough::passthrough_endpoint;
 use axum::http::Method;
 use serde_json::Value;
 use std::time::Instant;
@@ -56,10 +56,10 @@ impl ForwardContext {
       .and_then(|v| v.as_str())
       .unwrap_or("unknown")
       .to_string();
-    let request_id = crate::server::first_header(req_headers, crate::server::REQUEST_ID_HEADERS)
+    let request_id = crate::api::first_header(req_headers, crate::api::REQUEST_ID_HEADERS)
       .map(|s| s.to_string())
       .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    let session_id = crate::server::first_header(req_headers, crate::server::SESSION_ID_HEADERS).map(|s| s.to_string());
+    let session_id = crate::api::first_header(req_headers, crate::api::SESSION_ID_HEADERS).map(|s| s.to_string());
     // For passthrough, upstream_endpoint == endpoint (no translation)
     let upstream_endpoint = endpoint.unwrap_or(Endpoint::ChatCompletions);
 

@@ -2,12 +2,10 @@ pub mod codec;
 pub(crate) mod completion;
 pub mod endpoints;
 pub mod error;
-pub mod forward;
 pub mod models;
-pub mod pipeline;
 
-use crate::pool::AccountPool;
-use crate::route::RouteResolver;
+use crate::accounts::AccountPool;
+use crate::routing::RouteResolver;
 use anyhow::Result;
 use axum::http::{HeaderMap, HeaderName, Request, Response};
 use axum::middleware::{self, Next};
@@ -196,7 +194,7 @@ async fn health() -> &'static str {
 
 pub fn build_state(cfg: &Config, events: Arc<EventBus>) -> Result<AppState> {
   cfg.validate()?;
-  let pool = AccountPool::from_config_with(cfg, crate::registry::build_for_account)?;
+  let pool = AccountPool::from_config_with(cfg, crate::accounts::registry::build_for_account)?;
   let route = Arc::new(RouteResolver::new(cfg.server.route_mode, &cfg.model_families));
   let http = llm_core::util::http::build_client(&cfg.proxy.to_http_options())?;
   let body_max_bytes = if cfg.db.enabled { cfg.db.body_max_bytes } else { 0 };
