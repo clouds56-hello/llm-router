@@ -19,6 +19,11 @@ const MIGRATIONS: &[migrate::Migration] = &[
     name: "lifecycle_columns",
     sql: include_str!("../../../../scripts/migrations/usage/003_lifecycle_columns.sql"),
   },
+  migrate::Migration {
+    version: 4,
+    name: "add_usage_breakdown",
+    sql: include_str!("../../../../scripts/migrations/usage/004_add_usage_breakdown.sql"),
+  },
 ];
 
 pub fn latest_version() -> u32 {
@@ -49,8 +54,8 @@ impl UsageDb {
 
   pub fn record(&mut self, r: &CallRecord) -> Result<()> {
     self.conn.execute(
-      "INSERT OR REPLACE INTO requests (ts, session_id, request_id, project_id, endpoint, account_id, provider_id, model, initiator, prompt_tok, completion_tok, latency_ms, status, stream)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+      "INSERT OR REPLACE INTO requests (ts, session_id, request_id, project_id, endpoint, account_id, provider_id, model, initiator, input_tok, output_tok, cached_tok, reasoning_tok, latency_ms, status, stream)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
       params![
         r.ts,
         r.session_id,
@@ -61,8 +66,10 @@ impl UsageDb {
         r.provider_id,
         r.model,
         r.initiator,
-        r.prompt_tokens.map(|v| v as i64),
-        r.completion_tokens.map(|v| v as i64),
+        r.usage.input_tokens.map(|v| v as i64),
+        r.usage.output_tokens.map(|v| v as i64),
+        r.usage.details.cache_read.map(|v| v as i64),
+        r.usage.details.reasoning.map(|v| v as i64),
         r.latency_ms as i64,
         r.status as i64,
         r.stream as i64,
@@ -74,7 +81,8 @@ impl UsageDb {
   pub fn summary(&self, since_ts: i64, account: Option<&str>, provider: Option<&str>) -> Result<Vec<RowSummary>> {
     let mut sql = String::from(
       "SELECT account_id, provider_id, model, initiator, COUNT(*) AS n,
-              COALESCE(SUM(prompt_tok),0), COALESCE(SUM(completion_tok),0),
+              COALESCE(SUM(input_tok),0), COALESCE(SUM(output_tok),0),
+              COALESCE(SUM(cached_tok),0), COALESCE(SUM(reasoning_tok),0),
               COALESCE(AVG(latency_ms),0)
        FROM requests
        WHERE ts >= ?1",
@@ -103,9 +111,11 @@ impl UsageDb {
         model: row.get::<_, String>(2)?,
         initiator: row.get::<_, String>(3)?,
         count: row.get::<_, i64>(4)? as u64,
-        prompt_tokens: row.get::<_, i64>(5)? as u64,
-        completion_tokens: row.get::<_, i64>(6)? as u64,
-        avg_latency_ms: row.get::<_, f64>(7)?,
+        input_tokens: row.get::<_, i64>(5)? as u64,
+        output_tokens: row.get::<_, i64>(6)? as u64,
+        cached_tokens: row.get::<_, i64>(7)? as u64,
+        reasoning_tokens: row.get::<_, i64>(8)? as u64,
+        avg_latency_ms: row.get::<_, f64>(9)?,
       })
     };
 
@@ -134,15 +144,17 @@ pub struct RowSummary {
   pub model: String,
   pub initiator: String,
   pub count: u64,
-  pub prompt_tokens: u64,
-  pub completion_tokens: u64,
+  pub input_tokens: u64,
+  pub output_tokens: u64,
+  pub cached_tokens: u64,
+  pub reasoning_tokens: u64,
   pub avg_latency_ms: f64,
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::db::{HttpSnapshot, SessionSource};
+  use crate::db::{HttpSnapshot, SessionSource, Usage};
   use llm_core::db::CallRecord;
 
   #[test]
@@ -167,8 +179,7 @@ mod tests {
       status: 200,
       stream: false,
       latency_ms: 1,
-      prompt_tokens: None,
-      completion_tokens: None,
+      usage: Usage::default(),
       inbound_req: HttpSnapshot::default(),
       outbound_req: None,
       outbound_resp: None,

@@ -2,6 +2,7 @@ use super::recording::CompletedEventBuilder;
 use super::usage::parse_usage_any_value;
 use bytes::Bytes;
 use llm_convert::sse::{observer_channel, ObserverMsg, ObserverSender};
+use llm_core::db::Usage;
 use std::sync::Arc;
 
 /// Metadata for emitting StreamProgress and the terminal RequestCompleted event.
@@ -47,7 +48,7 @@ pub(super) async fn background_stream_recorder(
   use tokio::time::{interval, Duration};
 
   let mut body_buf: Vec<u8> = Vec::new();
-  let mut usage: (Option<u64>, Option<u64>) = (None, None);
+  let mut usage = Usage::default();
   let mut had_error = false;
   let mut bytes_streamed: u64 = 0;
   let mut chunks: u64 = 0;
@@ -71,9 +72,11 @@ pub(super) async fn background_stream_recorder(
             }
           }
           Some(ObserverMsg::Parsed(Some(value)) | ObserverMsg::Transformed(Some(value))) => {
-            let (pt, ct) = parse_usage_any_value(&value);
-            if pt.is_some() { usage.0 = pt; }
-            if ct.is_some() { usage.1 = ct; }
+            let parsed = parse_usage_any_value(&value);
+            if parsed.input_tokens.is_some() { usage.input_tokens = parsed.input_tokens; }
+            if parsed.output_tokens.is_some() { usage.output_tokens = parsed.output_tokens; }
+            if parsed.details.cache_read.is_some() { usage.details.cache_read = parsed.details.cache_read; }
+            if parsed.details.reasoning.is_some() { usage.details.reasoning = parsed.details.reasoning; }
           }
           Some(ObserverMsg::Done) => break,
           Some(ObserverMsg::Error(_)) => { had_error = true; break; }
@@ -86,8 +89,7 @@ pub(super) async fn background_stream_recorder(
           request_id: meta.request_id.clone(),
           model: meta.model.clone(),
           endpoint: meta.endpoint.clone(),
-          prompt_tokens: usage.0,
-          completion_tokens: usage.1,
+          usage: usage.clone(),
           bytes_streamed,
           chunks,
         });
@@ -101,7 +103,7 @@ pub(super) async fn background_stream_recorder(
     .with_request_error(request_error)
     .with_response_body(captured.clone())
     .with_outbound_response(Some(&resp_headers), Some(&captured))
-    .with_usage(usage.0, usage.1)
+    .with_usage(usage)
     .build();
   events.emit(event);
 

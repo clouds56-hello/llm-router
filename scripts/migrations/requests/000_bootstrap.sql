@@ -17,8 +17,10 @@ CREATE TABLE requests (
   status INTEGER NOT NULL,
   stream INTEGER NOT NULL,
   latency_ms INTEGER NOT NULL,
-  prompt_tok INTEGER,
-  completion_tok INTEGER,
+  input_tok INTEGER,
+  output_tok INTEGER,
+  cached_tok INTEGER,
+  reasoning_tok INTEGER,
 
   inbound_req_method   TEXT,
   inbound_req_url      TEXT,

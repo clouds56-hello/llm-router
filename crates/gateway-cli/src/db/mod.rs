@@ -7,6 +7,8 @@ use bytes::Bytes;
 use snafu::Snafu;
 
 pub use llm_core::db::{CallRecord, DbPaths, HttpSnapshot, MessageRecord, PartRecord};
+#[allow(unused_imports)]
+pub(crate) use llm_core::db::{Usage, UsageDetails};
 pub use usage::UsageDb;
 
 #[cfg(test)]
@@ -161,7 +163,7 @@ impl EventHandler for DbEventHandler {
           p.outbound_req = outbound_req.clone();
         }
       }
-      Event::RequestResult { request_id, attempt, session_source, latency_ms, status, prompt_tokens, completion_tokens, request_error, inbound_resp, outbound_resp, messages } => {
+      Event::RequestResult { request_id, attempt, session_source, latency_ms, status, usage, request_error, inbound_resp, outbound_resp, messages } => {
         let key = (request_id.clone(), *attempt);
         let composite_id = if *attempt == 0 {
           request_id.clone()
@@ -185,8 +187,7 @@ impl EventHandler for DbEventHandler {
             status: *status,
             stream: p.stream,
             latency_ms: *latency_ms,
-            prompt_tokens: *prompt_tokens,
-            completion_tokens: *completion_tokens,
+            usage: usage.clone(),
             inbound_req: p.inbound_req,
             outbound_req: p.outbound_req,
             outbound_resp: outbound_resp.clone(),
@@ -210,8 +211,7 @@ impl EventHandler for DbEventHandler {
             status: *status,
             stream: false,
             latency_ms: *latency_ms,
-            prompt_tokens: *prompt_tokens,
-            completion_tokens: *completion_tokens,
+            usage: usage.clone(),
             inbound_req: HttpSnapshot::default(),
             outbound_req: None,
             outbound_resp: outbound_resp.clone(),
@@ -288,8 +288,7 @@ mod tests {
       session_source: SessionSource::Header,
       latency_ms: 10,
       status,
-      prompt_tokens: None,
-      completion_tokens: None,
+      usage: Usage::default(),
       request_error: error.map(str::to_string),
       inbound_resp: HttpSnapshot {
         method: None,

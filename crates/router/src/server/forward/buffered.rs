@@ -54,7 +54,7 @@ pub(crate) async fn buffered_response(
     }
   };
 
-  let (pt, ct) = parse_usage_any_json(&bytes);
+  let usage = parse_usage_any_json(&bytes);
 
   let event = CompletedEventBuilder::new(
     s.body_max_bytes,
@@ -73,7 +73,7 @@ pub(crate) async fn buffered_response(
   .with_attempt(ctx.attempt)
   .with_request_body(req_body, ctx.endpoint)
   .with_outbound_response(Some(&resp_headers), Some(&bytes))
-  .with_usage(pt, ct)
+  .with_usage(usage)
   .build();
   s.events.emit(event);
 

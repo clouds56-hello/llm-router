@@ -17,6 +17,11 @@ const MIGRATIONS: &[migrate::Migration] = &[
     name: "add_correlation_and_error",
     sql: include_str!("../../../../scripts/migrations/requests/002_add_correlation_and_error.sql"),
   },
+  migrate::Migration {
+    version: 3,
+    name: "add_usage_breakdown",
+    sql: include_str!("../../../../scripts/migrations/requests/003_add_usage_breakdown.sql"),
+  },
 ];
 
 pub fn latest_version() -> u32 {
@@ -64,13 +69,13 @@ impl RequestsDb {
 
     conn.execute(
       "INSERT INTO requests (ts, session_id, request_id, request_error, endpoint, account_id, provider_id, model, initiator, status, stream, latency_ms,
-                             prompt_tok, completion_tok,
+                             input_tok, output_tok, cached_tok, reasoning_tok,
                              inbound_req_method, inbound_req_url, inbound_req_headers, inbound_req_body,
                              outbound_req_method, outbound_req_url, outbound_req_headers, outbound_req_body,
                              outbound_resp_status, outbound_resp_headers, outbound_resp_body,
                              inbound_resp_status, inbound_resp_headers, inbound_resp_body)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
-               ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28)",
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
+               ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30)",
       params![
         r.ts,
         r.session_id,
@@ -84,8 +89,10 @@ impl RequestsDb {
         r.status as i64,
         r.stream as i64,
         r.latency_ms as i64,
-        r.prompt_tokens.map(|v| v as i64),
-        r.completion_tokens.map(|v| v as i64),
+        r.usage.input_tokens.map(|v| v as i64),
+        r.usage.output_tokens.map(|v| v as i64),
+        r.usage.details.cache_read.map(|v| v as i64),
+        r.usage.details.reasoning.map(|v| v as i64),
         r.inbound_req.method.as_deref(),
         r.inbound_req.url.as_deref(),
         inbound_req_headers.as_ref(),
@@ -154,7 +161,7 @@ fn day_key(ts: i64) -> String {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::db::{CallRecord, HttpSnapshot, SessionSource};
+  use crate::db::{CallRecord, HttpSnapshot, SessionSource, Usage};
 
   #[test]
   fn fresh_day_file_has_canonical_columns() {
@@ -165,6 +172,10 @@ mod tests {
     for col in [
       "request_id",
       "request_error",
+      "input_tok",
+      "output_tok",
+      "cached_tok",
+      "reasoning_tok",
       "inbound_req_headers",
       "inbound_req_body",
       "outbound_req_headers",
@@ -186,7 +197,7 @@ mod tests {
       .unwrap()
       .query_row([], |r| r.get(0))
       .unwrap();
-    assert_eq!(v, 2);
+    assert_eq!(v, 3);
   }
 
   #[test]
@@ -230,8 +241,7 @@ mod tests {
       status: 200,
       stream: true,
       latency_ms: 1,
-      prompt_tokens: None,
-      completion_tokens: None,
+      usage: Usage::default(),
       inbound_req: HttpSnapshot::default(),
       outbound_req: None,
       outbound_resp: None,

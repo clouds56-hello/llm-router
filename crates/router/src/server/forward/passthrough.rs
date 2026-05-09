@@ -35,7 +35,7 @@ pub(crate) async fn passthrough_buffered_response(
   let resp_headers = resp.headers().clone();
   let resp_body = resp.bytes().await.unwrap_or_default();
 
-  let (prompt_tokens, completion_tokens) = parse_usage_any_json(&resp_body);
+  let usage = parse_usage_any_json(&resp_body);
 
   let event = CompletedEventBuilder::new(
     s.body_max_bytes,
@@ -54,7 +54,7 @@ pub(crate) async fn passthrough_buffered_response(
   .with_attempt(ctx.attempt)
   .with_request_body(req_body, ctx.endpoint)
   .with_outbound_response(Some(&resp_headers), Some(&resp_body))
-  .with_usage(prompt_tokens, completion_tokens)
+  .with_usage(usage)
   .build();
   s.events.emit(event);
 

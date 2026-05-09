@@ -10,6 +10,7 @@
 
 use console::style;
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
+use llm_core::db::Usage;
 use llm_core::event::{Event, EventHandler};
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -36,8 +37,7 @@ struct BarState {
   attempt: u32,
   sent_bytes: u64,
   recv_bytes: u64,
-  prompt_tokens: u64,
-  completion_tokens: u64,
+  usage: Usage,
 }
 
 impl BarState {
@@ -88,6 +88,30 @@ fn style_status(status: u16) -> console::StyledObject<u16> {
     400..=499 => style(status).yellow(),
     500..=599 => style(status).red(),
     _ => style(status),
+  }
+}
+
+/// Format a [`Usage`] for the success line: ` in=N out=M cache=K reason=R`,
+/// omitting any field whose value is None or 0. Returns an empty string if no
+/// fields are set; otherwise the result starts with a leading space.
+fn format_usage(u: &Usage) -> String {
+  let mut parts = Vec::with_capacity(4);
+  if let Some(v) = u.input_tokens {
+    if v > 0 { parts.push(format!("in={v}")); }
+  }
+  if let Some(v) = u.output_tokens {
+    if v > 0 { parts.push(format!("out={v}")); }
+  }
+  if let Some(v) = u.details.cache_read {
+    if v > 0 { parts.push(format!("cache={v}")); }
+  }
+  if let Some(v) = u.details.reasoning {
+    if v > 0 { parts.push(format!("reason={v}")); }
+  }
+  if parts.is_empty() {
+    String::new()
+  } else {
+    format!(" {}", parts.join(" "))
   }
 }
 
@@ -183,8 +207,7 @@ impl EventHandler for ProgressEventHandler {
           attempt: 0,
           sent_bytes: 0,
           recv_bytes: 0,
-          prompt_tokens: 0,
-          completion_tokens: 0,
+          usage: Usage::default(),
         };
         self.bars.insert(request_id.clone(), state);
         self.in_flight = self.in_flight.saturating_add(1);
@@ -224,18 +247,23 @@ impl EventHandler for ProgressEventHandler {
       Event::StreamProgress {
         request_id,
         bytes_streamed,
+        usage,
         ..
       } => {
         if let Some(state) = self.bars.get_mut(request_id) {
           state.recv_bytes = *bytes_streamed;
+          // Merge any non-None usage fields seen so far.
+          if usage.input_tokens.is_some() { state.usage.input_tokens = usage.input_tokens; }
+          if usage.output_tokens.is_some() { state.usage.output_tokens = usage.output_tokens; }
+          if usage.details.cache_read.is_some() { state.usage.details.cache_read = usage.details.cache_read; }
+          if usage.details.reasoning.is_some() { state.usage.details.reasoning = usage.details.reasoning; }
         }
         self.refresh(request_id);
       }
       Event::RequestResult {
         request_id,
         inbound_resp,
-        prompt_tokens,
-        completion_tokens,
+        usage,
         ..
       } => {
         if let Some(state) = self.bars.get_mut(request_id) {
@@ -243,8 +271,7 @@ impl EventHandler for ProgressEventHandler {
           if body_len > state.recv_bytes {
             state.recv_bytes = body_len;
           }
-          state.prompt_tokens = prompt_tokens.unwrap_or(0);
-          state.completion_tokens = completion_tokens.unwrap_or(0);
+          state.usage = usage.clone();
         }
       }
       Event::RequestCompleted {
@@ -266,7 +293,7 @@ impl EventHandler for ProgressEventHandler {
           let final_msg = if *success {
             let status = final_status.unwrap_or(0);
             format!(
-              "[{}] {} {} {} {} sent={:.1}kB recv={:.1}kB in={} out={} latency={:.1}s{}",
+              "[{}] {} {} {} {} sent={:.1}kB recv={:.1}kB{} latency={:.1}s{}",
               style(&id_short).dim(),
               style("✓").green().bold(),
               style_status(status),
@@ -274,8 +301,7 @@ impl EventHandler for ProgressEventHandler {
               style(truncate(&state.account, 16)).magenta(),
               (state.sent_bytes as f64) / 1024.0,
               (state.recv_bytes as f64) / 1024.0,
-              state.prompt_tokens,
-              state.completion_tokens,
+              format_usage(&state.usage),
               latency_s,
               attempts_part,
             )

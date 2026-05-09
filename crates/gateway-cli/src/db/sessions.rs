@@ -150,7 +150,7 @@ fn hash_part(part_type: &str, content: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::db::{CallRecord, HttpSnapshot, SessionSource};
+  use crate::db::{CallRecord, HttpSnapshot, SessionSource, Usage};
   use bytes::Bytes;
 
   fn rec(session_id: &str, parts: Vec<(String, Bytes)>) -> CallRecord {
@@ -169,8 +169,7 @@ mod tests {
       status: 200,
       stream: false,
       latency_ms: 1,
-      prompt_tokens: None,
-      completion_tokens: None,
+      usage: Usage::default(),
       inbound_req: HttpSnapshot::default(),
       outbound_req: None,
       outbound_resp: None,

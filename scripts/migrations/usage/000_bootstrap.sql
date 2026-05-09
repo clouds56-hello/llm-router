@@ -14,8 +14,10 @@ CREATE TABLE requests (
   provider_id    TEXT,
   model          TEXT    NOT NULL,
   initiator      TEXT    NOT NULL DEFAULT 'user',
-  prompt_tok     INTEGER,
-  completion_tok INTEGER,
+  input_tok      INTEGER,
+  output_tok     INTEGER,
+  cached_tok     INTEGER,
+  reasoning_tok  INTEGER,
   latency_ms     INTEGER,
   status         INTEGER,
   stream         INTEGER NOT NULL DEFAULT 0

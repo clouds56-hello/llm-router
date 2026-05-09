@@ -1,4 +1,4 @@
-use crate::db::{HttpSnapshot, MessageRecord, PartRecord, SessionSource};
+use crate::db::{HttpSnapshot, MessageRecord, PartRecord, SessionSource, Usage};
 use crate::provider::Endpoint;
 use bytes::Bytes;
 use llm_core::event::Event;
@@ -16,8 +16,7 @@ pub(super) struct CompletedEventBuilder {
   message_endpoint: Option<Endpoint>,
   outbound_resp: Option<HttpSnapshot>,
   inbound_resp: HttpSnapshot,
-  prompt_tokens: Option<u64>,
-  completion_tokens: Option<u64>,
+  usage: Usage,
   started: Instant,
   status: u16,
 }
@@ -40,8 +39,7 @@ impl CompletedEventBuilder {
       message_endpoint: None,
       outbound_resp: None,
       inbound_resp,
-      prompt_tokens: None,
-      completion_tokens: None,
+      usage: Usage::default(),
       started,
       status,
     }
@@ -85,9 +83,8 @@ impl CompletedEventBuilder {
     self
   }
 
-  pub(crate) fn with_usage(mut self, prompt_tokens: Option<u64>, completion_tokens: Option<u64>) -> Self {
-    self.prompt_tokens = prompt_tokens;
-    self.completion_tokens = completion_tokens;
+  pub(crate) fn with_usage(mut self, usage: Usage) -> Self {
+    self.usage = usage;
     self
   }
 
@@ -120,8 +117,7 @@ impl CompletedEventBuilder {
       session_source,
       latency_ms,
       status: self.status,
-      prompt_tokens: self.prompt_tokens,
-      completion_tokens: self.completion_tokens,
+      usage: self.usage,
       request_error: self.request_error,
       inbound_resp: {
         let mut snap = self.inbound_resp;

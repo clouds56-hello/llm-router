@@ -1,4 +1,4 @@
-use crate::db::{HttpSnapshot, MessageRecord, SessionSource};
+use crate::db::{HttpSnapshot, MessageRecord, SessionSource, Usage};
 use reqwest::header::HeaderMap;
 use tokio::sync::{mpsc, oneshot};
 
@@ -47,8 +47,7 @@ pub enum Event {
     session_source: SessionSource,
     latency_ms: u64,
     status: u16,
-    prompt_tokens: Option<u64>,
-    completion_tokens: Option<u64>,
+    usage: Usage,
     request_error: Option<String>,
     inbound_resp: HttpSnapshot,
     outbound_resp: Option<HttpSnapshot>,
@@ -120,8 +119,7 @@ pub enum Event {
     request_id: String,
     model: String,
     endpoint: String,
-    prompt_tokens: Option<u64>,
-    completion_tokens: Option<u64>,
+    usage: Usage,
     bytes_streamed: u64,
     chunks: u64,
   },

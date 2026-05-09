@@ -23,6 +23,21 @@ impl SessionSource {
   }
 }
 
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct UsageDetails {
+  pub cache_read: Option<u64>,
+  pub reasoning: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Usage {
+  /// Total prompt/input tokens (includes any cached tokens).
+  pub input_tokens: Option<u64>,
+  /// Completion/output tokens.
+  pub output_tokens: Option<u64>,
+  pub details: UsageDetails,
+}
+
 #[derive(Debug, Clone)]
 pub struct CallRecord {
   pub ts: i64,
@@ -39,8 +54,7 @@ pub struct CallRecord {
   pub status: u16,
   pub stream: bool,
   pub latency_ms: u64,
-  pub prompt_tokens: Option<u64>,
-  pub completion_tokens: Option<u64>,
+  pub usage: Usage,
   pub inbound_req: HttpSnapshot,
   pub outbound_req: Option<HttpSnapshot>,
   pub outbound_resp: Option<HttpSnapshot>,

@@ -24,7 +24,7 @@ mod tests {
   use super::recording::{extract_request_messages, CompletedEventBuilder};
   use super::usage::parse_usage_any_value;
   use crate::config::{Account as AccountCfg, AuthType, Config};
-  use crate::db::{CallRecord, SessionSource};
+  use crate::db::{CallRecord, SessionSource, Usage};
   use crate::provider::Endpoint;
   use crate::server::build_state;
   use llm_core::event::{Event, EventBus, EventHandler};
@@ -71,8 +71,7 @@ mod tests {
             status: 0,
             stream: false,
             latency_ms: 0,
-            prompt_tokens: None,
-            completion_tokens: None,
+            usage: Usage::default(),
             inbound_req: inbound_req.clone(),
             outbound_req: None,
             outbound_resp: None,
@@ -101,7 +100,7 @@ mod tests {
             }
           }
         }
-        Event::RequestResult { request_id, attempt, session_source, latency_ms, status, prompt_tokens, completion_tokens, request_error, inbound_resp, outbound_resp, messages } => {
+        Event::RequestResult { request_id, attempt, session_source, latency_ms, status, usage, request_error, inbound_resp, outbound_resp, messages } => {
           let key = (request_id.clone(), *attempt);
           let composite_id = if *attempt == 0 { request_id.clone() } else { format!("{request_id}:{attempt}") };
           let mut r = self.pending.remove(&key).unwrap_or_else(|| CallRecord {
@@ -119,8 +118,7 @@ mod tests {
             status: 0,
             stream: false,
             latency_ms: 0,
-            prompt_tokens: None,
-            completion_tokens: None,
+            usage: Usage::default(),
             inbound_req: Default::default(),
             outbound_req: None,
             outbound_resp: None,
@@ -130,8 +128,7 @@ mod tests {
           r.session_source = *session_source;
           r.latency_ms = *latency_ms;
           r.status = *status;
-          r.prompt_tokens = *prompt_tokens;
-          r.completion_tokens = *completion_tokens;
+          r.usage = usage.clone();
           r.request_error = request_error.clone();
           r.inbound_resp = inbound_resp.clone();
           r.outbound_resp = outbound_resp.clone();
@@ -156,22 +153,37 @@ mod tests {
   #[test]
   fn parses_openai_chat_usage() {
     let v = json!({ "usage": { "prompt_tokens": 11, "completion_tokens": 22 }});
-    assert_eq!(parse_usage_any_value(&v), (Some(11), Some(22)));
+    let u = parse_usage_any_value(&v);
+    assert_eq!(u.input_tokens, Some(11));
+    assert_eq!(u.output_tokens, Some(22));
+    assert_eq!(u.details.cache_read, None);
+    assert_eq!(u.details.reasoning, None);
   }
 
   #[test]
   fn parses_responses_usage_shape() {
     let v = json!({ "usage": { "input_tokens": 5, "output_tokens": 7 }});
-    assert_eq!(parse_usage_any_value(&v), (Some(5), Some(7)));
+    let u = parse_usage_any_value(&v);
+    assert_eq!(u.input_tokens, Some(5));
+    assert_eq!(u.output_tokens, Some(7));
   }
 
   #[test]
   fn parses_anthropic_message_start_nested_usage() {
+    // Anthropic input_tokens excludes cache portions; total = 9 + 4 + 2 = 15
     let v = json!({
         "type": "message_start",
-        "message": { "usage": { "input_tokens": 9, "output_tokens": 1 }}
+        "message": { "usage": {
+          "input_tokens": 9,
+          "output_tokens": 1,
+          "cache_creation_input_tokens": 4,
+          "cache_read_input_tokens": 2
+        }}
     });
-    assert_eq!(parse_usage_any_value(&v), (Some(9), Some(1)));
+    let u = parse_usage_any_value(&v);
+    assert_eq!(u.input_tokens, Some(15));
+    assert_eq!(u.output_tokens, Some(1));
+    assert_eq!(u.details.cache_read, Some(2));
   }
 
   #[test]
@@ -180,7 +192,24 @@ mod tests {
         "type": "response.completed",
         "response": { "usage": { "input_tokens": 3, "output_tokens": 4 }}
     });
-    assert_eq!(parse_usage_any_value(&v), (Some(3), Some(4)));
+    let u = parse_usage_any_value(&v);
+    assert_eq!(u.input_tokens, Some(3));
+    assert_eq!(u.output_tokens, Some(4));
+  }
+
+  #[test]
+  fn parses_openai_cached_and_reasoning_tokens() {
+    let v = json!({ "usage": {
+      "prompt_tokens": 100,
+      "completion_tokens": 50,
+      "prompt_tokens_details": { "cached_tokens": 30 },
+      "completion_tokens_details": { "reasoning_tokens": 20 }
+    }});
+    let u = parse_usage_any_value(&v);
+    assert_eq!(u.input_tokens, Some(100));
+    assert_eq!(u.output_tokens, Some(50));
+    assert_eq!(u.details.cache_read, Some(30));
+    assert_eq!(u.details.reasoning, Some(20));
   }
 
   #[test]
@@ -435,8 +464,8 @@ mod tests {
     assert_eq!(records[0].model, "gpt-4.1");
     assert_eq!(records[0].session_id, "client-session");
     assert_eq!(records[0].stream, true);
-    assert_eq!(records[0].prompt_tokens, Some(1));
-    assert_eq!(records[0].completion_tokens, Some(2));
+    assert_eq!(records[0].usage.input_tokens, Some(1));
+    assert_eq!(records[0].usage.output_tokens, Some(2));
     assert_eq!(records[0].inbound_req.method.as_deref(), Some("POST"));
     assert_eq!(
       records[0].inbound_req.url.as_deref(),
@@ -524,8 +553,8 @@ mod tests {
     events.shutdown().await;
     let records = records.lock().unwrap();
     assert_eq!(records.len(), 1);
-    assert_eq!(records[0].prompt_tokens, Some(2));
-    assert_eq!(records[0].completion_tokens, Some(3));
+    assert_eq!(records[0].usage.input_tokens, Some(2));
+    assert_eq!(records[0].usage.output_tokens, Some(3));
     assert_eq!(records[0].request_error, None);
     assert!(std::str::from_utf8(records[0].inbound_resp.body.as_ref())
       .unwrap()
