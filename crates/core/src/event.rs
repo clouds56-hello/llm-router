@@ -185,11 +185,13 @@ pub fn spawn_event_loop(
   mut handlers: Vec<Box<dyn EventHandler>>,
 ) -> std::thread::JoinHandle<()> {
   std::thread::spawn(move || {
+    let mut flushed = false;
     while let Some(event) = receiver.blocking_recv() {
       if let Event::Shutdown(done) = event {
         for handler in &mut handlers {
           handler.flush();
         }
+        flushed = true;
         let _ = done.send(());
         break;
       }
@@ -198,8 +200,10 @@ pub fn spawn_event_loop(
       }
     }
     // Channel closed without shutdown event — flush anyway
-    for handler in &mut handlers {
-      handler.flush();
+    if !flushed {
+      for handler in &mut handlers {
+        handler.flush();
+      }
     }
   })
 }

@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::db::{DbEventHandler, DbPaths};
-use crate::progress::ProgressEventHandler;
+use crate::progress::{ProgressEventHandler, ProgressLogEventHandler};
 use anyhow::Result;
 use llm_core::event::{EventBus, EventHandler, EventReceiver};
 use std::io::IsTerminal;
@@ -22,6 +22,14 @@ pub fn build_event_bus(cfg: &Config) -> Result<(Arc<EventBus>, EventReceiver, Ve
       requests_dir: paths.requests_dir,
     })?;
     handlers.push(Box::new(db_handler));
+  }
+
+  match crate::logging::resolve_logs_dir(&cfg.logging) {
+    Ok(dir) => match ProgressLogEventHandler::new(&dir) {
+      Ok(handler) => handlers.push(Box::new(handler)),
+      Err(e) => tracing::warn!(path = %dir.display(), error = %e, "progress log disabled"),
+    },
+    Err(e) => tracing::warn!(error = %e, "progress log disabled"),
   }
 
   if std::io::stdout().is_terminal() {

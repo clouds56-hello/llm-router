@@ -13,8 +13,12 @@ use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use llm_core::db::Usage;
 use llm_core::event::{Event, EventHandler};
 use std::collections::HashMap;
+use std::fs::{File, OpenOptions};
+use std::io::{self, BufWriter, Write};
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Instant;
+use time::{macros::format_description, OffsetDateTime};
 
 /// Process-wide [`MultiProgress`] shared between [`ProgressEventHandler`]
 /// and the tracing log writer (so log lines suspend the bars during
@@ -27,8 +31,7 @@ pub fn multi() -> &'static MultiProgress {
   MULTI.get_or_init(|| MultiProgress::with_draw_target(ProgressDrawTarget::stdout()))
 }
 
-struct BarState {
-  bar: ProgressBar,
+struct RequestState {
   started: Instant,
   provider: String,
   model: String,
@@ -40,7 +43,21 @@ struct BarState {
   usage: Usage,
 }
 
-impl BarState {
+impl RequestState {
+  fn new(endpoint: String) -> Self {
+    Self {
+      started: Instant::now(),
+      provider: String::new(),
+      model: String::new(),
+      account: String::new(),
+      endpoint,
+      attempt: 0,
+      sent_bytes: 0,
+      recv_bytes: 0,
+      usage: Usage::default(),
+    }
+  }
+
   fn id_short(request_id: &str) -> String {
     request_id.chars().take(8).collect()
   }
@@ -71,6 +88,108 @@ impl BarState {
       elapsed,
     )
   }
+
+  fn merge_usage(&mut self, usage: &Usage) {
+    if usage.input_tokens.is_some() {
+      self.usage.input_tokens = usage.input_tokens;
+    }
+    if usage.output_tokens.is_some() {
+      self.usage.output_tokens = usage.output_tokens;
+    }
+    if usage.details.cache_read.is_some() {
+      self.usage.details.cache_read = usage.details.cache_read;
+    }
+    if usage.details.reasoning.is_some() {
+      self.usage.details.reasoning = usage.details.reasoning;
+    }
+  }
+
+  fn render_completed(
+    &self,
+    request_id: &str,
+    success: bool,
+    total_attempts: u32,
+    final_status: Option<u16>,
+    total_latency_ms: u64,
+    error: Option<&str>,
+  ) -> String {
+    let id_short = Self::id_short(request_id);
+    let latency_s = (total_latency_ms as f64) / 1000.0;
+    let attempts_part = if total_attempts > 1 {
+      format!(" attempts={total_attempts}")
+    } else {
+      String::new()
+    };
+    if success {
+      let status = final_status.unwrap_or(0);
+      format!(
+        "[{}] {} {} {} {} {} {} sent={:.1}kB recv={:.1}kB{} latency={:.1}s{}",
+        style(&id_short).dim(),
+        style("✓").green().bold(),
+        style_status(status),
+        style(&self.provider).blue(),
+        style(truncate(&self.model, 28)).cyan(),
+        style(truncate(&self.account, 16)).magenta(),
+        style(&self.endpoint).dim(),
+        (self.sent_bytes as f64) / 1024.0,
+        (self.recv_bytes as f64) / 1024.0,
+        format_usage(&self.usage),
+        latency_s,
+        attempts_part,
+      )
+    } else {
+      let err = error.unwrap_or("failed");
+      let status_part = match final_status {
+        Some(s) => format!(" {}", style_status(s)),
+        None => String::new(),
+      };
+      format!(
+        "[{}] {}{} {} {} {} {} sent={:.1}kB recv={:.1}kB latency={:.1}s{} error={}",
+        style(&id_short).dim(),
+        style("✗").red().bold(),
+        status_part,
+        style(&self.provider).blue(),
+        style(truncate(&self.model, 28)).cyan(),
+        style(truncate(&self.account, 16)).magenta(),
+        style(&self.endpoint).dim(),
+        (self.sent_bytes as f64) / 1024.0,
+        (self.recv_bytes as f64) / 1024.0,
+        latency_s,
+        attempts_part,
+        style(truncate(err, 80)).red(),
+      )
+    }
+  }
+
+  fn render_interrupted(&self, request_id: &str) -> String {
+    let id_short = Self::id_short(request_id);
+    let elapsed = self.started.elapsed().as_secs_f64();
+    let model_part = if self.model.is_empty() {
+      String::new()
+    } else {
+      format!(" {}", style(truncate(&self.model, 28)).cyan())
+    };
+    let account_part = if self.account.is_empty() {
+      String::new()
+    } else {
+      format!(" {}", style(truncate(&self.account, 16)).magenta())
+    };
+    format!(
+      "[{}] {}{}{} sent={:.1}kB recv={:.1}kB elapsed={:.1}s",
+      style(&id_short).dim(),
+      style("⚠ interrupted").yellow().bold(),
+      model_part,
+      account_part,
+      (self.sent_bytes as f64) / 1024.0,
+      (self.recv_bytes as f64) / 1024.0,
+      elapsed,
+    )
+  }
+}
+
+struct BarState {
+  bar: ProgressBar,
+  request: RequestState,
 }
 
 fn endpoint_label(endpoint: &str, url: Option<&str>) -> String {
@@ -176,7 +295,7 @@ impl ProgressEventHandler {
 
   fn refresh(&mut self, request_id: &str) {
     if let Some(state) = self.bars.get(request_id) {
-      let msg = state.render_in_flight(request_id);
+      let msg = state.request.render_in_flight(request_id);
       state.bar.set_message(msg);
       state.bar.tick();
     }
@@ -220,15 +339,7 @@ impl EventHandler for ProgressEventHandler {
         bar.enable_steady_tick(std::time::Duration::from_millis(120));
         let state = BarState {
           bar,
-          started: Instant::now(),
-          provider: String::new(),
-          model: String::new(),
-          account: String::new(),
-          endpoint: endpoint_label(endpoint, inbound_req.url.as_deref()),
-          attempt: 0,
-          sent_bytes: 0,
-          recv_bytes: 0,
-          usage: Usage::default(),
+          request: RequestState::new(endpoint_label(endpoint, inbound_req.url.as_deref())),
         };
         self.bars.insert(request_id.clone(), state);
         self.in_flight = self.in_flight.saturating_add(1);
@@ -245,15 +356,15 @@ impl EventHandler for ProgressEventHandler {
         ..
       } => {
         if let Some(state) = self.bars.get_mut(request_id) {
-          state.provider = provider_id.clone();
-          state.model = model.clone();
-          state.account = account_id.clone();
-          state.attempt = *attempt;
+          state.request.provider = provider_id.clone();
+          state.request.model = model.clone();
+          state.request.account = account_id.clone();
+          state.request.attempt = *attempt;
           if let Some(snap) = outbound_req {
-            if state.endpoint.eq_ignore_ascii_case("unknown") || state.endpoint.is_empty() {
-              state.endpoint = endpoint_label(&state.endpoint, snap.url.as_deref());
+            if state.request.endpoint.eq_ignore_ascii_case("unknown") || state.request.endpoint.is_empty() {
+              state.request.endpoint = endpoint_label(&state.request.endpoint, snap.url.as_deref());
             }
-            state.sent_bytes = snap.body.len() as u64;
+            state.request.sent_bytes = snap.body.len() as u64;
           }
         }
         self.refresh(request_id);
@@ -263,8 +374,8 @@ impl EventHandler for ProgressEventHandler {
       } => {
         if let Some(state) = self.bars.get_mut(request_id) {
           // attempt N just failed; next try will be attempt+1.
-          state.attempt = attempt + 1;
-          state.recv_bytes = 0;
+          state.request.attempt = attempt + 1;
+          state.request.recv_bytes = 0;
         }
         self.refresh(request_id);
       }
@@ -275,20 +386,9 @@ impl EventHandler for ProgressEventHandler {
         ..
       } => {
         if let Some(state) = self.bars.get_mut(request_id) {
-          state.recv_bytes = *bytes_streamed;
+          state.request.recv_bytes = *bytes_streamed;
           // Merge any non-None usage fields seen so far.
-          if usage.input_tokens.is_some() {
-            state.usage.input_tokens = usage.input_tokens;
-          }
-          if usage.output_tokens.is_some() {
-            state.usage.output_tokens = usage.output_tokens;
-          }
-          if usage.details.cache_read.is_some() {
-            state.usage.details.cache_read = usage.details.cache_read;
-          }
-          if usage.details.reasoning.is_some() {
-            state.usage.details.reasoning = usage.details.reasoning;
-          }
+          state.request.merge_usage(usage);
         }
         self.refresh(request_id);
       }
@@ -300,10 +400,10 @@ impl EventHandler for ProgressEventHandler {
       } => {
         if let Some(state) = self.bars.get_mut(request_id) {
           let body_len = inbound_resp.body.len() as u64;
-          if body_len > state.recv_bytes {
-            state.recv_bytes = body_len;
+          if body_len > state.request.recv_bytes {
+            state.request.recv_bytes = body_len;
           }
-          state.usage = usage.clone();
+          state.request.usage = usage.clone();
         }
       }
       Event::RequestCompleted {
@@ -315,52 +415,14 @@ impl EventHandler for ProgressEventHandler {
         error,
       } => {
         if let Some(state) = self.bars.remove(request_id) {
-          let id_short = BarState::id_short(request_id);
-          let latency_s = (*total_latency_ms as f64) / 1000.0;
-          let attempts_part = if *total_attempts > 1 {
-            format!(" attempts={}", total_attempts)
-          } else {
-            String::new()
-          };
-          let final_msg = if *success {
-            let status = final_status.unwrap_or(0);
-            format!(
-              "[{}] {} {} {} {} {} {} sent={:.1}kB recv={:.1}kB{} latency={:.1}s{}",
-              style(&id_short).dim(),
-              style("✓").green().bold(),
-              style_status(status),
-              style(&state.provider).blue(),
-              style(truncate(&state.model, 28)).cyan(),
-              style(truncate(&state.account, 16)).magenta(),
-              style(&state.endpoint).dim(),
-              (state.sent_bytes as f64) / 1024.0,
-              (state.recv_bytes as f64) / 1024.0,
-              format_usage(&state.usage),
-              latency_s,
-              attempts_part,
-            )
-          } else {
-            let err = error.as_deref().unwrap_or("failed");
-            let status_part = match final_status {
-              Some(s) => format!(" {}", style_status(*s)),
-              None => String::new(),
-            };
-            format!(
-              "[{}] {}{} {} {} {} {} sent={:.1}kB recv={:.1}kB latency={:.1}s{} error={}",
-              style(&id_short).dim(),
-              style("✗").red().bold(),
-              status_part,
-              style(&state.provider).blue(),
-              style(truncate(&state.model, 28)).cyan(),
-              style(truncate(&state.account, 16)).magenta(),
-              style(&state.endpoint).dim(),
-              (state.sent_bytes as f64) / 1024.0,
-              (state.recv_bytes as f64) / 1024.0,
-              latency_s,
-              attempts_part,
-              style(truncate(err, 80)).red(),
-            )
-          };
+          let final_msg = state.request.render_completed(
+            request_id,
+            *success,
+            *total_attempts,
+            *final_status,
+            *total_latency_ms,
+            error.as_deref(),
+          );
           state.bar.disable_steady_tick();
           let _ = self.multi.println(final_msg);
           state.bar.finish_and_clear();
@@ -383,28 +445,7 @@ impl EventHandler for ProgressEventHandler {
     // so the live region shrinks. The println line lands in scrollback.
     let stragglers: Vec<(String, BarState)> = self.bars.drain().collect();
     for (request_id, state) in stragglers {
-      let id_short = BarState::id_short(&request_id);
-      let elapsed = state.started.elapsed().as_secs_f64();
-      let model_part = if state.model.is_empty() {
-        String::new()
-      } else {
-        format!(" {}", style(truncate(&state.model, 28)).cyan())
-      };
-      let account_part = if state.account.is_empty() {
-        String::new()
-      } else {
-        format!(" {}", style(truncate(&state.account, 16)).magenta())
-      };
-      let line = format!(
-        "[{}] {}{}{} sent={:.1}kB recv={:.1}kB elapsed={:.1}s",
-        style(&id_short).dim(),
-        style("⚠ interrupted").yellow().bold(),
-        model_part,
-        account_part,
-        (state.sent_bytes as f64) / 1024.0,
-        (state.recv_bytes as f64) / 1024.0,
-        elapsed,
-      );
+      let line = state.request.render_interrupted(&request_id);
       let _ = self.multi.println(line);
       state.bar.disable_steady_tick();
       state.bar.finish_and_clear();
@@ -430,4 +471,177 @@ impl EventHandler for ProgressEventHandler {
     let _ = self.multi.println(summary);
     self.footer.finish_and_clear();
   }
+}
+
+pub struct ProgressLogEventHandler {
+  writer: BufWriter<File>,
+  requests: HashMap<String, RequestState>,
+  in_flight: u64,
+  completed: u64,
+  errors: u64,
+  write_failed: bool,
+}
+
+impl ProgressLogEventHandler {
+  pub fn new(log_dir: &Path) -> io::Result<Self> {
+    std::fs::create_dir_all(log_dir)?;
+    let file = OpenOptions::new()
+      .create(true)
+      .append(true)
+      .open(progress_log_path(log_dir))?;
+    Ok(Self {
+      writer: BufWriter::new(file),
+      requests: HashMap::new(),
+      in_flight: 0,
+      completed: 0,
+      errors: 0,
+      write_failed: false,
+    })
+  }
+
+  fn write_line(&mut self, line: &str) {
+    if self.write_failed {
+      return;
+    }
+    if let Err(e) = writeln!(self.writer, "{line}").and_then(|_| self.writer.flush()) {
+      self.write_failed = true;
+      tracing::warn!(error = %e, "failed to write progress log");
+    }
+  }
+
+  fn summary(&self) -> String {
+    let interrupted_part = if self.in_flight > 0 {
+      format!(" interrupted={}", style(self.in_flight).yellow())
+    } else {
+      String::new()
+    };
+    let errors_part = if self.errors > 0 {
+      format!("errors={}", style(self.errors).red())
+    } else {
+      format!("errors={}", self.errors)
+    };
+    format!(
+      "─── session ended: completed={} {}{} ───",
+      style(self.completed).green(),
+      errors_part,
+      interrupted_part,
+    )
+  }
+}
+
+impl EventHandler for ProgressLogEventHandler {
+  fn handle(&mut self, event: &Event) {
+    match event {
+      Event::RequestStarted {
+        request_id,
+        endpoint,
+        inbound_req,
+        ..
+      } => {
+        self.requests.insert(
+          request_id.clone(),
+          RequestState::new(endpoint_label(endpoint, inbound_req.url.as_deref())),
+        );
+        self.in_flight = self.in_flight.saturating_add(1);
+      }
+      Event::RequestParsed {
+        request_id,
+        attempt,
+        account_id,
+        provider_id,
+        model,
+        outbound_req,
+        ..
+      } => {
+        if let Some(state) = self.requests.get_mut(request_id) {
+          state.provider = provider_id.clone();
+          state.model = model.clone();
+          state.account = account_id.clone();
+          state.attempt = *attempt;
+          if let Some(snap) = outbound_req {
+            if state.endpoint.eq_ignore_ascii_case("unknown") || state.endpoint.is_empty() {
+              state.endpoint = endpoint_label(&state.endpoint, snap.url.as_deref());
+            }
+            state.sent_bytes = snap.body.len() as u64;
+          }
+        }
+      }
+      Event::RequestRetry {
+        request_id, attempt, ..
+      } => {
+        if let Some(state) = self.requests.get_mut(request_id) {
+          state.attempt = attempt + 1;
+          state.recv_bytes = 0;
+        }
+      }
+      Event::StreamProgress {
+        request_id,
+        bytes_streamed,
+        usage,
+        ..
+      } => {
+        if let Some(state) = self.requests.get_mut(request_id) {
+          state.recv_bytes = *bytes_streamed;
+          state.merge_usage(usage);
+        }
+      }
+      Event::RequestResult {
+        request_id,
+        inbound_resp,
+        usage,
+        ..
+      } => {
+        if let Some(state) = self.requests.get_mut(request_id) {
+          let body_len = inbound_resp.body.len() as u64;
+          if body_len > state.recv_bytes {
+            state.recv_bytes = body_len;
+          }
+          state.usage = usage.clone();
+        }
+      }
+      Event::RequestCompleted {
+        request_id,
+        success,
+        total_attempts,
+        final_status,
+        total_latency_ms,
+        error,
+      } => {
+        if let Some(state) = self.requests.remove(request_id) {
+          let line = state.render_completed(
+            request_id,
+            *success,
+            *total_attempts,
+            *final_status,
+            *total_latency_ms,
+            error.as_deref(),
+          );
+          self.write_line(&line);
+        }
+        self.in_flight = self.in_flight.saturating_sub(1);
+        self.completed = self.completed.saturating_add(1);
+        if !success {
+          self.errors = self.errors.saturating_add(1);
+        }
+      }
+      _ => {}
+    }
+  }
+
+  fn flush(&mut self) {
+    let stragglers: Vec<(String, RequestState)> = self.requests.drain().collect();
+    for (request_id, state) in stragglers {
+      let line = state.render_interrupted(&request_id);
+      self.write_line(&line);
+    }
+    let summary = self.summary();
+    self.write_line(&summary);
+  }
+}
+
+fn progress_log_path(log_dir: &Path) -> PathBuf {
+  let date = OffsetDateTime::now_utc()
+    .format(format_description!("[year]-[month]-[day]"))
+    .unwrap_or_else(|_| "unknown-date".to_string());
+  log_dir.join(format!("llm-router-progress.log.{date}"))
 }

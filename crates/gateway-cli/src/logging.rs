@@ -155,7 +155,7 @@ where
   }
 }
 
-fn resolve_logs_dir(cfg: &LoggingConfig) -> Result<PathBuf, String> {
+pub(crate) fn resolve_logs_dir(cfg: &LoggingConfig) -> Result<PathBuf, String> {
   if let Some(d) = &cfg.dir {
     return Ok(d.clone());
   }
