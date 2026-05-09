@@ -1,4 +1,5 @@
 pub mod codec;
+pub(crate) mod completion;
 pub mod endpoints;
 pub mod error;
 pub mod forward;

@@ -248,6 +248,7 @@ pub(crate) async fn handle_endpoint(
       body: raw_body,
     },
   });
+  let mut completion = super::completion::CompletionGuard::new(state.events.clone(), request_id.clone(), started);
 
   let span = tracing::Span::current();
   span.record("model", parsed.meta.model.as_str());
@@ -262,8 +263,15 @@ pub(crate) async fn handle_endpoint(
 
   for attempt in 0..=MAX_RETRIES {
     let attempt_u32 = attempt as u32;
+    completion.attempt(attempt_u32);
 
-    let mut resolved = resolver.resolve(&state, parsed.clone(), attempt)?;
+    let mut resolved = match resolver.resolve(&state, parsed.clone(), attempt) {
+      Ok(resolved) => resolved,
+      Err(e) => {
+        completion.failure(Some(e.status().as_u16()), e.to_string());
+        return Err(e);
+      }
+    };
     resolved.raw_body = decoded.raw_body.clone();
     resolved.content_encoding = decoded.encoding;
     let account_id = resolved.account.id();
@@ -281,7 +289,13 @@ pub(crate) async fn handle_endpoint(
       status = tracing::field::Empty,
     );
 
-    let prepared = prepare_request(resolved).map_err(|e| ApiError::bad_gateway(e.to_string()))?;
+    let prepared = match prepare_request(resolved) {
+      Ok(prepared) => prepared,
+      Err(e) => {
+        completion.failure(Some(StatusCode::BAD_GATEWAY.as_u16()), e.to_string());
+        return Err(ApiError::bad_gateway(e.to_string()));
+      }
+    };
 
     let send_result = async {
       debug!("sending upstream request");
@@ -315,6 +329,7 @@ pub(crate) async fn handle_endpoint(
           error: e.to_string(),
         });
         last_err = Some((StatusCode::BAD_GATEWAY, e.to_string()));
+        completion.failure(Some(StatusCode::BAD_GATEWAY.as_u16()), e.to_string());
         continue;
       }
     };
@@ -331,6 +346,7 @@ pub(crate) async fn handle_endpoint(
         error: "unauthorized".into(),
       });
       last_err = Some((status, "unauthorized".into()));
+      completion.failure(Some(status.as_u16()), "unauthorized");
       continue;
     }
     if status == StatusCode::TOO_MANY_REQUESTS || status == StatusCode::FORBIDDEN || status.is_server_error() {
@@ -342,6 +358,7 @@ pub(crate) async fn handle_endpoint(
         attempt: attempt_u32,
         error: body_text.clone(),
       });
+      completion.failure(Some(status.as_u16()), body_text.clone());
       last_err = Some((status, body_text));
       continue;
     }
@@ -373,6 +390,7 @@ pub(crate) async fn handle_endpoint(
     };
     let response = if parsed.meta.stream {
       // For streaming, RequestCompleted is emitted by the background stream recorder
+      completion.disarm();
       transformer.transform_sse(state.clone(), upstream).await
     } else {
       let resp = transformer.transform_result(state.clone(), upstream).await;
@@ -385,6 +403,7 @@ pub(crate) async fn handle_endpoint(
         total_latency_ms: started.elapsed().as_millis() as u64,
         error: None,
       });
+      completion.disarm();
       resp
     };
 
@@ -401,6 +420,7 @@ pub(crate) async fn handle_endpoint(
     total_latency_ms: started.elapsed().as_millis() as u64,
     error: Some(msg.clone()),
   });
+  completion.disarm();
   Err(ApiError::upstream(status, msg))
 }
 

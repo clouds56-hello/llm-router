@@ -97,7 +97,7 @@ impl Error {
     }
   }
 
-  fn status(&self) -> StatusCode {
+  pub(crate) fn status(&self) -> StatusCode {
     match self {
       Error::BadRequest { .. } => StatusCode::BAD_REQUEST,
       Error::UnsupportedMediaType { .. } => StatusCode::UNSUPPORTED_MEDIA_TYPE,

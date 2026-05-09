@@ -580,6 +580,7 @@ async fn proxy_passthrough(
       body: request_body.clone(),
     },
   });
+  let mut completion = server::completion::CompletionGuard::new(state.events.clone(), ctx.request_id.clone(), started);
   let initiator = header_initiator
     .unwrap_or_else(|| crate::util::initiator::classify_initiator(&req_body_json).to_string());
   let stream = infer_stream_request(&parts.headers, &req_body_json);
@@ -600,7 +601,13 @@ async fn proxy_passthrough(
     }),
   });
 
-  let response = upstream.send().await.context("send passthrough upstream request")?;
+  let response = match upstream.send().await {
+    Ok(response) => response,
+    Err(err) => {
+      completion.failure(None, err.to_string());
+      return Err(err).context("send passthrough upstream request");
+    }
+  };
   let status = response.status();
   state.events.emit(llm_core::event::Event::RequestResponded {
     request_id: ctx.request_id.clone(),
@@ -612,11 +619,13 @@ async fn proxy_passthrough(
 
   if is_sse_response(response.headers(), stream) {
     // Background recorder emits RequestCompleted after stream ends.
+    completion.disarm();
     let resp = passthrough_streaming_response(state.clone(), ctx, &req_body_json, response);
     return Ok(resp);
   }
 
   let resp = passthrough_buffered_response(state, &ctx, &req_body_json, response).await;
+  completion.disarm();
   // RequestResult and RequestCompleted already emitted by passthrough_buffered_response
   Ok(resp)
 }
