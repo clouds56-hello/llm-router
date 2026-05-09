@@ -73,6 +73,19 @@ impl BarState {
   }
 }
 
+fn endpoint_label(endpoint: &str, url: Option<&str>) -> String {
+  let endpoint = endpoint.trim();
+  if endpoint.is_empty() || endpoint.eq_ignore_ascii_case("unknown") {
+    url
+      .map(str::trim)
+      .filter(|value| !value.is_empty())
+      .unwrap_or("unknown")
+      .to_string()
+  } else {
+    endpoint.to_string()
+  }
+}
+
 fn truncate(s: &str, max: usize) -> &str {
   if s.len() <= max {
     s
@@ -97,16 +110,24 @@ fn style_status(status: u16) -> console::StyledObject<u16> {
 fn format_usage(u: &Usage) -> String {
   let mut parts = Vec::with_capacity(4);
   if let Some(v) = u.input_tokens {
-    if v > 0 { parts.push(format!("in={v}")); }
+    if v > 0 {
+      parts.push(format!("in={v}"));
+    }
   }
   if let Some(v) = u.output_tokens {
-    if v > 0 { parts.push(format!("out={v}")); }
+    if v > 0 {
+      parts.push(format!("out={v}"));
+    }
   }
   if let Some(v) = u.details.cache_read {
-    if v > 0 { parts.push(format!("cache={v}")); }
+    if v > 0 {
+      parts.push(format!("cache={v}"));
+    }
   }
   if let Some(v) = u.details.reasoning {
-    if v > 0 { parts.push(format!("reason={v}")); }
+    if v > 0 {
+      parts.push(format!("reason={v}"));
+    }
   }
   if parts.is_empty() {
     String::new()
@@ -137,8 +158,7 @@ impl ProgressEventHandler {
 
     // Footer bar: a borderless line that never finishes, always at the bottom.
     let footer = multi.add(ProgressBar::new_spinner());
-    let footer_style = ProgressStyle::with_template("{msg}")
-      .unwrap_or_else(|_| ProgressStyle::default_spinner());
+    let footer_style = ProgressStyle::with_template("{msg}").unwrap_or_else(|_| ProgressStyle::default_spinner());
     footer.set_style(footer_style);
 
     let handler = Self {
@@ -189,12 +209,13 @@ impl EventHandler for ProgressEventHandler {
   fn handle(&mut self, event: &Event) {
     match event {
       Event::RequestStarted {
-        request_id, endpoint, ..
+        request_id,
+        endpoint,
+        inbound_req,
+        ..
       } => {
         // Insert above the footer.
-        let bar = self
-          .multi
-          .insert_before(&self.footer, ProgressBar::new_spinner());
+        let bar = self.multi.insert_before(&self.footer, ProgressBar::new_spinner());
         bar.set_style(self.style.clone());
         bar.enable_steady_tick(std::time::Duration::from_millis(120));
         let state = BarState {
@@ -203,7 +224,7 @@ impl EventHandler for ProgressEventHandler {
           provider: String::new(),
           model: String::new(),
           account: String::new(),
-          endpoint: endpoint.clone(),
+          endpoint: endpoint_label(endpoint, inbound_req.url.as_deref()),
           attempt: 0,
           sent_bytes: 0,
           recv_bytes: 0,
@@ -229,6 +250,9 @@ impl EventHandler for ProgressEventHandler {
           state.account = account_id.clone();
           state.attempt = *attempt;
           if let Some(snap) = outbound_req {
+            if state.endpoint.eq_ignore_ascii_case("unknown") || state.endpoint.is_empty() {
+              state.endpoint = endpoint_label(&state.endpoint, snap.url.as_deref());
+            }
             state.sent_bytes = snap.body.len() as u64;
           }
         }
@@ -253,10 +277,18 @@ impl EventHandler for ProgressEventHandler {
         if let Some(state) = self.bars.get_mut(request_id) {
           state.recv_bytes = *bytes_streamed;
           // Merge any non-None usage fields seen so far.
-          if usage.input_tokens.is_some() { state.usage.input_tokens = usage.input_tokens; }
-          if usage.output_tokens.is_some() { state.usage.output_tokens = usage.output_tokens; }
-          if usage.details.cache_read.is_some() { state.usage.details.cache_read = usage.details.cache_read; }
-          if usage.details.reasoning.is_some() { state.usage.details.reasoning = usage.details.reasoning; }
+          if usage.input_tokens.is_some() {
+            state.usage.input_tokens = usage.input_tokens;
+          }
+          if usage.output_tokens.is_some() {
+            state.usage.output_tokens = usage.output_tokens;
+          }
+          if usage.details.cache_read.is_some() {
+            state.usage.details.cache_read = usage.details.cache_read;
+          }
+          if usage.details.reasoning.is_some() {
+            state.usage.details.reasoning = usage.details.reasoning;
+          }
         }
         self.refresh(request_id);
       }
@@ -293,12 +325,14 @@ impl EventHandler for ProgressEventHandler {
           let final_msg = if *success {
             let status = final_status.unwrap_or(0);
             format!(
-              "[{}] {} {} {} {} sent={:.1}kB recv={:.1}kB{} latency={:.1}s{}",
+              "[{}] {} {} {} {} {} {} sent={:.1}kB recv={:.1}kB{} latency={:.1}s{}",
               style(&id_short).dim(),
               style("✓").green().bold(),
               style_status(status),
+              style(&state.provider).blue(),
               style(truncate(&state.model, 28)).cyan(),
               style(truncate(&state.account, 16)).magenta(),
+              style(&state.endpoint).dim(),
               (state.sent_bytes as f64) / 1024.0,
               (state.recv_bytes as f64) / 1024.0,
               format_usage(&state.usage),
@@ -312,12 +346,14 @@ impl EventHandler for ProgressEventHandler {
               None => String::new(),
             };
             format!(
-              "[{}] {}{} {} {} sent={:.1}kB recv={:.1}kB latency={:.1}s{} error={}",
+              "[{}] {}{} {} {} {} {} sent={:.1}kB recv={:.1}kB latency={:.1}s{} error={}",
               style(&id_short).dim(),
               style("✗").red().bold(),
               status_part,
+              style(&state.provider).blue(),
               style(truncate(&state.model, 28)).cyan(),
               style(truncate(&state.account, 16)).magenta(),
+              style(&state.endpoint).dim(),
               (state.sent_bytes as f64) / 1024.0,
               (state.recv_bytes as f64) / 1024.0,
               latency_s,
@@ -326,7 +362,8 @@ impl EventHandler for ProgressEventHandler {
             )
           };
           state.bar.disable_steady_tick();
-          state.bar.finish_with_message(final_msg);
+          let _ = self.multi.println(final_msg);
+          state.bar.finish_and_clear();
         }
         // Update counters.
         self.in_flight = self.in_flight.saturating_sub(1);
