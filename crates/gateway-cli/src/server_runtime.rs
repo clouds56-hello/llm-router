@@ -1,6 +1,7 @@
 use crate::config::Config;
+use crate::db::archive::{ArchiveEventHandler, ArchiveRuntime};
 use crate::db::{DbEventHandler, DbPaths};
-use crate::progress::{ProgressEventHandler, ProgressLogEventHandler};
+use crate::progress::{ArchiveProgressEventHandler, ProgressEventHandler, ProgressLogEventHandler};
 use anyhow::Result;
 use llm_core::event::{EventBus, EventHandler, EventReceiver};
 use std::io::IsTerminal;
@@ -9,10 +10,19 @@ use std::sync::Arc;
 /// Build the event bus and its handlers. The DB event handler is included
 /// when usage recording is enabled. A TTY progress handler is attached
 /// automatically when stdout is a terminal.
-pub fn build_event_bus(cfg: &Config) -> Result<(Arc<EventBus>, EventReceiver, Vec<Box<dyn EventHandler>>)> {
+pub fn build_event_bus(
+  cfg: &Config,
+) -> Result<(
+  Arc<EventBus>,
+  EventReceiver,
+  Vec<Box<dyn EventHandler>>,
+  Option<ArchiveRuntime>,
+)> {
   let capacity = cfg.db.write_queue_capacity.max(256);
   let (bus, receiver) = EventBus::new(capacity);
   let mut handlers: Vec<Box<dyn EventHandler>> = Vec::new();
+  let mut archive_handlers: Vec<Box<dyn ArchiveEventHandler>> = Vec::new();
+  let tty_progress = std::io::stdout().is_terminal();
 
   if cfg.db.enabled {
     let paths = cfg.db.resolve_paths()?;
@@ -32,11 +42,23 @@ pub fn build_event_bus(cfg: &Config) -> Result<(Arc<EventBus>, EventReceiver, Ve
     Err(e) => tracing::warn!(error = %e, "progress log disabled"),
   }
 
-  if std::io::stdout().is_terminal() {
+  if tty_progress {
     handlers.push(Box::new(ProgressEventHandler::new()));
+    archive_handlers.push(Box::new(ArchiveProgressEventHandler::new()));
   }
 
-  Ok((Arc::new(bus), receiver, handlers))
+  let archive_runtime = if cfg.db.enabled {
+    let paths = cfg.db.resolve_paths()?;
+    crate::db::archive::start_request_archive_worker(
+      paths.requests_dir,
+      cfg.db.archive_extension.as_deref(),
+      archive_handlers,
+    )
+  } else {
+    None
+  };
+
+  Ok((Arc::new(bus), receiver, handlers, archive_runtime))
 }
 
 pub fn build_state(cfg: &Config, events: Arc<EventBus>) -> Result<llm_router::api::AppState> {

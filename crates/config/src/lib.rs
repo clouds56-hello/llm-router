@@ -155,6 +155,8 @@ pub struct DbConfig {
   pub body_max_bytes: usize,
   #[serde(default = "default_write_queue_capacity")]
   pub write_queue_capacity: usize,
+  #[serde(default)]
+  pub archive_extension: Option<String>,
 }
 
 impl Default for DbConfig {
@@ -168,6 +170,7 @@ impl Default for DbConfig {
       record_request_bodies: true,
       body_max_bytes: default_body_max_bytes(),
       write_queue_capacity: default_write_queue_capacity(),
+      archive_extension: None,
     }
   }
 }

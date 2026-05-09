@@ -9,6 +9,7 @@
 //! Only registered when stdout is a TTY (see `server_runtime.rs`).
 
 use console::style;
+use crate::db::archive::{ArchiveEvent, ArchiveEventHandler};
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use llm_core::db::Usage;
 use llm_core::event::{Event, EventHandler};
@@ -211,6 +212,14 @@ fn truncate(s: &str, max: usize) -> &str {
   } else {
     &s[..max]
   }
+}
+
+fn file_label(path: &Path) -> String {
+  path
+    .file_name()
+    .and_then(|v| v.to_str())
+    .unwrap_or_else(|| path.to_str().unwrap_or("unknown"))
+    .to_string()
 }
 
 fn style_status(status: u16) -> console::StyledObject<u16> {
@@ -480,6 +489,160 @@ pub struct ProgressLogEventHandler {
   completed: u64,
   errors: u64,
   write_failed: bool,
+}
+
+struct ArchiveBarState {
+  bar: ProgressBar,
+  started: Instant,
+  path: PathBuf,
+  archive: PathBuf,
+  total_bytes: u64,
+}
+
+pub struct ArchiveProgressEventHandler {
+  multi: MultiProgress,
+  bars: HashMap<String, ArchiveBarState>,
+  style: ProgressStyle,
+}
+
+impl ArchiveProgressEventHandler {
+  pub fn new() -> Self {
+    let multi = multi().clone();
+    let style = ProgressStyle::with_template("{spinner:.yellow} {msg}")
+      .unwrap_or_else(|_| ProgressStyle::default_spinner())
+      .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ");
+    Self {
+      multi,
+      bars: HashMap::new(),
+      style,
+    }
+  }
+
+  fn refresh(&self, id: &str, bytes_read: u64, total_bytes: u64) {
+    if let Some(state) = self.bars.get(id) {
+      let percent = if total_bytes > 0 {
+        (bytes_read as f64 * 100.0) / total_bytes as f64
+      } else {
+        100.0
+      };
+      let elapsed = state.started.elapsed().as_secs_f64();
+      let speed_kbs = if elapsed > 0.05 {
+        (bytes_read as f64) / 1024.0 / elapsed
+      } else {
+        0.0
+      };
+      state.bar.set_message(format!(
+        "archive {} {:.1}% {:.1}/{:.1}MB {:.1}kB/s -> {}",
+        style(file_label(&state.path)).yellow(),
+        percent.min(100.0),
+        bytes_read as f64 / 1024.0 / 1024.0,
+        state.total_bytes as f64 / 1024.0 / 1024.0,
+        speed_kbs,
+        style(file_label(&state.archive)).dim(),
+      ));
+      state.bar.tick();
+    }
+  }
+}
+
+impl Default for ArchiveProgressEventHandler {
+  fn default() -> Self {
+    Self::new()
+  }
+}
+
+impl ArchiveEventHandler for ArchiveProgressEventHandler {
+  fn handle(&mut self, event: &ArchiveEvent) {
+    match event {
+      ArchiveEvent::ScanStarted { dir } => {
+        tracing::debug!(path = %dir.display(), "request db archival progress scan started");
+      }
+      ArchiveEvent::FileStarted {
+        id,
+        path,
+        archive,
+        total_bytes,
+      } => {
+        let bar = self.multi.add(ProgressBar::new_spinner());
+        bar.set_style(self.style.clone());
+        bar.enable_steady_tick(std::time::Duration::from_millis(120));
+        self.bars.insert(
+          id.clone(),
+          ArchiveBarState {
+            bar,
+            started: Instant::now(),
+            path: path.clone(),
+            archive: archive.clone(),
+            total_bytes: *total_bytes,
+          },
+        );
+        self.refresh(id, 0, *total_bytes);
+      }
+      ArchiveEvent::FileProgress {
+        id,
+        bytes_read,
+        total_bytes,
+      } => self.refresh(id, *bytes_read, *total_bytes),
+      ArchiveEvent::FileCompleted {
+        id,
+        path,
+        archive,
+        bytes_in,
+        bytes_out,
+      } => {
+        if let Some(state) = self.bars.remove(id) {
+          state.bar.disable_steady_tick();
+          state.bar.finish_and_clear();
+        }
+        let ratio = if *bytes_in > 0 {
+          (*bytes_out as f64 * 100.0) / *bytes_in as f64
+        } else {
+          0.0
+        };
+        let _ = self.multi.println(format!(
+          "{} archived {} -> {} {:.1}MB to {:.1}MB ({:.1}%)",
+          style("✓").green().bold(),
+          style(file_label(path)).yellow(),
+          style(file_label(archive)).dim(),
+          *bytes_in as f64 / 1024.0 / 1024.0,
+          *bytes_out as f64 / 1024.0 / 1024.0,
+          ratio,
+        ));
+      }
+      ArchiveEvent::FileSkipped { path, archive } => {
+        tracing::debug!(path = %path.display(), archive = %archive.display(), "request db archive already exists");
+      }
+      ArchiveEvent::FileFailed { id, path, archive, error } => {
+        if let Some(state) = self.bars.remove(id) {
+          state.bar.disable_steady_tick();
+          state.bar.finish_and_clear();
+        }
+        let _ = self.multi.println(format!(
+          "{} archive {} -> {} failed: {}",
+          style("✗").red().bold(),
+          style(file_label(path)).yellow(),
+          style(file_label(archive)).dim(),
+          style(truncate(error, 120)).red(),
+        ));
+      }
+      ArchiveEvent::ScanCompleted { dir, stats } => {
+        tracing::debug!(path = %dir.display(), archived = stats.archived, skipped_existing = stats.skipped_existing, failed = stats.failed, "request db archival progress scan completed");
+      }
+    }
+  }
+
+  fn flush(&mut self) {
+    let bars: Vec<ArchiveBarState> = self.bars.drain().map(|(_, state)| state).collect();
+    for state in bars {
+      let _ = self.multi.println(format!(
+        "{} archive {} interrupted",
+        style("⚠").yellow().bold(),
+        style(file_label(&state.path)).yellow(),
+      ));
+      state.bar.disable_steady_tick();
+      state.bar.finish_and_clear();
+    }
+  }
 }
 
 impl ProgressLogEventHandler {

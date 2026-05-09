@@ -125,7 +125,7 @@ async fn start(cfg_path: Option<PathBuf>, args: StartArgs, passthrough: bool) ->
 
   crate::server_runtime::ensure_bind_host(&host, args.allow_remote)?;
 
-  let (events, receiver, handlers) = crate::server_runtime::build_event_bus(&cfg)?;
+  let (events, receiver, handlers, archive_runtime) = crate::server_runtime::build_event_bus(&cfg)?;
   let _event_thread = llm_core::event::spawn_event_loop(receiver, handlers);
   let state = crate::server_runtime::build_state(&cfg, events.clone())?;
   let n = state.pool.len();
@@ -151,6 +151,9 @@ async fn start(cfg_path: Option<PathBuf>, args: StartArgs, passthrough: bool) ->
   };
 
   let result = llm_router::proxy::serve(state, options).await;
+  if let Some(archive_runtime) = archive_runtime {
+    archive_runtime.shutdown().await;
+  }
   events.shutdown().await;
   result
 }

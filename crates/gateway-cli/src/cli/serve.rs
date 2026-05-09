@@ -29,7 +29,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: ServeArgs) -> Result<()> {
 
   crate::server_runtime::ensure_bind_host(&host, args.allow_remote)?;
 
-  let (events, receiver, handlers) = crate::server_runtime::build_event_bus(&cfg)?;
+  let (events, receiver, handlers, archive_runtime) = crate::server_runtime::build_event_bus(&cfg)?;
   let _event_thread = llm_core::event::spawn_event_loop(receiver, handlers);
   let state = crate::server_runtime::build_state(&cfg, events.clone())?;
   let n = state.pool.len();
@@ -49,6 +49,9 @@ pub async fn run(cfg_path: Option<PathBuf>, args: ServeArgs) -> Result<()> {
       let _ = tokio::signal::ctrl_c().await;
     })
     .await?;
+  if let Some(archive_runtime) = archive_runtime {
+    archive_runtime.shutdown().await;
+  }
   events.shutdown().await;
   Ok(())
 }
