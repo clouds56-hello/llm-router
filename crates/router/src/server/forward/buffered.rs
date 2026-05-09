@@ -58,6 +58,7 @@ pub(crate) async fn buffered_response(
 
   let event = CompletedEventBuilder::new(
     s.body_max_bytes,
+    ctx.request_id.clone(),
     HttpSnapshot {
       method: None,
       url: None,
@@ -68,7 +69,8 @@ pub(crate) async fn buffered_response(
     ctx.started,
     status.as_u16(),
   )
-  .with_ids(ctx.session_id.as_deref(), ctx.request_id.as_deref(), request_error.as_deref())
+  .with_ids(ctx.session_id.as_deref(), request_error.as_deref())
+  .with_attempt(ctx.attempt)
   .with_request_body(req_body, ctx.endpoint)
   .with_outbound_response(Some(&resp_headers), Some(&bytes))
   .with_usage(pt, ct)

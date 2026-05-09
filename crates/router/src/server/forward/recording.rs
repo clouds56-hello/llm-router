@@ -4,12 +4,12 @@ use bytes::Bytes;
 use llm_core::event::Event;
 use serde_json::Value;
 use std::time::Instant;
-use uuid::Uuid;
 
-/// Builds a `RequestCompleted` event from accumulated request/response data.
+/// Builds a `RequestResult` event from accumulated request/response data.
 pub(super) struct CompletedEventBuilder {
   max: usize,
-  request_id: Option<String>,
+  request_id: String,
+  attempt: u32,
   session_id: Option<String>,
   request_error: Option<String>,
   req_body: Bytes,
@@ -25,13 +25,15 @@ pub(super) struct CompletedEventBuilder {
 impl CompletedEventBuilder {
   pub(crate) fn new(
     max: usize,
+    request_id: String,
     inbound_resp: HttpSnapshot,
     started: Instant,
     status: u16,
   ) -> Self {
     Self {
       max,
-      request_id: None,
+      request_id,
+      attempt: 0,
       session_id: None,
       request_error: None,
       req_body: Bytes::new(),
@@ -45,10 +47,14 @@ impl CompletedEventBuilder {
     }
   }
 
-  pub(crate) fn with_ids(mut self, session_id: Option<&str>, request_id: Option<&str>, request_error: Option<&str>) -> Self {
+  pub(crate) fn with_ids(mut self, session_id: Option<&str>, request_error: Option<&str>) -> Self {
     self.session_id = session_id.map(str::to_string);
-    self.request_id = request_id.map(str::to_string);
     self.request_error = request_error.map(str::to_string);
+    self
+  }
+
+  pub(crate) fn with_attempt(mut self, attempt: u32) -> Self {
+    self.attempt = attempt;
     self
   }
 
@@ -108,8 +114,9 @@ impl CompletedEventBuilder {
       SessionSource::Auto
     };
 
-    Event::RequestCompleted {
-      request_id: self.request_id.unwrap_or_else(|| Uuid::new_v4().to_string()),
+    Event::RequestResult {
+      request_id: self.request_id,
+      attempt: self.attempt,
       session_source,
       latency_ms,
       status: self.status,

@@ -23,7 +23,7 @@ pub(crate) fn is_sse_response(headers: &HeaderMap) -> bool {
 }
 
 /// Handle a non-streaming passthrough response. Reads the body, emits
-/// `RequestCompleted`, and returns the forwarded response.
+/// `RequestResult` and the terminal `RequestCompleted`, and returns the forwarded response.
 /// Caller is responsible for emitting `RequestStarted` and `RequestParsed`.
 pub(crate) async fn passthrough_buffered_response(
   s: &AppState,
@@ -39,6 +39,7 @@ pub(crate) async fn passthrough_buffered_response(
 
   let event = CompletedEventBuilder::new(
     s.body_max_bytes,
+    ctx.request_id.clone(),
     HttpSnapshot {
       method: None,
       url: None,
@@ -49,18 +50,29 @@ pub(crate) async fn passthrough_buffered_response(
     ctx.started,
     status.as_u16(),
   )
-  .with_ids(ctx.session_id.as_deref(), ctx.request_id.as_deref(), None)
+  .with_ids(ctx.session_id.as_deref(), None)
+  .with_attempt(ctx.attempt)
   .with_request_body(req_body, ctx.endpoint)
   .with_outbound_response(Some(&resp_headers), Some(&resp_body))
   .with_usage(prompt_tokens, completion_tokens)
   .build();
   s.events.emit(event);
 
+  // Passthrough is single-attempt; emit the terminal RequestCompleted here.
+  s.events.emit(llm_core::event::Event::RequestCompleted {
+    request_id: ctx.request_id.clone(),
+    success: status.is_success(),
+    total_attempts: ctx.attempt + 1,
+    final_status: Some(status.as_u16()),
+    total_latency_ms: ctx.started.elapsed().as_millis() as u64,
+    error: None,
+  });
+
   response_with_body(status, &resp_headers, Body::from(resp_body))
 }
 
 /// Wrap a streaming passthrough response with SSE recording.
-/// Emits only `RequestCompleted` (via background recorder).
+/// Emits `RequestResult` and the terminal `RequestCompleted` (via background recorder).
 /// Caller is responsible for emitting `RequestStarted` and `RequestParsed`.
 pub(crate) fn passthrough_streaming_response(
   state: AppState,
@@ -81,6 +93,7 @@ pub(crate) fn passthrough_streaming_response(
 
   let builder = CompletedEventBuilder::new(
     max_body,
+    ctx.request_id.clone(),
     HttpSnapshot {
       method: None,
       url: None,
@@ -91,11 +104,15 @@ pub(crate) fn passthrough_streaming_response(
     ctx.started,
     status.as_u16(),
   )
-  .with_ids(ctx.session_id.as_deref(), ctx.request_id.as_deref(), None)
+  .with_ids(ctx.session_id.as_deref(), None)
+  .with_attempt(ctx.attempt)
   .with_request_body(req_body, ctx.endpoint);
 
   let meta = StreamMeta {
     request_id: ctx.request_id,
+    attempt: ctx.attempt,
+    final_status: status.as_u16(),
+    started: ctx.started,
     model: ctx.model,
     endpoint: endpoint_str,
     events: state.events.clone(),

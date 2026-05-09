@@ -54,6 +54,7 @@ pub(crate) trait RequestParser: Send + Sync {
         stream,
         session_id,
         request_id,
+        attempt: 0,
         project_id,
         initiator,
         header_initiator,
@@ -163,7 +164,8 @@ impl OutputTransformer for EndpointOutputTransformer {
       upstream.meta.upstream_endpoint,
       upstream.meta.model,
       upstream.meta.session_id,
-      upstream.meta.request_id,
+      upstream.meta.request_id.unwrap_or_default(),
+      upstream.meta.attempt,
       upstream.started,
     );
     buffered_response(state, upstream.resp, ctx, &upstream.inbound_body).await
@@ -179,7 +181,8 @@ impl OutputTransformer for EndpointOutputTransformer {
       upstream.meta.upstream_endpoint,
       upstream.meta.model,
       upstream.meta.session_id,
-      upstream.meta.request_id,
+      upstream.meta.request_id.unwrap_or_default(),
+      upstream.meta.attempt,
       upstream.started,
     );
     stream_response(state, upstream.resp, ctx, &upstream.inbound_body).await
@@ -223,6 +226,8 @@ pub(crate) async fn handle_endpoint(
   let mut last_err: Option<(StatusCode, String)> = None;
 
   for attempt in 0..=MAX_RETRIES {
+    let attempt_u32 = attempt as u32;
+
     let resolved = resolver.resolve(&state, parsed.clone(), attempt)?;
     let account_id = resolved.account.id();
     super::record_last_account(&account_id);
@@ -241,18 +246,17 @@ pub(crate) async fn handle_endpoint(
 
     let prepared = prepare_request(resolved).map_err(|e| ApiError::bad_gateway(e.to_string()))?;
 
-    // Emit RequestParsed on first attempt (routing resolved)
-    if attempt == 0 {
-      state.events.emit(llm_core::event::Event::RequestParsed {
-        request_id: request_id.clone(),
-        account_id: prepared.account.id(),
-        provider_id: prepared.account.provider.info().id.clone(),
-        model: prepared.meta.model.clone(),
-        stream: prepared.meta.stream,
-        initiator: prepared.meta.initiator.clone(),
-        outbound_req: prepared.capture.get().cloned(),
-      });
-    }
+    // Emit RequestParsed per attempt
+    state.events.emit(llm_core::event::Event::RequestParsed {
+      request_id: request_id.clone(),
+      attempt: attempt_u32,
+      account_id: prepared.account.id(),
+      provider_id: prepared.account.provider.info().id.clone(),
+      model: prepared.meta.model.clone(),
+      stream: prepared.meta.stream,
+      initiator: prepared.meta.initiator.clone(),
+      outbound_req: prepared.capture.get().cloned(),
+    });
 
     let send_result = async {
       debug!("sending upstream request");
@@ -266,6 +270,11 @@ pub(crate) async fn handle_endpoint(
       Err(e) => {
         warn!(parent: &attempt_span, error = %e, "provider request failed");
         prepared.account.mark_failure(state.pool.cooldown_base());
+        state.events.emit(llm_core::event::Event::RequestRetry {
+          request_id: request_id.clone(),
+          attempt: attempt_u32,
+          error: e.to_string(),
+        });
         last_err = Some((StatusCode::BAD_GATEWAY, e.to_string()));
         continue;
       }
@@ -277,6 +286,11 @@ pub(crate) async fn handle_endpoint(
     if status == StatusCode::UNAUTHORIZED {
       warn!(parent: &attempt_span, "401 from upstream; refreshing creds");
       prepared.account.invalidate_credentials();
+      state.events.emit(llm_core::event::Event::RequestRetry {
+        request_id: request_id.clone(),
+        attempt: attempt_u32,
+        error: "unauthorized".into(),
+      });
       last_err = Some((status, "unauthorized".into()));
       continue;
     }
@@ -284,6 +298,11 @@ pub(crate) async fn handle_endpoint(
       let body_text = resp.text().await.unwrap_or_default();
       warn!(parent: &attempt_span, %status, body = %body_text, "upstream error; cooldown");
       prepared.account.mark_failure(state.pool.cooldown_base());
+      state.events.emit(llm_core::event::Event::RequestRetry {
+        request_id: request_id.clone(),
+        attempt: attempt_u32,
+        error: body_text.clone(),
+      });
       last_err = Some((status, body_text));
       continue;
     }
@@ -300,22 +319,49 @@ pub(crate) async fn handle_endpoint(
       resp_headers: resp.headers().clone(),
     });
 
+    // Pass base request ID and attempt number into forward context via meta
+    let mut meta = prepared.meta;
+    meta.request_id = Some(request_id.clone());
+    meta.attempt = attempt_u32;
+
     let upstream = UpstreamResponse {
-      meta: prepared.meta,
+      meta,
       inbound_body: prepared.inbound_body,
       resp,
       started,
     };
-    return Ok(if parsed.meta.stream {
+    let response = if parsed.meta.stream {
+      // For streaming, RequestCompleted is emitted by the background stream recorder
       transformer
         .transform_sse(state.clone(), upstream)
         .await
     } else {
-      transformer.transform_result(state.clone(), upstream).await
-    });
+      let resp = transformer.transform_result(state.clone(), upstream).await;
+      // Buffered: emit terminal RequestCompleted
+      state.events.emit(llm_core::event::Event::RequestCompleted {
+        request_id: request_id.clone(),
+        success: true,
+        total_attempts: attempt_u32 + 1,
+        final_status: Some(status.as_u16()),
+        total_latency_ms: started.elapsed().as_millis() as u64,
+        error: None,
+      });
+      resp
+    };
+
+    return Ok(response);
   }
 
+  // All attempts failed
   let (status, msg) = last_err.unwrap_or((StatusCode::BAD_GATEWAY, "all attempts failed".into()));
+  state.events.emit(llm_core::event::Event::RequestCompleted {
+    request_id: request_id.clone(),
+    success: false,
+    total_attempts: (MAX_RETRIES as u32) + 1,
+    final_status: None,
+    total_latency_ms: started.elapsed().as_millis() as u64,
+    error: Some(msg.clone()),
+  });
   Err(ApiError::upstream(status, msg))
 }
 
@@ -495,6 +541,7 @@ mod tests {
         stream: false,
         session_id: Some("session-1".into()),
         request_id: Some("request-1".into()),
+        attempt: 0,
         project_id: Some("project-1".into()),
         initiator: "user".into(),
         header_initiator: None,
@@ -565,6 +612,7 @@ mod tests {
       stream: false,
       session_id: None,
       request_id: None,
+      attempt: 0,
       project_id: None,
       initiator: "user".into(),
       header_initiator: None,

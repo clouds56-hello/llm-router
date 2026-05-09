@@ -20,6 +20,8 @@ pub enum Event {
   /// Request routed to an account, about to send upstream.
   RequestParsed {
     request_id: String,
+    /// Retry attempt number (0 = first attempt).
+    attempt: u32,
     account_id: String,
     provider_id: String,
     model: String,
@@ -35,11 +37,13 @@ pub enum Event {
     resp_headers: HeaderMap,
   },
 
-  /// Request/stream completed with final metrics.
-  /// Fields already sent in RequestStarted/RequestParsed are NOT repeated here.
-  /// The DB handler merges from its in-memory accumulator.
-  RequestCompleted {
+  /// Per-attempt result with full response data.
+  /// Emitted once per attempt (including retries).
+  /// `request_id` is the base ID; `attempt` distinguishes retries.
+  RequestResult {
     request_id: String,
+    /// Retry attempt number (0 = first attempt).
+    attempt: u32,
     session_source: SessionSource,
     latency_ms: u64,
     status: u16,
@@ -51,22 +55,27 @@ pub enum Event {
     messages: Vec<MessageRecord>,
   },
 
-  /// A request failed after all retries.
-  RequestFailed {
-    request_id: Option<String>,
-    model: String,
-    account: String,
-    endpoint: String,
-    error: String,
-    latency_ms: u64,
+  /// Overall request completed (terminal outcome for the whole request).
+  /// Emitted exactly once per request, after all attempts.
+  RequestCompleted {
+    request_id: String,
+    /// Whether the request ultimately succeeded.
+    success: bool,
+    /// Total number of attempts made (1 = no retries, 2 = one retry, ...).
+    total_attempts: u32,
+    /// Final HTTP status code (None if no successful upstream response was reached).
+    final_status: Option<u16>,
+    /// Total latency from RequestStarted to completion.
+    total_latency_ms: u64,
+    /// Error message if `success == false`.
+    error: Option<String>,
   },
 
   /// A single attempt failed and will be retried.
   RequestRetry {
-    request_id: Option<String>,
-    model: String,
-    account: String,
-    attempt: usize,
+    request_id: String,
+    /// The attempt number that just failed.
+    attempt: u32,
     error: String,
   },
 
@@ -108,7 +117,7 @@ pub enum Event {
   // --- Streaming progress ---
   /// Periodic progress update from an active streaming response.
   StreamProgress {
-    request_id: Option<String>,
+    request_id: String,
     model: String,
     endpoint: String,
     prompt_tokens: Option<u64>,

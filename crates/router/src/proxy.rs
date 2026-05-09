@@ -545,7 +545,7 @@ async fn proxy_passthrough(
   let initiator = header_initiator.clone()
     .unwrap_or_else(|| crate::util::initiator::classify_initiator(&req_body_json).to_string());
   state.events.emit(llm_core::event::Event::RequestStarted {
-    request_id: ctx.request_id.clone().unwrap_or_default(),
+    request_id: ctx.request_id.clone(),
     ts: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() as i64,
     endpoint: ctx.endpoint.map(|e| e.as_str()).unwrap_or(path).to_string(),
     initiator: header_initiator,
@@ -560,7 +560,8 @@ async fn proxy_passthrough(
     },
   });
   state.events.emit(llm_core::event::Event::RequestParsed {
-    request_id: ctx.request_id.clone().unwrap_or_default(),
+    request_id: ctx.request_id.clone(),
+    attempt: ctx.attempt,
     account_id: "passthrough".to_string(),
     provider_id: host.to_string(),
     model: ctx.model.clone(),
@@ -578,10 +579,14 @@ async fn proxy_passthrough(
   let response = upstream.send().await.context("send passthrough upstream request")?;
 
   if is_sse_response(response.headers()) {
-    return Ok(passthrough_streaming_response(state.clone(), ctx, &req_body_json, response));
+    // Background recorder emits RequestCompleted after stream ends.
+    let resp = passthrough_streaming_response(state.clone(), ctx, &req_body_json, response);
+    return Ok(resp);
   }
 
-  Ok(passthrough_buffered_response(state, &ctx, &req_body_json, response).await)
+  let resp = passthrough_buffered_response(state, &ctx, &req_body_json, response).await;
+  // RequestResult and RequestCompleted already emitted by passthrough_buffered_response
+  Ok(resp)
 }
 
 pub(crate) fn rewrite_target(host: &str, path: &str, method: &Method) -> Option<&'static str> {

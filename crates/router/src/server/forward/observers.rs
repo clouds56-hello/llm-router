@@ -4,9 +4,16 @@ use bytes::Bytes;
 use llm_convert::sse::{observer_channel, ObserverMsg, ObserverSender};
 use std::sync::Arc;
 
-/// Metadata for emitting StreamProgress events.
+/// Metadata for emitting StreamProgress and the terminal RequestCompleted event.
 pub(super) struct StreamMeta {
-  pub request_id: Option<String>,
+  /// Base request ID (no retry suffix).
+  pub request_id: String,
+  /// Final attempt number (0-indexed). total_attempts == attempt + 1.
+  pub attempt: u32,
+  /// Upstream HTTP status (always 2xx since streaming begins after a successful response).
+  pub final_status: u16,
+  /// Time at which the overall request started (for total_latency_ms).
+  pub started: std::time::Instant,
   pub model: String,
   pub endpoint: String,
   pub events: Arc<llm_core::event::EventBus>,
@@ -97,4 +104,16 @@ pub(super) async fn background_stream_recorder(
     .with_usage(usage.0, usage.1)
     .build();
   events.emit(event);
+
+  // Emit terminal RequestCompleted with success / total_attempts / final_status.
+  // Streaming is only entered after a successful upstream response (no retries after stream begins),
+  // so total_attempts == meta.attempt + 1 and final_status == meta.final_status.
+  events.emit(llm_core::event::Event::RequestCompleted {
+    request_id: meta.request_id,
+    success: !had_error,
+    total_attempts: meta.attempt + 1,
+    final_status: Some(meta.final_status),
+    total_latency_ms: meta.started.elapsed().as_millis() as u64,
+    error: had_error.then(|| "stream terminated before completion".to_string()),
+  });
 }

@@ -7,7 +7,10 @@ use std::time::Instant;
 /// Bundled request metadata needed by forward/response functions.
 /// Does not include the request body — that is passed separately.
 pub(crate) struct ForwardContext {
-  pub request_id: Option<String>,
+  /// Base request ID (no retry suffix).
+  pub request_id: String,
+  /// Retry attempt number (0 = first attempt).
+  pub attempt: u32,
   pub session_id: Option<String>,
   pub endpoint: Option<Endpoint>,
   pub upstream_endpoint: Endpoint,
@@ -22,11 +25,13 @@ impl ForwardContext {
     upstream_endpoint: Endpoint,
     model: String,
     session_id: Option<String>,
-    request_id: Option<String>,
+    request_id: String,
+    attempt: u32,
     started: Instant,
   ) -> Self {
     Self {
       request_id,
+      attempt,
       session_id,
       endpoint: Some(endpoint),
       upstream_endpoint,
@@ -58,7 +63,8 @@ impl ForwardContext {
     let upstream_endpoint = endpoint.unwrap_or(Endpoint::ChatCompletions);
 
     Self {
-      request_id: Some(request_id),
+      request_id,
+      attempt: 0,
       session_id,
       endpoint,
       upstream_endpoint,

@@ -158,7 +158,7 @@ mod tests {
       ts: 100,
       session_id: session_id.into(),
       session_source: SessionSource::Header,
-      request_id: None,
+      request_id: String::new(),
       request_error: None,
       project_id: None,
       endpoint: "chat_completions".into(),

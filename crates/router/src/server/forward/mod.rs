@@ -43,7 +43,7 @@ mod tests {
   /// Event handler that accumulates lifecycle events and produces CallRecords on completion.
   struct CollectingHandler {
     records: Records,
-    pending: std::collections::HashMap<String, CallRecord>,
+    pending: std::collections::HashMap<(String, u32), CallRecord>,
   }
 
   impl CollectingHandler {
@@ -56,11 +56,11 @@ mod tests {
     fn handle(&mut self, event: &Event) {
       match event {
         Event::RequestStarted { request_id, ts, endpoint, initiator, session_id, project_id, inbound_req } => {
-          self.pending.insert(request_id.clone(), CallRecord {
+          self.pending.insert((request_id.clone(), 0), CallRecord {
             ts: *ts,
             session_id: session_id.clone().unwrap_or_default(),
             session_source: SessionSource::Auto,
-            request_id: Some(request_id.clone()),
+            request_id: request_id.clone(),
             request_error: None,
             project_id: project_id.clone(),
             endpoint: endpoint.clone(),
@@ -80,22 +80,35 @@ mod tests {
             messages: Vec::new(),
           });
         }
-        Event::RequestParsed { request_id, account_id, provider_id, model, stream, initiator, outbound_req } => {
-          if let Some(r) = self.pending.get_mut(request_id) {
+        Event::RequestParsed { request_id, attempt, account_id, provider_id, model, stream, initiator, outbound_req } => {
+          // Retry attempts: clone from base entry (attempt 0)
+          let key = (request_id.clone(), *attempt);
+          if *attempt > 0 && !self.pending.contains_key(&key) {
+            if let Some(base) = self.pending.get(&(request_id.clone(), 0)).cloned() {
+              self.pending.insert(key.clone(), base);
+            }
+          }
+          if let Some(r) = self.pending.get_mut(&key) {
             r.account_id = account_id.clone();
             r.provider_id = provider_id.clone();
             r.model = model.clone();
             r.stream = *stream;
             r.initiator = initiator.clone();
             r.outbound_req = outbound_req.clone();
+            // Stamp composite request_id on the row for retries
+            if *attempt > 0 {
+              r.request_id = format!("{request_id}:{attempt}");
+            }
           }
         }
-        Event::RequestCompleted { request_id, session_source, latency_ms, status, prompt_tokens, completion_tokens, request_error, inbound_resp, outbound_resp, messages } => {
-          let mut r = self.pending.remove(request_id).unwrap_or_else(|| CallRecord {
+        Event::RequestResult { request_id, attempt, session_source, latency_ms, status, prompt_tokens, completion_tokens, request_error, inbound_resp, outbound_resp, messages } => {
+          let key = (request_id.clone(), *attempt);
+          let composite_id = if *attempt == 0 { request_id.clone() } else { format!("{request_id}:{attempt}") };
+          let mut r = self.pending.remove(&key).unwrap_or_else(|| CallRecord {
             ts: 0,
             session_id: String::new(),
             session_source: SessionSource::Auto,
-            request_id: Some(request_id.clone()),
+            request_id: composite_id.clone(),
             request_error: None,
             project_id: None,
             endpoint: String::new(),
@@ -231,6 +244,7 @@ mod tests {
     let resp_body = Bytes::from_static(br#"{"id":"r1"}"#);
     let event = CompletedEventBuilder::new(
       1024 * 1024,
+      "test-req".to_string(),
       crate::db::HttpSnapshot {
         method: None,
         url: None,
@@ -241,18 +255,18 @@ mod tests {
       Instant::now(),
       200,
     )
-    .with_ids(None, None, None)
+    .with_ids(None, None)
     .with_request_body(&req_body, Some(Endpoint::ChatCompletions))
     .with_outbound_response(Some(&HeaderMap::new()), Some(&resp_body))
     .build();
-    if let llm_core::event::Event::RequestCompleted { session_source, messages, .. } = &event {
+    if let llm_core::event::Event::RequestResult { session_source, messages, .. } = &event {
       assert_eq!(*session_source, SessionSource::Auto);
       assert!(messages
         .iter()
         .flat_map(|m| &m.parts)
         .any(|p| p.part_type == "raw" && p.content.as_ref() == resp_body.as_ref()));
     } else {
-      panic!("expected RequestCompleted event");
+      panic!("expected RequestResult event");
     }
   }
 
@@ -284,6 +298,7 @@ mod tests {
 
     let event = CompletedEventBuilder::new(
       1024 * 1024,
+      "request-123".to_string(),
       crate::db::HttpSnapshot {
         method: None,
         url: None,
@@ -296,18 +311,17 @@ mod tests {
     )
     .with_ids(
       Some("client-session"),
-      Some("request-123"),
       Some("stream terminated before completion"),
     )
     .with_request_body(&req_body, Some(Endpoint::ChatCompletions))
     .build();
 
-    if let llm_core::event::Event::RequestCompleted { session_source, request_id, request_error, .. } = &event {
+    if let llm_core::event::Event::RequestResult { session_source, request_id, request_error, .. } = &event {
       assert_eq!(*session_source, SessionSource::Header);
       assert_eq!(request_id, "request-123");
       assert_eq!(request_error.as_deref(), Some("stream terminated before completion"));
     } else {
-      panic!("expected RequestCompleted event");
+      panic!("expected RequestResult event");
     }
   }
 
@@ -354,7 +368,7 @@ mod tests {
 
     // Emit lifecycle events as caller would
     state.events.emit(llm_core::event::Event::RequestStarted {
-      request_id: ctx.request_id.clone().unwrap_or_default(),
+      request_id: ctx.request_id.clone(),
       ts: 0,
       endpoint: ctx.endpoint.map(|e| e.as_str()).unwrap_or("unknown").to_string(),
       initiator: None,
@@ -369,7 +383,8 @@ mod tests {
       },
     });
     state.events.emit(llm_core::event::Event::RequestParsed {
-      request_id: ctx.request_id.clone().unwrap_or_default(),
+      request_id: ctx.request_id.clone(),
+      attempt: 0,
       account_id: "passthrough".to_string(),
       provider_id: "api.openai.com".to_string(),
       model: ctx.model.clone(),

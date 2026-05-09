@@ -24,6 +24,7 @@ pub(crate) async fn stream_response(
 
   let builder = CompletedEventBuilder::new(
     max_body,
+    ctx.request_id.clone(),
     HttpSnapshot {
       method: None,
       url: None,
@@ -34,12 +35,16 @@ pub(crate) async fn stream_response(
     ctx.started,
     status.as_u16(),
   )
-  .with_ids(ctx.session_id.as_deref(), ctx.request_id.as_deref(), None)
+  .with_ids(ctx.session_id.as_deref(), None)
+  .with_attempt(ctx.attempt)
   .with_request_body(req_body, ctx.endpoint);
 
   let endpoint = ctx.endpoint.unwrap_or(ctx.upstream_endpoint);
   let meta = StreamMeta {
     request_id: ctx.request_id.clone(),
+    attempt: ctx.attempt,
+    final_status: status.as_u16(),
+    started: ctx.started,
     model: ctx.model.clone(),
     endpoint: endpoint.as_str().to_string(),
     events: s.events.clone(),

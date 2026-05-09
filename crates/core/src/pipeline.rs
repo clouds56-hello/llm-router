@@ -14,6 +14,8 @@ pub struct RequestMeta {
   pub stream: bool,
   pub session_id: Option<String>,
   pub request_id: Option<String>,
+  /// Retry attempt number (0 = first attempt, 1 = first retry, ...).
+  pub attempt: u32,
   pub project_id: Option<String>,
   /// Merged initiator (header takes precedence over body-derived).
   pub initiator: String,
