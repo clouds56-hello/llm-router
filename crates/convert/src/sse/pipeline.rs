@@ -303,7 +303,7 @@ where
 mod tests {
   use super::*;
   use crate::error::Result;
-  use bytes::{Bytes, BytesMut};
+  use bytes::BytesMut;
   use futures_util::{stream, StreamExt};
 
   struct AppendTransformer(&'static str);

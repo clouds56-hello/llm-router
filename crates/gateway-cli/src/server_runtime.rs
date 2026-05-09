@@ -1,11 +1,14 @@
 use crate::config::Config;
 use crate::db::{DbEventHandler, DbPaths};
+use crate::progress::ProgressEventHandler;
 use anyhow::Result;
 use llm_core::event::{EventBus, EventHandler, EventReceiver};
+use std::io::IsTerminal;
 use std::sync::Arc;
 
 /// Build the event bus and its handlers. The DB event handler is included
-/// when usage recording is enabled.
+/// when usage recording is enabled. A TTY progress handler is attached
+/// automatically when stdout is a terminal.
 pub fn build_event_bus(cfg: &Config) -> Result<(Arc<EventBus>, EventReceiver, Vec<Box<dyn EventHandler>>)> {
   let capacity = cfg.db.write_queue_capacity.max(256);
   let (bus, receiver) = EventBus::new(capacity);
@@ -19,6 +22,10 @@ pub fn build_event_bus(cfg: &Config) -> Result<(Arc<EventBus>, EventReceiver, Ve
       requests_dir: paths.requests_dir,
     })?;
     handlers.push(Box::new(db_handler));
+  }
+
+  if std::io::stdout().is_terminal() {
+    handlers.push(Box::new(ProgressEventHandler::new()));
   }
 
   Ok((Arc::new(bus), receiver, handlers))

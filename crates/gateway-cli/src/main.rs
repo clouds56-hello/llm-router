@@ -7,6 +7,7 @@ mod cli;
 mod db;
 mod error;
 mod logging;
+mod progress;
 mod provider;
 mod server_runtime;
 mod util;

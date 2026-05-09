@@ -30,6 +30,7 @@ futures = { workspace = true }
 futures-util = { workspace = true }
 http = { workspace = true }
 humantime = { workspace = true }
+indicatif = { workspace = true }
 inquire = { workspace = true }
 notify = { workspace = true }
 parking_lot = { workspace = true }
