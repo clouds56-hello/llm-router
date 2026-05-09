@@ -562,9 +562,6 @@ async fn proxy_passthrough(
     .and_then(|v| v.to_str().ok())
     .map(|v| v.trim().to_ascii_lowercase())
     .filter(|v| v == "user" || v == "agent");
-  let initiator = header_initiator
-    .clone()
-    .unwrap_or_else(|| crate::util::initiator::classify_initiator(&req_body_json).to_string());
   state.events.emit(llm_core::event::Event::RequestStarted {
     request_id: ctx.request_id.clone(),
     ts: std::time::SystemTime::now()
@@ -572,7 +569,7 @@ async fn proxy_passthrough(
       .unwrap_or_default()
       .as_secs() as i64,
     endpoint: ctx.endpoint.map(|e| e.as_str()).unwrap_or(path).to_string(),
-    initiator: header_initiator,
+    initiator: header_initiator.clone(),
     session_id: ctx.session_id.clone(),
     project_id: project_id.clone(),
     inbound_req: crate::db::HttpSnapshot {
@@ -583,13 +580,16 @@ async fn proxy_passthrough(
       body: request_body.clone(),
     },
   });
+  let initiator = header_initiator
+    .unwrap_or_else(|| crate::util::initiator::classify_initiator(&req_body_json).to_string());
+  let stream = infer_stream_request(&parts.headers, &req_body_json);
   state.events.emit(llm_core::event::Event::RequestParsed {
     request_id: ctx.request_id.clone(),
     attempt: ctx.attempt,
     account_id: "passthrough".to_string(),
     provider_id: host.to_string(),
     model: ctx.model.clone(),
-    stream: infer_stream_request(&parts.headers, &req_body_json),
+    stream,
     initiator,
     outbound_req: Some(crate::db::HttpSnapshot {
       method: Some(parts.method.to_string()),
@@ -602,7 +602,7 @@ async fn proxy_passthrough(
 
   let response = upstream.send().await.context("send passthrough upstream request")?;
 
-  if is_sse_response(response.headers()) {
+  if is_sse_response(response.headers(), stream) {
     // Background recorder emits RequestCompleted after stream ends.
     let resp = passthrough_streaming_response(state.clone(), ctx, &req_body_json, response);
     return Ok(resp);

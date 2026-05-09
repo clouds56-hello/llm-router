@@ -274,7 +274,14 @@ mod tests {
       "text/event-stream; charset=utf-8".parse().unwrap(),
     );
 
-    assert!(is_sse_response(&headers));
+    assert!(is_sse_response(&headers, false));
+  }
+
+  #[test]
+  fn falls_back_to_stream_when_content_type_missing() {
+    let headers = HeaderMap::new();
+    assert!(is_sse_response(&headers, true));
+    assert!(!is_sse_response(&headers, false));
   }
 
   #[test]
@@ -585,7 +592,7 @@ mod tests {
       .send()
       .await
       .unwrap();
-    assert!(is_sse_response(response.headers()));
+    assert!(is_sse_response(response.headers(), true));
 
     let req_body_bytes =
       Bytes::from_static(br#"{"model":"gpt-4.1","messages":[{"role":"user","content":"hi"}],"stream":true}"#);

@@ -14,13 +14,16 @@ use bytes::Bytes;
 use llm_convert::sse::SsePipeline;
 use serde_json::Value;
 
-pub(crate) fn is_sse_response(headers: &HeaderMap) -> bool {
-  headers
+pub(crate) fn is_sse_response(headers: &HeaderMap, fallback_stream: bool) -> bool {
+  match headers
     .get(CONTENT_TYPE)
     .and_then(|value| value.to_str().ok())
     .and_then(|value| value.split(';').next())
     .map(str::trim)
-    .is_some_and(|value| value.eq_ignore_ascii_case("text/event-stream"))
+  {
+    Some(value) => value.eq_ignore_ascii_case("text/event-stream"),
+    None => fallback_stream,
+  }
 }
 
 /// Handle a non-streaming passthrough response. Reads the body, emits
