@@ -5,10 +5,10 @@ use crate::api::{error::ApiError, AppState};
 use crate::api::routing::RouteResolver;
 use anyhow::{Context, Result};
 use axum::body::Body;
-use axum::http::{Method, Request, Response, Uri};
+use axum::http::{HeaderMap, Method, Request, Response, Uri};
 use axum::response::IntoResponse;
 use axum::Router;
-use http::header::{HeaderValue, HOST};
+use http::header::{HeaderValue, CONNECTION, HOST, UPGRADE};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper_util::rt::TokioIo;
@@ -21,6 +21,8 @@ use tokio_rustls::TlsAcceptor;
 
 const CONNECT_OK: &[u8] = b"HTTP/1.1 200 Connection Established\r\n\r\n";
 const BAD_CONNECT: &[u8] = b"HTTP/1.1 405 Method Not Allowed\r\ncontent-length: 0\r\n\r\n";
+const UPGRADE_REQUIRED_WEBSOCKET: &[u8] =
+  b"HTTP/1.1 426 Upgrade Required\r\nconnection: Upgrade\r\nupgrade: websocket\r\ncontent-length: 0\r\n\r\n";
 
 pub(super) async fn handle_client(
   stream: TcpStream,
@@ -44,6 +46,7 @@ pub(super) async fn handle_client(
   let _version = parts.next().unwrap_or_default();
 
   let mut proxy_route_mode: Option<String> = None;
+  let mut websocket_upgrade = false;
   loop {
     let mut header_line = String::new();
     if reader.read_line(&mut header_line).await? == 0 {
@@ -60,17 +63,29 @@ pub(super) async fn handle_client(
         proxy_route_mode = Some(mode);
       }
     }
+    if let Some(value) = header_line
+      .strip_prefix("Upgrade:")
+      .or_else(|| header_line.strip_prefix("upgrade:"))
+    {
+      websocket_upgrade = value.trim().trim_end_matches(['\r', '\n']).eq_ignore_ascii_case("websocket");
+    }
   }
 
   let mut stream = reader.into_inner();
+  if websocket_upgrade {
+    tracing::debug!("rejecting websocket upgrade request from {}", peer);
+    stream.write_all(UPGRADE_REQUIRED_WEBSOCKET).await?;
+    return Ok(());
+  }
   if method != Method::CONNECT.as_str() {
     stream.write_all(BAD_CONNECT).await?;
+    tracing::warn!(%peer, method, "unsupported proxy method");
     return Ok(());
   }
 
   let (host, port) = split_authority(authority)?;
   let intercept = port == 443 && host_policy.should_intercept(&host);
-  tracing::info!(%peer, host = %host, port, intercept, proxy_route_mode = ?proxy_route_mode, "proxy_connect");
+  tracing::debug!(%peer, host = %host, port, intercept, proxy_route_mode = ?proxy_route_mode, "proxy_connect");
 
   if intercept {
     stream.write_all(CONNECT_OK).await?;
@@ -139,6 +154,11 @@ async fn route_intercepted_request(
   mut req: Request<hyper::body::Incoming>,
   proxy_route_mode: Option<String>,
 ) -> Result<Response<Body>, std::convert::Infallible> {
+  // WebSocket connections are not supported by this proxy. Detect them early and return an error response.
+  if is_websocket_upgrade_headers(req.headers()) {
+    return Ok(websocket_upgrade_response());
+  }
+
   if let Some(ref mode) = proxy_route_mode {
     if !req.headers().contains_key(RouteResolver::mode_header()) {
       if let Ok(val) = HeaderValue::from_str(mode) {
@@ -164,10 +184,17 @@ async fn route_intercepted_request(
     .and_then(|v| v.to_str().ok());
 
   let resolved_mode = route_resolver.resolve_mode(route_mode);
+  tracing::trace!(%host, path = %path, method = %method, route_mode = ?route_mode, resolved_mode = ?resolved_mode, "resolved route mode for intercepted request");
   if matches!(resolved_mode, Ok(RouteMode::Passthrough)) {
     return Ok(
       proxy_passthrough(state.as_ref(), &http, &host, req)
         .await
+        .inspect(|b| {
+         if !b.status().is_success() {
+            tracing::warn!(%host, path = %path, method = %method, status = %b.status(), "passthrough request failed");
+          }
+        })
+        .inspect_err(|err| tracing::warn!(%host, error = %err, "passthrough failed"))
         .unwrap_or_else(|err| ApiError::bad_gateway(err.to_string()).into_response()),
     );
   }
@@ -208,4 +235,32 @@ async fn route_intercepted_request(
     .await
     .unwrap_or_else(|err| ApiError::bad_gateway(err.to_string()).into_response());
   Ok(response)
+}
+
+fn is_websocket_upgrade_headers(headers: &HeaderMap) -> bool {
+  let has_upgrade_connection = headers
+    .get(CONNECTION)
+    .and_then(|v| v.to_str().ok())
+    .map(|v| v.split(',').any(|part| part.trim().eq_ignore_ascii_case("upgrade")))
+    .unwrap_or(false);
+  if !has_upgrade_connection {
+    return false;
+  }
+  headers
+    .get(UPGRADE)
+    .and_then(|v| v.to_str().ok())
+    .map(|v| v.trim().eq_ignore_ascii_case("websocket"))
+    .unwrap_or(false)
+}
+
+fn websocket_upgrade_response() -> Response<Body> {
+  let mut resp = Response::new(Body::empty());
+  *resp.status_mut() = axum::http::StatusCode::UPGRADE_REQUIRED;
+  resp
+    .headers_mut()
+    .insert(CONNECTION, HeaderValue::from_static("Upgrade"));
+  resp
+    .headers_mut()
+    .insert(UPGRADE, HeaderValue::from_static("websocket"));
+  resp
 }

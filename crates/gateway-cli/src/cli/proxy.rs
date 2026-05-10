@@ -141,6 +141,14 @@ async fn start(cfg_path: Option<PathBuf>, args: StartArgs, passthrough: bool) ->
   if passthrough {
     println!("Route mode: passthrough");
   }
+  if let Some(url) = &cfg.proxy.url {
+    println!("Outbound proxy: {url}");
+    if !cfg.proxy.no_proxy.is_empty() {
+      println!("Outbound no_proxy: {}", cfg.proxy.no_proxy.join(","));
+    }
+  } else if cfg.proxy.system {
+    println!("Outbound proxy: system");
+  }
   println!("Accounts: {n}");
 
   let options = llm_router::proxy::ProxyOptions {
@@ -245,6 +253,7 @@ fn resolved_proxy_env(cfg_path: Option<&Path>) -> Result<ProxyEnv> {
       ("NO_PROXY".into(), "localhost,127.0.0.1,::1".into()),
       ("SSL_CERT_FILE".into(), bundle.clone()),
       ("NODE_EXTRA_CA_CERTS".into(), cert),
+      ("CODEX_CA_CERTIFICATE".into(), bundle.clone()),
       ("REQUESTS_CA_BUNDLE".into(), bundle.clone()),
       ("CURL_CA_BUNDLE".into(), bundle.clone()),
       ("GIT_SSL_CAINFO".into(), bundle),

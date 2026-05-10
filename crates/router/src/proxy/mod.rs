@@ -24,6 +24,7 @@ const DEFAULT_INTERCEPT_HOSTS: &[&str] = &[
   "api.openai.com",
   "chatgpt.com",
   "ab.chatgpt.com",
+  "opencode.ai",
 ];
 
 #[derive(Clone, Debug)]
