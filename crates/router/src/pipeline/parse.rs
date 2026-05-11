@@ -2,8 +2,68 @@ use crate::api::{first_header, PROJECT_ID_HEADERS, REQUEST_ID_HEADERS, SESSION_I
 use crate::provider::Endpoint;
 use axum::http::header::ACCEPT;
 use axum::http::HeaderMap;
+use bytes::Bytes;
 use llm_core::pipeline::{ParsedRequest, RequestMeta};
 use serde_json::Value;
+
+#[derive(Clone, Debug)]
+pub(crate) struct HeaderExtract {
+  pub request_id: String,
+  pub session_id: Option<String>,
+  pub project_id: Option<String>,
+  pub header_initiator: Option<String>,
+  pub route_mode_hint: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct BodyExtract {
+  pub model: String,
+  pub stream_flag: Option<bool>,
+}
+
+pub(crate) fn request_header_extract(headers: &HeaderMap) -> HeaderExtract {
+  let request_id = first_header(headers, REQUEST_ID_HEADERS)
+    .map(str::to_string)
+    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+  let session_id = first_header(headers, SESSION_ID_HEADERS).map(str::to_string);
+  let project_id = first_header(headers, PROJECT_ID_HEADERS).map(str::to_string);
+  let header_initiator = headers
+    .get("x-initiator")
+    .and_then(|v| v.to_str().ok())
+    .map(|v| v.trim().to_ascii_lowercase())
+    .filter(|v| v == "user" || v == "agent");
+  let route_mode_hint = headers
+    .get("x-route-mode")
+    .and_then(|v| v.to_str().ok())
+    .map(str::trim)
+    .filter(|v| !v.is_empty())
+    .map(str::to_string);
+  HeaderExtract {
+    request_id,
+    session_id,
+    project_id,
+    header_initiator,
+    route_mode_hint,
+  }
+}
+
+pub(crate) fn request_body_decode(
+  headers: &HeaderMap,
+  raw_body: Bytes,
+) -> Result<crate::api::codec::DecodedJsonRequest, crate::api::error::ApiError> {
+  crate::api::codec::decode_json_request(headers, raw_body)
+}
+
+pub(crate) fn request_body_extract(body: &Value) -> BodyExtract {
+  BodyExtract {
+    model: body
+      .get("model")
+      .and_then(|v| v.as_str())
+      .unwrap_or("unknown")
+      .to_string(),
+    stream_flag: body.get("stream").and_then(|v| v.as_bool()),
+  }
+}
 
 pub(crate) fn infer_stream_request(headers: &HeaderMap, body: &Value) -> bool {
   if let Some(stream) = body.get("stream").and_then(|v| v.as_bool()) {

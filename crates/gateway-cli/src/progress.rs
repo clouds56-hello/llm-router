@@ -339,7 +339,6 @@ impl EventHandler for ProgressEventHandler {
       Event::RequestStarted {
         request_id,
         endpoint,
-        inbound_req,
         ..
       } => {
         // Insert above the footer.
@@ -348,7 +347,7 @@ impl EventHandler for ProgressEventHandler {
         bar.enable_steady_tick(std::time::Duration::from_millis(120));
         let state = BarState {
           bar,
-          request: RequestState::new(endpoint_label(endpoint, inbound_req.url.as_deref())),
+          request: RequestState::new(endpoint_label(endpoint, None)),
         };
         self.bars.insert(request_id.clone(), state);
         self.in_flight = self.in_flight.saturating_add(1);
@@ -698,12 +697,11 @@ impl EventHandler for ProgressLogEventHandler {
       Event::RequestStarted {
         request_id,
         endpoint,
-        inbound_req,
         ..
       } => {
         self.requests.insert(
           request_id.clone(),
-          RequestState::new(endpoint_label(endpoint, inbound_req.url.as_deref())),
+          RequestState::new(endpoint_label(endpoint, None)),
         );
         self.in_flight = self.in_flight.saturating_add(1);
       }

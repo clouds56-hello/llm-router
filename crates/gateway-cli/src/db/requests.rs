@@ -27,6 +27,11 @@ const MIGRATIONS: &[migrate::Migration] = &[
     name: "add_response_header_latency",
     sql: include_str!("../../../../scripts/migrations/requests/004_add_response_header_latency.sql"),
   },
+  migrate::Migration {
+    version: 5,
+    name: "add_source_and_method",
+    sql: include_str!("../../../../scripts/migrations/requests/005_add_source_and_method.sql"),
+  },
 ];
 
 pub fn latest_version() -> u32 {
@@ -74,17 +79,19 @@ impl RequestsDb {
     let inbound_resp_headers = headers_json(&r.inbound_resp.headers);
 
     conn.execute(
-      "INSERT INTO requests (ts, session_id, request_id, request_error, endpoint, account_id, provider_id, model, initiator, status, stream, latency_ms, latency_header_ms,
+      "INSERT INTO requests (ts, session_id, source, method, request_id, request_error, endpoint, account_id, provider_id, model, initiator, status, stream, latency_ms, latency_header_ms,
                              input_tok, output_tok, cached_tok, reasoning_tok,
                              inbound_req_method, inbound_req_url, inbound_req_headers, inbound_req_body,
                              outbound_req_method, outbound_req_url, outbound_req_headers, outbound_req_body,
                              outbound_resp_status, outbound_resp_headers, outbound_resp_body,
                              inbound_resp_status, inbound_resp_headers, inbound_resp_body)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
-               ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31)",
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19,
+               ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33)",
       params![
         r.ts,
         r.session_id,
+        Option::<String>::None,
+        r.inbound_req.method.clone(),
         r.request_id,
         r.request_error,
         r.endpoint,
@@ -125,17 +132,21 @@ impl RequestsDb {
     ts: i64,
     endpoint: &str,
     session_id: Option<&str>,
+    source: Option<&str>,
+    method: Option<&str>,
     inbound_req: &HttpSnapshot,
   ) -> Result<()> {
     let conn = self.conn_for_ts(ts)?;
     let inbound_req_headers = headers_json(&inbound_req.headers);
     conn.execute(
-      "INSERT INTO requests (ts, session_id, request_id, endpoint, account_id, provider_id, model, initiator,
+      "INSERT INTO requests (ts, session_id, source, method, request_id, endpoint, account_id, provider_id, model, initiator,
                              inbound_req_method, inbound_req_url, inbound_req_headers, inbound_req_body)
-       VALUES (?1, ?2, ?3, ?4, '', '', '', '', ?5, ?6, ?7, ?8)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, '', '', '', '', ?7, ?8, ?9, ?10)
        ON CONFLICT(request_id) DO UPDATE SET
          ts=excluded.ts,
          session_id=COALESCE(session_id, excluded.session_id),
+         source=COALESCE(source, excluded.source),
+         method=COALESCE(method, excluded.method),
          endpoint=excluded.endpoint,
          inbound_req_method=excluded.inbound_req_method,
          inbound_req_url=excluded.inbound_req_url,
@@ -144,6 +155,8 @@ impl RequestsDb {
       params![
         ts,
         session_id,
+        source,
+        method,
         request_id,
         endpoint,
         inbound_req.method.as_deref(),
@@ -161,9 +174,9 @@ impl RequestsDb {
     let outbound_req_headers = p.outbound_req.map(|s| headers_json(&s.headers));
     if attempt > 0 {
       conn.execute(
-        "INSERT INTO requests (ts, session_id, request_id, endpoint, account_id, provider_id, model, initiator,
+      "INSERT INTO requests (ts, session_id, source, method, request_id, endpoint, account_id, provider_id, model, initiator,
                                inbound_req_method, inbound_req_url, inbound_req_headers, inbound_req_body)
-         SELECT ts, session_id, ?2, endpoint, '', '', '', '',
+         SELECT ts, session_id, source, method, ?2, endpoint, '', '', '', '',
                 inbound_req_method, inbound_req_url, inbound_req_headers, inbound_req_body
          FROM requests WHERE request_id = ?1
          ON CONFLICT(request_id) DO NOTHING",
@@ -235,7 +248,7 @@ impl RequestsDb {
     let outbound_resp_headers = r.outbound_resp.as_ref().map(|s| headers_json(&s.headers));
     let inbound_resp_headers = headers_json(&r.inbound_resp.headers);
     conn.execute(
-      "INSERT INTO requests (ts, session_id, request_id, request_error, endpoint, account_id, provider_id,
+      "INSERT INTO requests (ts, session_id, source, method, request_id, request_error, endpoint, account_id, provider_id,
                              model, initiator, status, stream, latency_ms, latency_header_ms,
                              input_tok, output_tok, cached_tok, reasoning_tok,
                              inbound_req_method, inbound_req_url, inbound_req_headers, inbound_req_body,
@@ -243,8 +256,10 @@ impl RequestsDb {
                              outbound_resp_status, outbound_resp_headers, outbound_resp_body,
                              inbound_resp_status, inbound_resp_headers, inbound_resp_body)
        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
-               ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31)
+               ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33)
        ON CONFLICT(request_id) DO UPDATE SET
+         source=COALESCE(source, excluded.source),
+         method=COALESCE(method, excluded.method),
          request_error=excluded.request_error,
          endpoint=excluded.endpoint,
          account_id=excluded.account_id,
@@ -276,6 +291,8 @@ impl RequestsDb {
       params![
         r.ts,
         r.session_id,
+        Option::<String>::None,
+        r.inbound_req.method.clone(),
         r.request_id,
         r.request_error,
         r.endpoint,
@@ -394,6 +411,8 @@ mod tests {
       "cached_tok",
       "reasoning_tok",
       "latency_header_ms",
+      "source",
+      "method",
       "inbound_req_headers",
       "inbound_req_body",
       "outbound_req_headers",
@@ -415,7 +434,7 @@ mod tests {
       .unwrap()
       .query_row([], |r| r.get(0))
       .unwrap();
-    assert_eq!(v, 4);
+    assert_eq!(v, 5);
   }
 
   #[test]

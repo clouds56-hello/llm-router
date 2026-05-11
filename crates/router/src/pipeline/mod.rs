@@ -3,13 +3,19 @@ pub(crate) mod parse;
 mod request;
 mod transformer;
 
-pub(crate) use parse::{infer_stream_request, ChatParser, MessagesParser, RequestParser, ResponsesParser};
+pub(crate) use parse::{
+  infer_stream_request, request_body_decode, request_body_extract, request_header_extract, ChatParser, MessagesParser,
+  RequestParser, ResponsesParser,
+};
 
 use crate::api::{error::ApiError, AppState};
 use request::{prepare_request, PoolResolver, ProviderSender};
 use transformer::{EndpointOutputTransformer, UpstreamResponse};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::StatusCode;
 use axum::response::Response;
+#[cfg(test)]
+use axum::http::HeaderMap;
+use llm_core::pipeline::ParsedRequest;
 use llm_core::pipeline::{OutputTransformer, RequestResolver, RequestSender};
 use std::time::Instant;
 use tracing::{debug, info_span, warn, Instrument};
@@ -18,42 +24,14 @@ const MAX_RETRIES: usize = 2;
 
 pub(crate) async fn handle_endpoint(
   state: AppState,
-  parser: &dyn RequestParser,
-  headers: HeaderMap,
+  parsed: ParsedRequest,
   decoded: crate::api::codec::DecodedJsonRequest,
+  request_id: String,
+  started: Instant,
 ) -> Result<Response, ApiError> {
   let resolver = PoolResolver;
   let sender = ProviderSender;
   let transformer = EndpointOutputTransformer;
-  let raw_body = decoded.raw_body.clone();
-  let parsed = parser.parse(headers.clone(), decoded.value.clone());
-  let started = Instant::now();
-
-  // Generate request_id if not provided
-  let request_id = parsed
-    .meta
-    .request_id
-    .clone()
-    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-
-  state.events.emit(llm_core::event::Event::RequestStarted {
-    request_id: request_id.clone(),
-    ts: std::time::SystemTime::now()
-      .duration_since(std::time::UNIX_EPOCH)
-      .unwrap_or_default()
-      .as_secs() as i64,
-    endpoint: parser.endpoint().as_str().to_string(),
-    initiator: parsed.meta.header_initiator.clone(),
-    session_id: parsed.meta.session_id.clone(),
-    project_id: parsed.meta.project_id.clone(),
-    inbound_req: llm_core::db::HttpSnapshot {
-      method: None,
-      url: None,
-      status: None,
-      headers: headers.clone(),
-      body: raw_body,
-    },
-  });
   let mut completion = completion::CompletionGuard::new(state.events.clone(), request_id.clone(), started);
 
   let span = tracing::Span::current();
@@ -103,13 +81,6 @@ pub(crate) async fn handle_endpoint(
       }
     };
 
-    let send_result = async {
-      debug!("sending upstream request");
-      sender.send(&state, &prepared).await
-    }
-    .instrument(attempt_span.clone())
-    .await;
-
     state.events.emit(llm_core::event::Event::RequestParsed {
       request_id: request_id.clone(),
       attempt: attempt_u32,
@@ -123,6 +94,13 @@ pub(crate) async fn handle_endpoint(
         snap
       }),
     });
+
+    let send_result = async {
+      debug!("sending upstream request");
+      sender.send(&state, &prepared).await
+    }
+    .instrument(attempt_span.clone())
+    .await;
 
     let resp = match send_result {
       Ok(resp) => resp,

@@ -1,10 +1,14 @@
 use super::error::ApiError;
 use super::AppState;
-use crate::pipeline::{handle_endpoint, ChatParser, MessagesParser, RequestParser, ResponsesParser};
+use crate::pipeline::{
+  handle_endpoint, request_body_decode, request_body_extract, request_header_extract, ChatParser, MessagesParser, RequestParser,
+  ResponsesParser,
+};
 use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
 use axum::response::Response;
+use std::time::Instant;
 use tracing::instrument;
 
 async fn handle(
@@ -13,8 +17,57 @@ async fn handle(
   inbound: HeaderMap,
   body: Bytes,
 ) -> Result<Response, ApiError> {
-  let decoded = super::codec::decode_json_request(&inbound, body)?;
-  handle_endpoint(state, parser, inbound, decoded).await
+  let started = Instant::now();
+  let ts = unix_ts();
+  let hx = request_header_extract(&inbound);
+  let endpoint_hint = parser.endpoint().as_str().to_string();
+
+  state.events.emit(llm_core::event::Event::RequestStarted {
+    request_id: hx.request_id.clone(),
+    ts,
+    endpoint: endpoint_hint.clone(),
+    session_id: hx.session_id.clone(),
+    ip: "unknown".to_string(),
+    port: 0,
+    method: "POST".to_string(),
+    url: None,
+  });
+  state.events.emit(llm_core::event::Event::RequestHeaders {
+    request_id: hx.request_id.clone(),
+    ts,
+    endpoint_hint: Some(endpoint_hint),
+    path: None,
+    session_id: hx.session_id.clone(),
+    project_id: hx.project_id.clone(),
+    header_initiator: hx.header_initiator.clone(),
+    route_mode_hint: hx.route_mode_hint.clone(),
+    inbound_headers: inbound.clone(),
+  });
+
+  let decoded = match request_body_decode(&inbound, body) {
+    Ok(decoded) => decoded,
+    Err(err) => {
+      state.events.emit(llm_core::event::Event::RequestCompleted {
+        request_id: hx.request_id.clone(),
+        success: false,
+        total_attempts: 1,
+        final_status: Some(err.status().as_u16()),
+        total_latency_ms: started.elapsed().as_millis() as u64,
+        error: Some(err.to_string()),
+      });
+      return Err(err);
+    }
+  };
+  let _body_meta = request_body_extract(&decoded.value);
+  let parsed = parser.parse(inbound, decoded.value.clone());
+  handle_endpoint(state, parsed, decoded, hx.request_id, started).await
+}
+
+fn unix_ts() -> i64 {
+  std::time::SystemTime::now()
+    .duration_since(std::time::UNIX_EPOCH)
+    .unwrap_or_default()
+    .as_secs() as i64
 }
 
 /// Inject route mode from path prefix into headers, overriding any existing value.

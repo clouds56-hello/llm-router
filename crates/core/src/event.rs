@@ -6,15 +6,29 @@ use tokio::sync::{mpsc, oneshot};
 #[derive(Debug)]
 pub enum Event {
   // --- Request lifecycle ---
-  /// Request received and parsed. Emitted before upstream send.
+  /// Request accepted. Emitted before body decode/parse begins.
   RequestStarted {
     request_id: String,
     ts: i64,
     endpoint: String,
-    initiator: Option<String>,
+    session_id: Option<String>,
+    ip: String,
+    port: u16,
+    method: String,
+    url: Option<String>,
+  },
+
+  /// Request headers parsed/classified (before body parse).
+  RequestHeaders {
+    request_id: String,
+    ts: i64,
+    endpoint_hint: Option<String>,
+    path: Option<String>,
     session_id: Option<String>,
     project_id: Option<String>,
-    inbound_req: HttpSnapshot,
+    header_initiator: Option<String>,
+    route_mode_hint: Option<String>,
+    inbound_headers: HeaderMap,
   },
 
   /// Request routed to an account, about to send upstream.

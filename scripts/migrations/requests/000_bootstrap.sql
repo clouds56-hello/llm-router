@@ -7,6 +7,8 @@ CREATE TABLE requests (
   id INTEGER PRIMARY KEY,
   ts INTEGER NOT NULL,
   session_id TEXT,
+  source TEXT,
+  method TEXT,
   request_id TEXT,
   request_error TEXT,
   endpoint TEXT NOT NULL,

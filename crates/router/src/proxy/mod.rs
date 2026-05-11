@@ -23,7 +23,7 @@ const DEFAULT_INTERCEPT_HOSTS: &[&str] = &[
   "openrouter.ai",
   "api.openai.com",
   "chatgpt.com",
-  "ab.chatgpt.com",
+  // "ab.chatgpt.com",
   "opencode.ai",
 ];
 

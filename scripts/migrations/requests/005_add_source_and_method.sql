@@ -1,0 +1,2 @@
+ALTER TABLE requests ADD COLUMN source TEXT;
+ALTER TABLE requests ADD COLUMN method TEXT;

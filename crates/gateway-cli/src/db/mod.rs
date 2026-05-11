@@ -5,15 +5,14 @@ pub mod sessions;
 pub mod usage;
 
 use bytes::Bytes;
+use reqwest::header::HeaderMap;
 use snafu::Snafu;
 
 pub use llm_core::db::{CallRecord, DbPaths, HttpSnapshot, MessageRecord, PartRecord};
 #[allow(unused_imports)]
 pub(crate) use llm_core::db::{Usage, UsageDetails};
+use llm_core::db::SessionSource;
 pub use usage::UsageDb;
-
-#[cfg(test)]
-pub use llm_core::db::SessionSource;
 
 /// Serialise an HTTP header map to JSON bytes, redacting values whose name
 /// is sensitive (`authorization`, `proxy-authorization`, `cookie`, anything
@@ -91,6 +90,8 @@ struct PendingRequest {
   ts: i64,
   session_id: Option<String>,
   project_id: Option<String>,
+  source: Option<String>,
+  method: Option<String>,
   endpoint: String,
   model: String,
   initiator: String,
@@ -138,14 +139,31 @@ impl EventHandler for DbEventHandler {
         request_id,
         ts,
         endpoint,
-        initiator,
         session_id,
-        project_id,
-        inbound_req,
+        ip,
+        port,
+        method,
+        url,
       } => {
+        let source = format!("{ip}:{port}");
+        let inbound_req = HttpSnapshot {
+          method: Some(method.clone()),
+          url: url.clone(),
+          status: None,
+          headers: HeaderMap::new(),
+          body: Bytes::new(),
+        };
         if let Err(e) = self
           .requests
-          .started(request_id, *ts, endpoint, session_id.as_deref(), inbound_req)
+          .started(
+            request_id,
+            *ts,
+            endpoint,
+            session_id.as_deref(),
+            Some(source.as_str()),
+            Some(method.as_str()),
+            &inbound_req,
+          )
         {
           tracing::warn!(error = %e, "failed to insert started requests db row");
         }
@@ -154,18 +172,99 @@ impl EventHandler for DbEventHandler {
           PendingRequest {
             ts: *ts,
             session_id: session_id.clone(),
-            project_id: project_id.clone(),
+            project_id: None,
+            source: Some(source),
+            method: Some(method.clone()),
             endpoint: endpoint.clone(),
             model: String::new(),
-            initiator: initiator.clone().unwrap_or_default(),
+            initiator: String::new(),
             stream: false,
             account_id: String::new(),
             provider_id: String::new(),
-            inbound_req: inbound_req.clone(),
+            inbound_req,
             outbound_req: None,
             latency_header_ms: None,
           },
         );
+      }
+      Event::RequestHeaders {
+        request_id,
+        ts,
+        endpoint_hint,
+        path,
+        session_id,
+        project_id,
+        header_initiator,
+        route_mode_hint: _,
+        inbound_headers,
+      } => {
+        let endpoint = endpoint_hint.clone().or_else(|| path.clone()).unwrap_or_default();
+        let source = self
+          .pending
+          .get(&(request_id.clone(), 0))
+          .and_then(|p| p.source.clone());
+        let method = self
+          .pending
+          .get(&(request_id.clone(), 0))
+          .and_then(|p| p.method.clone());
+        let url = self
+          .pending
+          .get(&(request_id.clone(), 0))
+          .and_then(|p| p.inbound_req.url.clone());
+        let inbound_req = HttpSnapshot {
+          method: method.clone(),
+          url: url.clone(),
+          status: None,
+          headers: inbound_headers.clone(),
+          body: Bytes::new(),
+        };
+        if let Err(e) = self
+          .requests
+          .started(
+            request_id,
+            *ts,
+            &endpoint,
+            session_id.as_deref(),
+            source.as_deref(),
+            method.as_deref(),
+            &inbound_req,
+          )
+        {
+          tracing::warn!(error = %e, "failed to insert/update headers requests db row");
+        }
+        let key = (request_id.clone(), 0);
+        let pending = self.pending.entry(key).or_insert_with(|| PendingRequest {
+          ts: *ts,
+          session_id: session_id.clone(),
+          project_id: project_id.clone(),
+          source: None,
+          method: method.clone(),
+          endpoint: endpoint.clone(),
+          model: String::new(),
+          initiator: header_initiator.clone().unwrap_or_default(),
+          stream: false,
+          account_id: String::new(),
+          provider_id: String::new(),
+          inbound_req: inbound_req.clone(),
+          outbound_req: None,
+          latency_header_ms: None,
+        });
+        pending.ts = *ts;
+        pending.session_id = session_id.clone().or_else(|| pending.session_id.clone());
+        pending.project_id = project_id.clone().or_else(|| pending.project_id.clone());
+        pending.method = pending.method.clone().or_else(|| method.clone());
+        if !endpoint.is_empty() {
+          pending.endpoint = endpoint;
+        }
+        if let Some(initiator) = header_initiator.clone() {
+          pending.initiator = initiator;
+        }
+        pending.inbound_req.method = pending
+          .inbound_req
+          .method
+          .clone()
+          .or_else(|| method.clone());
+        pending.inbound_req.headers = inbound_headers.clone();
       }
       Event::RequestParsed {
         request_id,
@@ -301,8 +400,52 @@ impl EventHandler for DbEventHandler {
         }
         write_record(&mut self.usage, &mut self.sessions, &record);
       }
-      Event::RequestCompleted { request_id, .. } => {
-        // Clean up any remaining pending state for the base request (all attempts)
+      Event::RequestCompleted {
+        request_id,
+        success,
+        final_status,
+        error,
+        ..
+      } => {
+        if !success {
+          let key = (request_id.clone(), 0);
+          if let Some(p) = self.pending.get(&key).cloned() {
+            let record = CallRecord {
+              ts: p.ts,
+              session_id: p.session_id.unwrap_or_default(),
+              session_source: SessionSource::Header,
+              request_id: request_id.clone(),
+              request_error: error.clone(),
+              project_id: p.project_id,
+              endpoint: p.endpoint,
+              account_id: p.account_id,
+              provider_id: p.provider_id,
+              model: p.model,
+              initiator: p.initiator,
+              status: final_status.unwrap_or(0),
+              stream: p.stream,
+              latency_ms: None,
+              latency_header_ms: p.latency_header_ms,
+              usage: Usage::default(),
+              inbound_req: p.inbound_req,
+              outbound_req: p.outbound_req,
+              outbound_resp: None,
+              inbound_resp: HttpSnapshot {
+                method: None,
+                url: None,
+                status: *final_status,
+                headers: HeaderMap::new(),
+                body: Bytes::new(),
+              },
+              messages: Vec::new(),
+            };
+            if let Err(e) = self.requests.result(&record) {
+              tracing::warn!(error = %e, "failed to persist completed failure row");
+            }
+            write_record(&mut self.usage, &mut self.sessions, &record);
+          }
+        }
+        // Clean up any remaining pending state for the base request (all attempts).
         self.pending.retain(|(id, _), _| id != request_id);
       }
       _ => {}
@@ -341,10 +484,11 @@ mod tests {
       request_id: req_id.into(),
       ts,
       endpoint: "chat_completions".into(),
-      initiator: Some("user".into()),
       session_id: Some("sess-1".into()),
-      project_id: None,
-      inbound_req: HttpSnapshot::default(),
+      ip: "127.0.0.1".into(),
+      port: 4142,
+      method: "POST".into(),
+      url: Some("https://example.test/v1/responses".into()),
     }
   }
 
@@ -358,6 +502,20 @@ mod tests {
       stream: false,
       initiator: "user".into(),
       outbound_req: None,
+    }
+  }
+
+  fn headers(req_id: &str, ts: i64) -> Event {
+    Event::RequestHeaders {
+      request_id: req_id.into(),
+      ts,
+      endpoint_hint: Some("responses".into()),
+      path: Some("/v1/responses".into()),
+      session_id: Some("sess-1".into()),
+      project_id: Some("proj-1".into()),
+      header_initiator: Some("user".into()),
+      route_mode_hint: Some("route".into()),
+      inbound_headers: HeaderMap::new(),
     }
   }
 
@@ -526,6 +684,22 @@ mod tests {
     assert_eq!(rows.len(), 1, "expected one partial row, got {rows:?}");
     assert_eq!(rows[0].0, "req-no-result");
     assert_eq!(rows[0].1, None);
+  }
+
+  #[test]
+  fn started_and_headers_then_completed_failure_writes_error_row() {
+    let (mut h, dir) = make_handler();
+    let req = "req-parse-fail";
+    let ts = 1_700_000_000;
+    h.handle(&started(req, ts));
+    h.handle(&headers(req, ts));
+    h.handle(&completed(req, false, 1, Some(400), Some("invalid JSON request body")));
+
+    let rows = fetch_rows(&dir);
+    assert_eq!(rows.len(), 1, "expected one failure row, got {rows:?}");
+    assert_eq!(rows[0].0, "req-parse-fail");
+    assert_eq!(rows[0].1, Some(400));
+    assert_eq!(rows[0].2.as_deref(), Some("invalid JSON request body"));
   }
 
   /// A `RequestResult` for an attempt must persist a row immediately, even if

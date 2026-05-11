@@ -90,7 +90,7 @@ pub(super) async fn handle_client(
   if intercept {
     stream.write_all(CONNECT_OK).await?;
     stream.flush().await?;
-    intercept_tls(stream, &host, state, router, ca, route_resolver, http, proxy_route_mode).await
+    intercept_tls(stream, peer, &host, state, router, ca, route_resolver, http, proxy_route_mode).await
   } else {
     tunnel(stream, &host, port).await
   }
@@ -108,6 +108,7 @@ async fn tunnel(mut client: TcpStream, host: &str, port: u16) -> Result<()> {
 
 async fn intercept_tls(
   stream: TcpStream,
+  peer: SocketAddr,
   host: &str,
   state: Arc<AppState>,
   router: Router,
@@ -135,6 +136,7 @@ async fn intercept_tls(
       router.clone(),
       route_resolver.clone(),
       http.clone(),
+      peer,
       req,
       proxy_route_mode.clone(),
     )
@@ -151,6 +153,7 @@ async fn route_intercepted_request(
   router: Router,
   route_resolver: Arc<RouteResolver>,
   http: reqwest::Client,
+  source: SocketAddr,
   mut req: Request<hyper::body::Incoming>,
   proxy_route_mode: Option<String>,
 ) -> Result<Response<Body>, std::convert::Infallible> {
@@ -187,7 +190,7 @@ async fn route_intercepted_request(
   tracing::trace!(%host, path = %path, method = %method, route_mode = ?route_mode, resolved_mode = ?resolved_mode, "resolved route mode for intercepted request");
   if matches!(resolved_mode, Ok(RouteMode::Passthrough)) {
     return Ok(
-      proxy_passthrough(state.as_ref(), &http, &host, req)
+      proxy_passthrough(state.as_ref(), &http, &host, source, req)
         .await
         .inspect(|b| {
          if !b.status().is_success() {
