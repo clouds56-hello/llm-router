@@ -168,6 +168,8 @@ mod tests {
       ts: 100,
       session_id: "session-1".into(),
       session_source: SessionSource::Header,
+      source: Some("127.0.0.1:4142".into()),
+      method: Some("POST".into()),
       request_id: "request-1".into(),
       request_error: None,
       project_id: Some("project-1".into()),

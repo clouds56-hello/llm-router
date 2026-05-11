@@ -101,6 +101,7 @@ struct PendingRequest {
   inbound_req: HttpSnapshot,
   outbound_req: Option<HttpSnapshot>,
   latency_header_ms: Option<u64>,
+  result_written: bool,
 }
 
 /// Database writer that implements `EventHandler` for use with the event bus.
@@ -191,6 +192,7 @@ impl EventHandler for DbEventHandler {
             inbound_req,
             outbound_req: None,
             latency_header_ms: None,
+            result_written: false,
           },
         );
       }
@@ -207,7 +209,6 @@ impl EventHandler for DbEventHandler {
       } => {
         let endpoint = endpoint_hint.clone().or_else(|| path.clone()).unwrap_or_default();
         let pending_start = self.pending.get(&(request_id.clone(), 0)).cloned();
-        let source = pending_start.as_ref().and_then(|p| p.source.as_deref());
         let method = pending_start.as_ref().and_then(|p| p.method.as_deref());
         let url = pending_start.as_ref().and_then(|p| p.inbound_req.url.as_deref());
         let inbound_req = HttpSnapshot {
@@ -219,14 +220,15 @@ impl EventHandler for DbEventHandler {
         };
         if let Err(e) = self
           .requests
-          .started(
+          .headers(
             request_id,
-            *ts,
-            &endpoint,
-            session_id.as_deref(),
-            source.as_deref(),
-            method.as_deref(),
-            &inbound_req,
+            requests::HeadersUpdate {
+              ts: *ts,
+              endpoint: &endpoint,
+              session_id: session_id.as_deref(),
+              method: method.as_deref(),
+              inbound_req: &inbound_req,
+            },
           )
         {
           tracing::warn!(error = %e, "failed to insert/update headers requests db row");
@@ -247,6 +249,7 @@ impl EventHandler for DbEventHandler {
           inbound_req: inbound_req.clone(),
           outbound_req: None,
           latency_header_ms: None,
+          result_written: false,
         });
         pending.ts = *ts;
         pending.session_id = session_id.clone().or_else(|| pending.session_id.clone());
@@ -286,6 +289,7 @@ impl EventHandler for DbEventHandler {
           if let Some(base) = self.pending.get(&(request_id.clone(), 0)).cloned() {
             let mut retry = base;
             retry.latency_header_ms = None;
+            retry.result_written = false;
             self.pending.insert(key.clone(), retry);
           }
         }
@@ -348,12 +352,21 @@ impl EventHandler for DbEventHandler {
         } else {
           format!("{request_id}:{attempt}")
         };
-        let pending = self.pending.remove(&key);
+        let pending = if *attempt == 0 {
+          self.pending.get_mut(&key).map(|p| {
+            p.result_written = true;
+            p.clone()
+          })
+        } else {
+          self.pending.remove(&key)
+        };
         let record = if let Some(p) = pending {
           CallRecord {
             ts: p.ts,
             session_id: p.session_id.unwrap_or_default(),
             session_source: *session_source,
+            source: p.source,
+            method: p.method,
             request_id: composite_id,
             request_error: request_error.clone(),
             project_id: p.project_id,
@@ -379,6 +392,8 @@ impl EventHandler for DbEventHandler {
             ts: 0,
             session_id: String::new(),
             session_source: *session_source,
+            source: None,
+            method: None,
             request_id: composite_id,
             request_error: request_error.clone(),
             project_id: None,
@@ -413,11 +428,13 @@ impl EventHandler for DbEventHandler {
       } => {
         if !success {
           let key = (request_id.clone(), 0);
-          if let Some(p) = self.pending.get(&key).cloned() {
+          if let Some(p) = self.pending.get(&key).cloned().filter(|p| !p.result_written) {
             let record = CallRecord {
               ts: p.ts,
               session_id: p.session_id.unwrap_or_default(),
               session_source: SessionSource::Header,
+              source: p.source,
+              method: p.method,
               request_id: request_id.clone(),
               request_error: error.clone(),
               project_id: p.project_id,
@@ -666,6 +683,34 @@ mod tests {
     rows
   }
 
+  fn fetch_endpoint_and_headers(dir: &std::path::Path) -> Vec<(String, String, String)> {
+    let mut rows = Vec::new();
+    for entry in std::fs::read_dir(dir.join("requests")).unwrap() {
+      let p = entry.unwrap().path();
+      if p.extension().and_then(|e| e.to_str()) != Some("db") {
+        continue;
+      }
+      let conn = Connection::open(&p).unwrap();
+      let mut stmt = conn
+        .prepare("SELECT request_id, endpoint, inbound_req_headers FROM requests ORDER BY request_id")
+        .unwrap();
+      let iter = stmt
+        .query_map([], |r| {
+          Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            String::from_utf8(r.get::<_, Vec<u8>>(2)?).unwrap_or_default(),
+          ))
+        })
+        .unwrap();
+      for r in iter {
+        rows.push(r.unwrap());
+      }
+    }
+    rows.sort();
+    rows
+  }
+
   #[test]
   fn first_attempt_success_writes_one_row() {
     let (mut h, dir) = make_handler();
@@ -739,6 +784,26 @@ mod tests {
     assert_eq!(rows, vec![("req-no-peer".into(), None, Some("POST".into()))]);
   }
 
+  #[test]
+  fn headers_update_existing_started_row_without_reinserting() {
+    let (mut h, dir) = make_handler();
+    let req = "req-headers";
+    let ts = 1_700_000_000;
+    let mut event = headers(req, ts);
+    if let Event::RequestHeaders { inbound_headers, .. } = &mut event {
+      inbound_headers.insert("x-test", "1".parse().unwrap());
+    }
+
+    h.handle(&started(req, ts));
+    h.handle(&event);
+
+    let rows = fetch_endpoint_and_headers(&dir);
+    assert_eq!(rows.len(), 1, "expected one row after headers update, got {rows:?}");
+    assert_eq!(rows[0].0, "req-headers");
+    assert_eq!(rows[0].1, "responses");
+    assert!(rows[0].2.contains("\"x-test\":\"1\""));
+  }
+
   /// Lifecycle persistence inserts a partial row before a final result exists,
   /// so interrupted requests are still visible in the request DB.
   #[test]
@@ -770,6 +835,11 @@ mod tests {
     assert_eq!(rows[0].0, "req-parse-fail");
     assert_eq!(rows[0].1, Some(400));
     assert_eq!(rows[0].2.as_deref(), Some("invalid JSON request body"));
+    let source_rows = fetch_source_and_method(&dir);
+    assert_eq!(
+      source_rows,
+      vec![("req-parse-fail".into(), Some("127.0.0.1:4142".into()), Some("POST".into()))]
+    );
   }
 
   /// A `RequestResult` for an attempt must persist a row immediately, even if
@@ -820,6 +890,14 @@ mod tests {
     assert_eq!(rows[1].0, "req-2:1");
     assert_eq!(rows[1].1, Some(200));
     assert_eq!(rows[1].2, None);
+    let source_rows = fetch_source_and_method(&dir);
+    assert_eq!(
+      source_rows,
+      vec![
+        ("req-2".into(), Some("127.0.0.1:4142".into()), Some("POST".into())),
+        ("req-2:1".into(), Some("127.0.0.1:4142".into()), Some("POST".into())),
+      ]
+    );
   }
 
   #[test]

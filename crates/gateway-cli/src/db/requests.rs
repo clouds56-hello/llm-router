@@ -44,6 +44,14 @@ pub struct RequestsDb {
   order: VecDeque<String>,
 }
 
+pub struct HeadersUpdate<'a> {
+  pub ts: i64,
+  pub endpoint: &'a str,
+  pub session_id: Option<&'a str>,
+  pub method: Option<&'a str>,
+  pub inbound_req: &'a HttpSnapshot,
+}
+
 impl RequestsDb {
   pub fn new(dir: PathBuf) -> Result<Self> {
     std::fs::create_dir_all(&dir)?;
@@ -90,8 +98,8 @@ impl RequestsDb {
       params![
         r.ts,
         r.session_id,
-        Option::<String>::None,
-        r.inbound_req.method.clone(),
+        r.source.as_deref(),
+        r.method.as_deref(),
         r.request_id,
         r.request_error,
         r.endpoint,
@@ -165,6 +173,34 @@ impl RequestsDb {
         inbound_req.body.as_ref(),
       ],
     )?;
+    Ok(())
+  }
+
+  pub fn headers(&mut self, request_id: &str, h: HeadersUpdate<'_>) -> Result<()> {
+    let conn = self.conn_for_ts(h.ts)?;
+    let inbound_req_headers = headers_json(&h.inbound_req.headers);
+    let updated = conn.execute(
+      "UPDATE requests SET
+         session_id=COALESCE(?2, session_id),
+         method=COALESCE(?3, method),
+         endpoint=?4,
+         inbound_req_method=COALESCE(?5, inbound_req_method),
+         inbound_req_url=COALESCE(?6, inbound_req_url),
+         inbound_req_headers=?7
+       WHERE request_id=?1",
+      params![
+        request_id,
+        h.session_id,
+        h.method,
+        h.endpoint,
+        h.inbound_req.method.as_deref(),
+        h.inbound_req.url.as_deref(),
+        inbound_req_headers.as_ref(),
+      ],
+    )?;
+    if updated == 0 {
+      tracing::warn!(request_id = %request_id, "RequestHeaders without started requests row");
+    }
     Ok(())
   }
 
@@ -291,8 +327,8 @@ impl RequestsDb {
       params![
         r.ts,
         r.session_id,
-        Option::<String>::None,
-        r.inbound_req.method.clone(),
+        r.source.as_deref(),
+        r.method.as_deref(),
         r.request_id,
         r.request_error,
         r.endpoint,
@@ -467,6 +503,8 @@ mod tests {
       ts,
       session_id: "session-1".into(),
       session_source: SessionSource::Header,
+      source: Some("127.0.0.1:4142".into()),
+      method: Some("POST".into()),
       request_id: "request-1".into(),
       request_error: Some("stream terminated before completion".into()),
       project_id: Some("project-1".into()),
@@ -495,5 +533,109 @@ mod tests {
       })
       .unwrap();
     assert_eq!(row, ("request-1".into(), "stream terminated before completion".into()));
+  }
+
+  #[test]
+  fn headers_updates_existing_started_row() {
+    let dir = std::env::temp_dir().join(format!("llm-router-req-headers-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut db = RequestsDb::new(dir.clone()).unwrap();
+    let ts = 1_700_000_000;
+    let request_id = "request-headers";
+    let started = HttpSnapshot {
+      method: Some("POST".into()),
+      url: Some("https://example.test/original".into()),
+      ..Default::default()
+    };
+    db.started(
+      request_id,
+      ts,
+      "chat_completions",
+      Some("sess-1"),
+      Some("127.0.0.1:4142"),
+      Some("POST"),
+      &started,
+    )
+    .unwrap();
+
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert("x-test", "1".parse().unwrap());
+    let with_headers = HttpSnapshot {
+      method: Some("POST".into()),
+      url: Some("https://example.test/original".into()),
+      headers,
+      ..Default::default()
+    };
+    db.headers(
+      request_id,
+      HeadersUpdate {
+        ts,
+        endpoint: "responses",
+        session_id: Some("sess-1"),
+        method: Some("POST"),
+        inbound_req: &with_headers,
+      },
+    )
+    .unwrap();
+
+    let conn = open_day_db(&dir.join(format!("{}.db", day_key(ts)))).unwrap();
+    let row: (i64, String, Option<String>, Option<String>, Vec<u8>) = conn
+      .query_row(
+        "SELECT COUNT(*), endpoint, source, method, inbound_req_headers FROM requests WHERE request_id = ?1",
+        params![request_id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+      )
+      .unwrap();
+    assert_eq!(row.0, 1);
+    assert_eq!(row.1, "responses");
+    assert_eq!(row.2.as_deref(), Some("127.0.0.1:4142"));
+    assert_eq!(row.3.as_deref(), Some("POST"));
+    assert!(String::from_utf8(row.4).unwrap().contains("\"x-test\":\"1\""));
+  }
+
+  #[test]
+  fn result_insert_can_backfill_source_and_method() {
+    let dir = std::env::temp_dir().join(format!("llm-router-req-result-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut db = RequestsDb::new(dir.clone()).unwrap();
+    let ts = 1_700_000_000;
+
+    db.result(&CallRecord {
+      ts,
+      session_id: "session-1".into(),
+      session_source: SessionSource::Header,
+      source: Some("127.0.0.1:4142".into()),
+      method: Some("POST".into()),
+      request_id: "request-result".into(),
+      request_error: None,
+      project_id: Some("project-1".into()),
+      endpoint: "responses".into(),
+      account_id: "account".into(),
+      provider_id: "provider".into(),
+      model: "model".into(),
+      initiator: "user".into(),
+      status: 200,
+      stream: false,
+      latency_ms: Some(10),
+      latency_header_ms: Some(4),
+      usage: Usage::default(),
+      inbound_req: HttpSnapshot::default(),
+      outbound_req: None,
+      outbound_resp: None,
+      inbound_resp: HttpSnapshot::default(),
+      messages: Vec::new(),
+    })
+    .unwrap();
+
+    let conn = open_day_db(&dir.join(format!("{}.db", day_key(ts)))).unwrap();
+    let row: (Option<String>, Option<String>) = conn
+      .query_row(
+        "SELECT source, method FROM requests WHERE request_id = 'request-result'",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+      )
+      .unwrap();
+    assert_eq!(row.0.as_deref(), Some("127.0.0.1:4142"));
+    assert_eq!(row.1.as_deref(), Some("POST"));
   }
 }
