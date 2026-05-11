@@ -1,8 +1,7 @@
 use super::error::ApiError;
 use super::AppState;
 use crate::pipeline::{
-  handle_endpoint, request_body_decode, request_body_extract, request_header_extract, ChatParser, MessagesParser, RequestParser,
-  ResponsesParser,
+  handle_endpoint, request_header_extract, ChatParser, MessagesParser, RequestParser, ResponsesParser,
 };
 use axum::body::Bytes;
 use axum::extract::{Path, State};
@@ -27,8 +26,8 @@ async fn handle(
     ts,
     endpoint: endpoint_hint.clone(),
     session_id: hx.session_id.clone(),
-    ip: "unknown".to_string(),
-    port: 0,
+    ip: None,
+    port: None,
     method: "POST".to_string(),
     url: None,
   });
@@ -44,7 +43,7 @@ async fn handle(
     inbound_headers: inbound.clone(),
   });
 
-  let decoded = match request_body_decode(&inbound, body) {
+  let decoded = match super::codec::decode_json_request(&inbound, body) {
     Ok(decoded) => decoded,
     Err(err) => {
       state.events.emit(llm_core::event::Event::RequestCompleted {
@@ -58,7 +57,6 @@ async fn handle(
       return Err(err);
     }
   };
-  let _body_meta = request_body_extract(&decoded.value);
   let parsed = parser.parse(inbound, decoded.value.clone());
   handle_endpoint(state, parsed, decoded, hx.request_id, started).await
 }

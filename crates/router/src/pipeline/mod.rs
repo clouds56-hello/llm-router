@@ -4,8 +4,7 @@ mod request;
 mod transformer;
 
 pub(crate) use parse::{
-  infer_stream_request, request_body_decode, request_body_extract, request_header_extract, ChatParser, MessagesParser,
-  RequestParser, ResponsesParser,
+  request_body_extract, request_header_extract, ChatParser, MessagesParser, RequestParser, ResponsesParser,
 };
 
 use crate::api::{error::ApiError, AppState};
@@ -310,6 +309,50 @@ mod tests {
 
     let parsed = ResponsesParser.parse(headers, body);
     assert!(!parsed.meta.stream);
+  }
+
+  #[test]
+  fn request_body_extract_prefers_header_initiator_and_body_stream_flag() {
+    let mut headers = HeaderMap::new();
+    headers.insert("x-initiator", HeaderValue::from_static("agent"));
+    headers.insert(
+      axum::http::header::ACCEPT,
+      HeaderValue::from_static("text/event-stream"),
+    );
+    let body = json!({
+      "model": "gpt-5",
+      "stream": false,
+      "messages": [{"role": "user", "content": "hi"}]
+    });
+
+    let body_meta = request_body_extract(&headers, &body);
+
+    assert_eq!(body_meta.model, "gpt-5");
+    assert!(!body_meta.stream);
+    assert_eq!(body_meta.initiator, "agent");
+    assert_eq!(body_meta.header_initiator.as_deref(), Some("agent"));
+  }
+
+  #[test]
+  fn request_body_extract_falls_back_to_responses_body_classifier() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+      axum::http::header::ACCEPT,
+      HeaderValue::from_static("text/event-stream"),
+    );
+    let body = json!({
+      "input": [
+        { "role": "user", "content": "x" },
+        { "type": "function_call_output", "output": "42" }
+      ]
+    });
+
+    let body_meta = request_body_extract(&headers, &body);
+
+    assert_eq!(body_meta.model, "unknown");
+    assert!(body_meta.stream);
+    assert_eq!(body_meta.initiator, "agent");
+    assert_eq!(body_meta.header_initiator, None);
   }
 
   #[test]

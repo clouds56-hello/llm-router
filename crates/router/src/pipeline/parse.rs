@@ -2,7 +2,6 @@ use crate::api::{first_header, PROJECT_ID_HEADERS, REQUEST_ID_HEADERS, SESSION_I
 use crate::provider::Endpoint;
 use axum::http::header::ACCEPT;
 use axum::http::HeaderMap;
-use bytes::Bytes;
 use llm_core::pipeline::{ParsedRequest, RequestMeta};
 use serde_json::Value;
 
@@ -18,7 +17,9 @@ pub(crate) struct HeaderExtract {
 #[derive(Clone, Debug)]
 pub(crate) struct BodyExtract {
   pub model: String,
-  pub stream_flag: Option<bool>,
+  pub stream: bool,
+  pub initiator: String,
+  pub header_initiator: Option<String>,
 }
 
 pub(crate) fn request_header_extract(headers: &HeaderMap) -> HeaderExtract {
@@ -47,21 +48,22 @@ pub(crate) fn request_header_extract(headers: &HeaderMap) -> HeaderExtract {
   }
 }
 
-pub(crate) fn request_body_decode(
-  headers: &HeaderMap,
-  raw_body: Bytes,
-) -> Result<crate::api::codec::DecodedJsonRequest, crate::api::error::ApiError> {
-  crate::api::codec::decode_json_request(headers, raw_body)
-}
-
-pub(crate) fn request_body_extract(body: &Value) -> BodyExtract {
+pub(crate) fn request_body_extract(headers: &HeaderMap, body: &Value) -> BodyExtract {
+  let header_initiator = headers
+    .get("x-initiator")
+    .and_then(|v| v.to_str().ok())
+    .map(|v| v.trim().to_ascii_lowercase())
+    .filter(|v| v == "user" || v == "agent");
+  let initiator = header_initiator.clone().unwrap_or_else(|| classify_initiator(body).to_string());
   BodyExtract {
     model: body
       .get("model")
       .and_then(|v| v.as_str())
       .unwrap_or("unknown")
       .to_string(),
-    stream_flag: body.get("stream").and_then(|v| v.as_bool()),
+    stream: infer_stream_request(headers, body),
+    initiator,
+    header_initiator,
   }
 }
 
@@ -82,26 +84,11 @@ pub(crate) fn infer_stream_request(headers: &HeaderMap, body: &Value) -> bool {
 pub(crate) trait RequestParser: Send + Sync {
   fn endpoint(&self) -> Endpoint;
 
-  fn auto_classify_initiator(&self, body: &Value) -> &'static str;
-
   fn parse(&self, headers: HeaderMap, body: Value) -> ParsedRequest {
-    let model = body
-      .get("model")
-      .and_then(|v| v.as_str())
-      .unwrap_or("unknown")
-      .to_string();
-    let stream = infer_stream_request(&headers, &body);
+    let body_meta = request_body_extract(&headers, &body);
     let session_id = first_header(&headers, SESSION_ID_HEADERS).map(str::to_string);
     let request_id = first_header(&headers, REQUEST_ID_HEADERS).map(str::to_string);
     let project_id = first_header(&headers, PROJECT_ID_HEADERS).map(str::to_string);
-    let header_initiator = headers
-      .get("x-initiator")
-      .and_then(|v| v.to_str().ok())
-      .map(|v| v.trim().to_ascii_lowercase())
-      .filter(|v| v == "user" || v == "agent");
-    let initiator = header_initiator
-      .clone()
-      .unwrap_or_else(|| self.auto_classify_initiator(&body).to_string());
     let behave_as = headers
       .get("x-behave-as")
       .and_then(|v| v.to_str().ok())
@@ -112,15 +99,15 @@ pub(crate) trait RequestParser: Send + Sync {
       meta: RequestMeta {
         endpoint: self.endpoint(),
         upstream_endpoint: self.endpoint(),
-        model: model.clone(),
-        upstream_model: model,
-        stream,
+        model: body_meta.model.clone(),
+        upstream_model: body_meta.model,
+        stream: body_meta.stream,
         session_id,
         request_id,
         attempt: 0,
         project_id,
-        initiator,
-        header_initiator,
+        initiator: body_meta.initiator,
+        header_initiator: body_meta.header_initiator,
         behave_as,
         inbound_headers: headers,
       },
@@ -137,19 +124,11 @@ impl RequestParser for ChatParser {
   fn endpoint(&self) -> Endpoint {
     Endpoint::ChatCompletions
   }
-
-  fn auto_classify_initiator(&self, body: &Value) -> &'static str {
-    crate::util::initiator::classify_initiator(body)
-  }
 }
 
 impl RequestParser for ResponsesParser {
   fn endpoint(&self) -> Endpoint {
     Endpoint::Responses
-  }
-
-  fn auto_classify_initiator(&self, body: &Value) -> &'static str {
-    crate::util::initiator::classify_initiator_responses(body)
   }
 }
 
@@ -157,8 +136,12 @@ impl RequestParser for MessagesParser {
   fn endpoint(&self) -> Endpoint {
     Endpoint::Messages
   }
+}
 
-  fn auto_classify_initiator(&self, body: &Value) -> &'static str {
+fn classify_initiator(body: &Value) -> &'static str {
+  if body.get("input").is_some() {
+    crate::util::initiator::classify_initiator_responses(body)
+  } else {
     crate::util::initiator::classify_initiator(body)
   }
 }

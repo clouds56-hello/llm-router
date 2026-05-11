@@ -63,6 +63,8 @@ mod tests {
           ts,
           endpoint,
           session_id,
+          method,
+          url,
           ..
         } => {
           self.pending.insert(
@@ -84,7 +86,11 @@ mod tests {
               latency_ms: None,
               latency_header_ms: None,
               usage: Usage::default(),
-              inbound_req: Default::default(),
+              inbound_req: crate::db::HttpSnapshot {
+                method: Some(method.clone()),
+                url: url.clone(),
+                ..Default::default()
+              },
               outbound_req: None,
               outbound_resp: None,
               inbound_resp: Default::default(),
@@ -483,8 +489,8 @@ mod tests {
       ts: 0,
       endpoint: ctx.endpoint.map(|e| e.as_str()).unwrap_or("unknown").to_string(),
       session_id: ctx.session_id.clone(),
-      ip: "127.0.0.1".into(),
-      port: 4142,
+      ip: Some("127.0.0.1".into()),
+      port: Some(4142),
       method: "POST".into(),
       url: Some("https://api.openai.com/v1/chat/completions".into()),
     });

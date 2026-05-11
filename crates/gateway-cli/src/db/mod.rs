@@ -130,6 +130,13 @@ impl DbEventHandler {
       pending: HashMap::new(),
     })
   }
+
+  fn source_from_start(ip: &Option<String>, port: &Option<u16>) -> Option<String> {
+    match (ip.as_deref(), *port) {
+      (Some(ip), Some(port)) => Some(format!("{ip}:{port}")),
+      _ => None,
+    }
+  }
 }
 
 impl EventHandler for DbEventHandler {
@@ -145,7 +152,7 @@ impl EventHandler for DbEventHandler {
         method,
         url,
       } => {
-        let source = format!("{ip}:{port}");
+        let source = Self::source_from_start(ip, port);
         let inbound_req = HttpSnapshot {
           method: Some(method.clone()),
           url: url.clone(),
@@ -160,7 +167,7 @@ impl EventHandler for DbEventHandler {
             *ts,
             endpoint,
             session_id.as_deref(),
-            Some(source.as_str()),
+            source.as_deref(),
             Some(method.as_str()),
             &inbound_req,
           )
@@ -173,7 +180,7 @@ impl EventHandler for DbEventHandler {
             ts: *ts,
             session_id: session_id.clone(),
             project_id: None,
-            source: Some(source),
+            source,
             method: Some(method.clone()),
             endpoint: endpoint.clone(),
             model: String::new(),
@@ -199,21 +206,13 @@ impl EventHandler for DbEventHandler {
         inbound_headers,
       } => {
         let endpoint = endpoint_hint.clone().or_else(|| path.clone()).unwrap_or_default();
-        let source = self
-          .pending
-          .get(&(request_id.clone(), 0))
-          .and_then(|p| p.source.clone());
-        let method = self
-          .pending
-          .get(&(request_id.clone(), 0))
-          .and_then(|p| p.method.clone());
-        let url = self
-          .pending
-          .get(&(request_id.clone(), 0))
-          .and_then(|p| p.inbound_req.url.clone());
+        let pending_start = self.pending.get(&(request_id.clone(), 0)).cloned();
+        let source = pending_start.as_ref().and_then(|p| p.source.as_deref());
+        let method = pending_start.as_ref().and_then(|p| p.method.as_deref());
+        let url = pending_start.as_ref().and_then(|p| p.inbound_req.url.as_deref());
         let inbound_req = HttpSnapshot {
-          method: method.clone(),
-          url: url.clone(),
+          method: method.map(str::to_string),
+          url: url.map(str::to_string),
           status: None,
           headers: inbound_headers.clone(),
           body: Bytes::new(),
@@ -238,7 +237,7 @@ impl EventHandler for DbEventHandler {
           session_id: session_id.clone(),
           project_id: project_id.clone(),
           source: None,
-          method: method.clone(),
+          method: method.map(str::to_string),
           endpoint: endpoint.clone(),
           model: String::new(),
           initiator: header_initiator.clone().unwrap_or_default(),
@@ -252,7 +251,7 @@ impl EventHandler for DbEventHandler {
         pending.ts = *ts;
         pending.session_id = session_id.clone().or_else(|| pending.session_id.clone());
         pending.project_id = project_id.clone().or_else(|| pending.project_id.clone());
-        pending.method = pending.method.clone().or_else(|| method.clone());
+        pending.method = pending.method.clone().or_else(|| method.map(str::to_string));
         if !endpoint.is_empty() {
           pending.endpoint = endpoint;
         }
@@ -263,7 +262,12 @@ impl EventHandler for DbEventHandler {
           .inbound_req
           .method
           .clone()
-          .or_else(|| method.clone());
+          .or_else(|| method.map(str::to_string));
+        pending.inbound_req.url = pending
+          .inbound_req
+          .url
+          .clone()
+          .or_else(|| url.map(str::to_string));
         pending.inbound_req.headers = inbound_headers.clone();
       }
       Event::RequestParsed {
@@ -485,8 +489,21 @@ mod tests {
       ts,
       endpoint: "chat_completions".into(),
       session_id: Some("sess-1".into()),
-      ip: "127.0.0.1".into(),
-      port: 4142,
+      ip: Some("127.0.0.1".into()),
+      port: Some(4142),
+      method: "POST".into(),
+      url: Some("https://example.test/v1/responses".into()),
+    }
+  }
+
+  fn started_without_peer(req_id: &str, ts: i64) -> Event {
+    Event::RequestStarted {
+      request_id: req_id.into(),
+      ts,
+      endpoint: "chat_completions".into(),
+      session_id: Some("sess-1".into()),
+      ip: None,
+      port: None,
       method: "POST".into(),
       url: Some("https://example.test/v1/responses".into()),
     }
@@ -621,6 +638,34 @@ mod tests {
     rows
   }
 
+  fn fetch_source_and_method(dir: &std::path::Path) -> Vec<(String, Option<String>, Option<String>)> {
+    let mut rows = Vec::new();
+    for entry in std::fs::read_dir(dir.join("requests")).unwrap() {
+      let p = entry.unwrap().path();
+      if p.extension().and_then(|e| e.to_str()) != Some("db") {
+        continue;
+      }
+      let conn = Connection::open(&p).unwrap();
+      let mut stmt = conn
+        .prepare("SELECT request_id, source, method FROM requests ORDER BY request_id")
+        .unwrap();
+      let iter = stmt
+        .query_map([], |r| {
+          Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, Option<String>>(1)?,
+            r.get::<_, Option<String>>(2)?,
+          ))
+        })
+        .unwrap();
+      for r in iter {
+        rows.push(r.unwrap());
+      }
+    }
+    rows.sort();
+    rows
+  }
+
   #[test]
   fn first_attempt_success_writes_one_row() {
     let (mut h, dir) = make_handler();
@@ -667,6 +712,31 @@ mod tests {
 
     let rows = fetch_sessions(&dir);
     assert_eq!(rows, vec![("req-session".into(), Some("sess-1".into()))]);
+  }
+
+  #[test]
+  fn request_started_with_peer_persists_source_and_method() {
+    let (mut h, dir) = make_handler();
+    let req = "req-peer";
+    let ts = 1_700_000_000;
+    h.handle(&started(req, ts));
+
+    let rows = fetch_source_and_method(&dir);
+    assert_eq!(
+      rows,
+      vec![("req-peer".into(), Some("127.0.0.1:4142".into()), Some("POST".into()))]
+    );
+  }
+
+  #[test]
+  fn request_started_without_peer_leaves_source_null() {
+    let (mut h, dir) = make_handler();
+    let req = "req-no-peer";
+    let ts = 1_700_000_000;
+    h.handle(&started_without_peer(req, ts));
+
+    let rows = fetch_source_and_method(&dir);
+    assert_eq!(rows, vec![("req-no-peer".into(), None, Some("POST".into()))]);
   }
 
   /// Lifecycle persistence inserts a partial row before a final result exists,

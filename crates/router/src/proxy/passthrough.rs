@@ -1,5 +1,5 @@
 use crate::api::AppState;
-use crate::pipeline::{infer_stream_request, request_body_decode, request_body_extract, request_header_extract};
+use crate::pipeline::{request_body_extract, request_header_extract};
 use crate::relay::{is_sse_response, passthrough_buffered_response, passthrough_streaming_response, ForwardContext};
 use anyhow::{Context, Result};
 use axum::body::Body;
@@ -29,19 +29,13 @@ pub(super) async fn proxy_passthrough(
   let hx = request_header_extract(&parts.headers);
   let request_id = hx.request_id.clone();
   let path = path_and_query.split('?').next().unwrap_or(&path_and_query);
-  let header_initiator = parts
-    .headers
-    .get("x-initiator")
-    .and_then(|v| v.to_str().ok())
-    .map(|v| v.trim().to_ascii_lowercase())
-    .filter(|v| v == "user" || v == "agent");
   state.events.emit(llm_core::event::Event::RequestStarted {
     request_id: request_id.clone(),
     ts,
     endpoint: path.to_string(),
     session_id: hx.session_id.clone(),
-    ip: source.ip().to_string(),
-    port: source.port(),
+    ip: Some(source.ip().to_string()),
+    port: Some(source.port()),
     method: parts.method.to_string(),
     url: Some(url.clone()),
   });
@@ -63,7 +57,7 @@ pub(super) async fn proxy_passthrough(
   let req_body_json = if request_body.is_empty() {
     serde_json::Value::Null
   } else {
-    match request_body_decode(&parts.headers, request_body.clone()) {
+    match crate::api::codec::decode_json_request(&parts.headers, request_body.clone()) {
       Ok(decoded) => decoded.value,
       Err(err) => {
         state.events.emit(llm_core::event::Event::RequestCompleted {
@@ -94,12 +88,8 @@ pub(super) async fn proxy_passthrough(
 
   let ctx = ForwardContext::from_passthrough(&parts.method, path, &parts.headers, &req_body_json, started);
   let mut completion = crate::pipeline::completion::CompletionGuard::new(state.events.clone(), request_id.clone(), started);
-  let body_meta = request_body_extract(&req_body_json);
-  let initiator = header_initiator
-    .unwrap_or_else(|| crate::util::initiator::classify_initiator(&req_body_json).to_string());
-  let stream = body_meta
-    .stream_flag
-    .unwrap_or_else(|| infer_stream_request(&parts.headers, &req_body_json));
+  let body_meta = request_body_extract(&parts.headers, &req_body_json);
+  let stream = body_meta.stream;
   state.events.emit(llm_core::event::Event::RequestParsed {
     request_id: request_id.clone(),
     attempt: ctx.attempt,
@@ -107,7 +97,7 @@ pub(super) async fn proxy_passthrough(
     provider_id: host.to_string(),
     model: body_meta.model.clone(),
     stream,
-    initiator,
+    initiator: body_meta.initiator,
     outbound_req: Some(crate::db::HttpSnapshot {
       method: Some(parts.method.to_string()),
       url: Some(url.clone()),
