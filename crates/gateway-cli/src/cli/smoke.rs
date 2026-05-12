@@ -64,8 +64,33 @@ pub struct SmokeArgs {
   #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
   pub format: OutputFormat,
 
-  /// Message to send.
-  pub message: String,
+  /// Read the raw JSON request body from a file (or `-` for stdin) instead of
+  /// the auto-built body. When set, `message` is optional and `--model`
+  /// defaults to whatever the body declares.
+  #[arg(long)]
+  pub body_file: Option<PathBuf>,
+
+  /// Inject a custom inbound header (`name=value`). Repeatable. Last wins per
+  /// header name. Useful for replaying captured requests that depend on
+  /// `accept`, `originator`, etc.
+  #[arg(long = "header", value_parser = parse_header_kv, num_args = 0..)]
+  pub headers: Vec<(String, String)>,
+
+  /// Message to send. Optional when `--body-file` is provided.
+  pub message: Option<String>,
+}
+
+fn parse_header_kv(raw: &str) -> std::result::Result<(String, String), String> {
+  let (k, v) = raw
+    .split_once('=')
+    .or_else(|| raw.split_once(':').map(|(a, b)| (a, b.trim_start())))
+    .ok_or_else(|| format!("expected `name=value` or `name: value`, got `{raw}`"))?;
+  let k = k.trim().to_string();
+  let v = v.trim().to_string();
+  if k.is_empty() {
+    return Err("header name must not be empty".into());
+  }
+  Ok((k, v))
 }
 
 pub async fn run(cfg_path: Option<PathBuf>, args: SmokeArgs) -> Result<()> {
@@ -92,12 +117,28 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SmokeArgs) -> Result<()> {
 
   let state = crate::server_runtime::build_state(&cfg, events.clone())?;
 
-  let model = match &args.model {
-    Some(m) => m.clone(),
-    None => pick_default_model(&state, args.provider.as_deref())?,
+  // If --body-file was provided, load it now so we can extract a default
+  // model from it before route resolution.
+  let custom_body: Option<serde_json::Value> = match args.body_file.as_deref() {
+    Some(path) => Some(load_body_file(path)?),
+    None => None,
+  };
+
+  let model = match (&args.model, custom_body.as_ref()) {
+    (Some(m), _) => m.clone(),
+    (None, Some(body)) => body
+      .get("model")
+      .and_then(|v| v.as_str())
+      .map(str::to_string)
+      .ok_or_else(|| anyhow!("--body-file does not contain a `model` field; pass --model"))?,
+    (None, None) => pick_default_model(&state, args.provider.as_deref())?,
   };
 
   let endpoint: Endpoint = args.endpoint.into();
+
+  if custom_body.is_none() && args.message.is_none() {
+    anyhow::bail!("missing message: pass either a positional message or --body-file");
+  }
 
   // Resolve once just to print a friendly header in text mode; the handler
   // resolves again internally.
@@ -110,12 +151,39 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SmokeArgs) -> Result<()> {
     println!("endpoint: {}", endpoint);
     println!("route:    {}", route_mode_name(route_mode));
     println!("stream:   {}", args.stream);
+    if args.body_file.is_some() {
+      println!("body:     {}", args.body_file.as_ref().unwrap().display());
+    }
     println!();
   }
 
-  let body_value = build_request_body(endpoint, &route.upstream_model, &args.message, args.stream);
+  let body_value = match custom_body {
+    Some(mut v) => {
+      // Force the requested model and stream flag onto the supplied body so
+      // the operator's CLI flags actually take effect when replaying a
+      // captured request.
+      if let Some(obj) = v.as_object_mut() {
+        if args.model.is_some() {
+          obj.insert("model".into(), serde_json::Value::String(model.clone()));
+        }
+        // Only override `stream` when the operator explicitly set --stream;
+        // otherwise leave whatever the captured body had so we faithfully
+        // replay it.
+        if args.stream {
+          obj.insert("stream".into(), serde_json::Value::Bool(true));
+        }
+      }
+      v
+    }
+    None => build_request_body(
+      endpoint,
+      &route.upstream_model,
+      args.message.as_deref().unwrap_or(""),
+      args.stream,
+    ),
+  };
   let body_bytes = Bytes::from(serde_json::to_vec(&body_value)?);
-  let headers = build_headers();
+  let headers = build_headers(&args.headers)?;
 
   // Invoke the public axum handler directly. This goes through the same
   // pipeline used for real HTTP requests, so all events fire (DB rows are
@@ -201,7 +269,7 @@ fn build_request_body(endpoint: Endpoint, model: &str, message: &str, stream: bo
   }
 }
 
-fn build_headers() -> HeaderMap {
+fn build_headers(overrides: &[(String, String)]) -> Result<HeaderMap> {
   let mut h = HeaderMap::new();
   h.insert(
     HeaderName::from_static("content-type"),
@@ -211,7 +279,34 @@ fn build_headers() -> HeaderMap {
     HeaderName::from_static("x-request-id"),
     HeaderValue::from_str(&uuid::Uuid::new_v4().to_string()).unwrap(),
   );
-  h
+  for (k, v) in overrides {
+    let name = HeaderName::from_bytes(k.to_ascii_lowercase().as_bytes())
+      .map_err(|e| anyhow!("invalid header name `{k}`: {e}"))?;
+    let value = HeaderValue::from_str(v).map_err(|e| anyhow!("invalid value for header `{k}`: {e}"))?;
+    h.insert(name, value);
+  }
+  Ok(h)
+}
+
+fn load_body_file(path: &std::path::Path) -> Result<serde_json::Value> {
+  use std::io::Read;
+  let raw = if path == std::path::Path::new("-") {
+    let mut buf = String::new();
+    std::io::stdin()
+      .read_to_string(&mut buf)
+      .map_err(|e| anyhow!("read stdin: {e}"))?;
+    buf
+  } else {
+    std::fs::read_to_string(path).map_err(|e| anyhow!("read {}: {e}", path.display()))?
+  };
+  // Allow operators to paste a captured request that includes a leading
+  // `Headers: { ... }\n\nBody:\n{ ... }` preamble. Accept either the raw
+  // JSON body or anything that comes after a `Body:` line.
+  let body_str = match raw.split_once("\nBody:\n") {
+    Some((_, after)) => after.trim_start(),
+    None => raw.trim_start(),
+  };
+  serde_json::from_str(body_str).map_err(|e| anyhow!("parse body file as JSON: {e}"))
 }
 
 fn pick_default_model(state: &AppState, provider_filter: Option<&str>) -> Result<String> {

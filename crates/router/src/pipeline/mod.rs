@@ -144,6 +144,20 @@ pub(crate) async fn handle_endpoint(
       last_err = Some((status, body_text));
       continue;
     }
+    // Surface other 4xx (bad request, payload too large, etc.) verbatim so
+    // clients see the upstream message instead of an empty SSE body. The
+    // account is healthy in this case, so we do not cool it down or retry.
+    if status.is_client_error() {
+      let body_text = resp.text().await.unwrap_or_default();
+      warn!(parent: &attempt_span, %status, body = %body_text, "upstream client error; surfacing verbatim");
+      let msg = if body_text.trim().is_empty() {
+        crate::api::error::fallback_upstream_message(status)
+      } else {
+        body_text
+      };
+      completion.failure(Some(status.as_u16()), msg.clone());
+      return Err(ApiError::upstream(status, msg));
+    }
 
     prepared.account.mark_success();
     if let Some(id) = prepared.meta.session_id.as_deref() {
