@@ -1,6 +1,6 @@
 use crate::api::error::ApiError;
 use crate::api::AppState;
-use crate::pipeline::{request_body_extract, request_header_extract};
+use crate::pipeline::{build_failure_result_event, request_body_extract, request_header_extract};
 use crate::relay::{is_sse_response, passthrough_buffered_response, passthrough_streaming_response, ForwardContext};
 use anyhow::{Context, Result};
 use axum::body::Body;
@@ -62,13 +62,25 @@ pub(super) async fn proxy_passthrough(
     match crate::api::codec::decode_json_request(&parts.headers, request_body.clone()) {
       Ok(decoded) => (decoded.value, decoded.decoded_body),
       Err(err) => {
+        let status = err.status();
+        let msg = err.to_string();
+        // Synthesise terminal RequestResult so the DB row records the JSON
+        // envelope returned to the client even when we never reached upstream.
+        state.events.emit(build_failure_result_event(
+          request_id.clone(),
+          0,
+          started,
+          status,
+          msg.clone(),
+          None,
+        ));
         state.events.emit(llm_core::event::Event::RequestCompleted {
           request_id: request_id.clone(),
           success: false,
           total_attempts: 1,
-          final_status: Some(err.status().as_u16()),
+          final_status: Some(status.as_u16()),
           total_latency_ms: started.elapsed().as_millis() as u64,
-          error: Some(err.to_string()),
+          error: Some(msg),
         });
         return Ok(err.into_response());
       }
@@ -108,6 +120,17 @@ pub(super) async fn proxy_passthrough(
     Ok(response) => response,
     Err(err) => {
       let message = crate::api::error::sanitized_transport_failure_message(host, &err);
+      // Synthesise terminal RequestResult: no upstream response was received,
+      // so outbound_resp_body is None. RequestResponded is intentionally not
+      // emitted (we never got upstream headers/status).
+      state.events.emit(build_failure_result_event(
+        request_id.clone(),
+        ctx.attempt,
+        started,
+        StatusCode::BAD_GATEWAY,
+        message.clone(),
+        None,
+      ));
       completion.failure(Some(StatusCode::BAD_GATEWAY.as_u16()), message.clone());
       return Ok(ApiError::bad_gateway(message).into_response());
     }

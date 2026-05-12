@@ -9,18 +9,95 @@ pub(crate) use parse::{
 };
 
 use crate::api::{error::ApiError, AppState};
-#[cfg(test)]
+use axum::http::header::CONTENT_TYPE;
 use axum::http::HeaderMap;
+use axum::http::HeaderValue;
 use axum::http::StatusCode;
 use axum::response::Response;
+use bytes::Bytes;
+use llm_core::db::{SessionSource, Usage};
+use llm_core::event::Event;
 use llm_core::pipeline::ParsedRequest;
 use llm_core::pipeline::{OutputTransformer, RequestResolver, RequestSender};
-use request::{prepare_request, PoolResolver, ProviderSender};
+use request::{prepare_request, PoolResolver, PreparedRequest, ProviderSender};
 use std::time::Instant;
 use tracing::{debug, info_span, warn, Instrument};
 use transformer::{EndpointOutputTransformer, UpstreamResponse};
 
 const MAX_RETRIES: usize = 2;
+
+/// JSON error envelope content-type used by `ApiError::IntoResponse`.
+fn json_envelope_headers() -> HeaderMap {
+  let mut h = HeaderMap::new();
+  h.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+  h
+}
+
+/// Emit `RequestResponded` carrying upstream response status/headers and the
+/// outbound request snapshot captured during `provider.send`. Mirrors the
+/// success-path emission so DB rows on error branches still receive
+/// `outbound_*` metadata.
+fn emit_request_responded(
+  state: &AppState,
+  request_id: &str,
+  attempt: u32,
+  prepared: &PreparedRequest,
+  status: StatusCode,
+  resp_headers: &HeaderMap,
+  started: Instant,
+) {
+  let captured_outbound = prepared.capture.get().cloned();
+  let (out_method, out_url, out_headers) = match captured_outbound.as_ref() {
+    Some(snap) => (snap.method.clone(), snap.url.clone(), Some(snap.req_headers.clone())),
+    None => (None, None, None),
+  };
+  let out_body = if !prepared.debug_outbound_body.is_empty() {
+    Some(prepared.debug_outbound_body.clone())
+  } else {
+    captured_outbound.as_ref().map(|s| s.req_body.clone())
+  };
+  state.events.emit(Event::RequestResponded {
+    request_id: request_id.to_string(),
+    attempt,
+    outbound_status: status.as_u16(),
+    latency_ms: started.elapsed().as_millis() as u64,
+    outbound_resp_headers: resp_headers.clone(),
+    outbound_req_method: out_method,
+    outbound_req_url: out_url,
+    outbound_req_headers: out_headers,
+    outbound_req_body: out_body,
+  });
+}
+
+/// Build the `RequestResult` event for a terminal failure path. The downstream
+/// JSON envelope (`inbound_resp_*`) is synthesised from `ApiError` so DB rows
+/// match the bytes/headers actually returned to the client. `upstream_body` is
+/// the upstream response body when one was received (`None` for transport
+/// failures before any upstream reply).
+pub(crate) fn build_failure_result_event(
+  request_id: String,
+  attempt: u32,
+  started: Instant,
+  status: StatusCode,
+  error_msg: String,
+  upstream_body: Option<Bytes>,
+) -> Event {
+  let api_err = ApiError::upstream(status, error_msg.clone());
+  let inbound_body = api_err.body_bytes();
+  Event::RequestResult {
+    request_id,
+    attempt,
+    session_source: SessionSource::Auto,
+    latency_ms: started.elapsed().as_millis() as u64,
+    inbound_status: status.as_u16(),
+    usage: Usage::default(),
+    request_error: Some(error_msg),
+    inbound_resp_headers: json_envelope_headers(),
+    inbound_resp_body: inbound_body,
+    outbound_resp_body: upstream_body,
+    messages: Vec::new(),
+  }
+}
 
 pub(crate) async fn handle_endpoint(
   state: AppState,
@@ -121,19 +198,45 @@ pub(crate) async fn handle_endpoint(
 
     if status == StatusCode::UNAUTHORIZED {
       warn!(parent: &attempt_span, "401 from upstream; refreshing creds");
+      let resp_headers = resp.headers().clone();
+      let body_text = resp.text().await.unwrap_or_default();
+      emit_request_responded(
+        &state,
+        &request_id,
+        attempt_u32,
+        &prepared,
+        status,
+        &resp_headers,
+        started,
+      );
       prepared.account.invalidate_credentials();
       state.events.emit(llm_core::event::Event::RequestRetry {
         request_id: request_id.clone(),
         attempt: attempt_u32,
         error: "unauthorized".into(),
       });
-      last_err = Some((status, "unauthorized".into()));
-      completion.failure(Some(status.as_u16()), "unauthorized");
+      let err_msg = if body_text.trim().is_empty() {
+        "unauthorized".to_string()
+      } else {
+        body_text
+      };
+      last_err = Some((status, err_msg.clone()));
+      completion.failure(Some(status.as_u16()), err_msg);
       continue;
     }
     if status == StatusCode::TOO_MANY_REQUESTS || status == StatusCode::FORBIDDEN || status.is_server_error() {
+      let resp_headers = resp.headers().clone();
       let body_text = resp.text().await.unwrap_or_default();
       warn!(parent: &attempt_span, %status, body = %body_text, "upstream error; cooldown");
+      emit_request_responded(
+        &state,
+        &request_id,
+        attempt_u32,
+        &prepared,
+        status,
+        &resp_headers,
+        started,
+      );
       prepared.account.mark_failure(state.pool.cooldown_base());
       state.events.emit(llm_core::event::Event::RequestRetry {
         request_id: request_id.clone(),
@@ -148,13 +251,36 @@ pub(crate) async fn handle_endpoint(
     // clients see the upstream message instead of an empty SSE body. The
     // account is healthy in this case, so we do not cool it down or retry.
     if status.is_client_error() {
+      let resp_headers = resp.headers().clone();
       let body_text = resp.text().await.unwrap_or_default();
       warn!(parent: &attempt_span, %status, body = %body_text, "upstream client error; surfacing verbatim");
+      emit_request_responded(
+        &state,
+        &request_id,
+        attempt_u32,
+        &prepared,
+        status,
+        &resp_headers,
+        started,
+      );
+      let upstream_body_bytes = if body_text.is_empty() {
+        None
+      } else {
+        Some(Bytes::copy_from_slice(body_text.as_bytes()))
+      };
       let msg = if body_text.trim().is_empty() {
         crate::api::error::fallback_upstream_message(status)
       } else {
         body_text
       };
+      state.events.emit(build_failure_result_event(
+        request_id.clone(),
+        attempt_u32,
+        started,
+        status,
+        msg.clone(),
+        upstream_body_bytes,
+      ));
       completion.failure(Some(status.as_u16()), msg.clone());
       return Err(ApiError::upstream(status, msg));
     }
@@ -166,29 +292,16 @@ pub(crate) async fn handle_endpoint(
 
     // Emit RequestResponded with upstream status. Routed mode: outbound request snapshot
     // is now available via OutboundCapture (populated by the provider during send).
-    let captured_outbound = prepared.capture.get().cloned();
-    let (out_method, out_url, out_headers) = match captured_outbound.as_ref() {
-      Some(snap) => (snap.method.clone(), snap.url.clone(), Some(snap.req_headers.clone())),
-      None => (None, None, None),
-    };
-    // Body sent upstream: prefer the debug body (decoded) so subscribers see plain JSON;
-    // fall back to the captured (post-encoding) body if debug is empty.
-    let out_body = if !prepared.debug_outbound_body.is_empty() {
-      Some(prepared.debug_outbound_body.clone())
-    } else {
-      captured_outbound.as_ref().map(|s| s.req_body.clone())
-    };
-    state.events.emit(llm_core::event::Event::RequestResponded {
-      request_id: request_id.clone(),
-      attempt: attempt_u32,
-      outbound_status: status.as_u16(),
-      latency_ms: started.elapsed().as_millis() as u64,
-      outbound_resp_headers: resp.headers().clone(),
-      outbound_req_method: out_method,
-      outbound_req_url: out_url,
-      outbound_req_headers: out_headers,
-      outbound_req_body: out_body,
-    });
+    let resp_headers = resp.headers().clone();
+    emit_request_responded(
+      &state,
+      &request_id,
+      attempt_u32,
+      &prepared,
+      status,
+      &resp_headers,
+      started,
+    );
 
     // Pass base request ID and attempt number into forward context via meta
     let mut meta = prepared.meta;
@@ -225,6 +338,14 @@ pub(crate) async fn handle_endpoint(
 
   // All attempts failed
   let (status, msg) = last_err.unwrap_or((StatusCode::BAD_GATEWAY, "all attempts failed".into()));
+  state.events.emit(build_failure_result_event(
+    request_id.clone(),
+    MAX_RETRIES as u32,
+    started,
+    status,
+    msg.clone(),
+    None,
+  ));
   state.events.emit(llm_core::event::Event::RequestCompleted {
     request_id: request_id.clone(),
     success: false,
@@ -437,6 +558,70 @@ mod tests {
         .and_then(|v| v.as_str()),
       Some("enabled")
     );
+  }
+
+  #[test]
+  fn build_failure_result_event_synthesises_inbound_envelope() {
+    let event = build_failure_result_event(
+      "req-1".into(),
+      0,
+      Instant::now(),
+      StatusCode::BAD_REQUEST,
+      "tools.0.function.name empty".into(),
+      Some(Bytes::from_static(b"{\"error\":\"upstream body\"}")),
+    );
+    let Event::RequestResult {
+      inbound_status,
+      inbound_resp_body,
+      outbound_resp_body,
+      request_error,
+      inbound_resp_headers,
+      ..
+    } = event
+    else {
+      panic!("wrong variant");
+    };
+    assert_eq!(inbound_status, 400);
+    assert!(request_error.as_deref().unwrap().contains("tools.0.function.name"));
+    assert_eq!(
+      inbound_resp_headers.get(axum::http::header::CONTENT_TYPE).unwrap(),
+      "application/json"
+    );
+    let envelope: serde_json::Value = serde_json::from_slice(&inbound_resp_body).unwrap();
+    assert_eq!(envelope["error"]["code"], 400);
+    assert_eq!(envelope["error"]["type"], "upstream_error");
+    assert!(envelope["error"]["message"]
+      .as_str()
+      .unwrap()
+      .contains("tools.0.function.name"));
+    assert_eq!(
+      outbound_resp_body.unwrap().as_ref(),
+      b"{\"error\":\"upstream body\"}"
+    );
+  }
+
+  #[test]
+  fn build_failure_result_event_no_upstream_body() {
+    let event = build_failure_result_event(
+      "req-2".into(),
+      2,
+      Instant::now(),
+      StatusCode::BAD_GATEWAY,
+      "token exchange: HTTP request failed".into(),
+      None,
+    );
+    let Event::RequestResult {
+      inbound_status,
+      outbound_resp_body,
+      attempt,
+      ..
+    } = event
+    else {
+      panic!("wrong variant");
+    };
+    assert_eq!(inbound_status, 502);
+    assert_eq!(attempt, 2);
+    assert!(outbound_resp_body.is_none());
   }
 
   #[test]
