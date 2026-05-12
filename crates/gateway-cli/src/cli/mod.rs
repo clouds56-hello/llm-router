@@ -14,6 +14,7 @@ mod migration;
 mod onboarding;
 mod proxy;
 mod serve;
+mod smoke;
 mod update;
 mod usage;
 
@@ -53,6 +54,8 @@ pub enum Cmd {
   Update(update::UpdateArgs),
   /// Apply pending DB migrations (or restore from `.bak` with --rollback)
   Migration(migration::MigrationArgs),
+  /// Send a single smoke-test request to verify account/provider connectivity
+  Smoke(smoke::SmokeArgs),
 }
 
 impl Cli {
@@ -83,6 +86,7 @@ impl Cli {
       Cmd::Config(a) => config_cmd::run(cfg_path, a).await,
       Cmd::Update(a) => update::run(a).await,
       Cmd::Migration(a) => migration::run(cfg_path, a).await,
+      Cmd::Smoke(a) => smoke::run(cfg_path, a).await,
     };
     r.map_err(Error::from)
   }
