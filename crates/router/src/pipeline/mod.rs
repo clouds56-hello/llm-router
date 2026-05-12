@@ -57,6 +57,7 @@ pub(crate) async fn handle_endpoint(
       }
     };
     resolved.raw_body = decoded.raw_body.clone();
+    resolved.decoded_body = decoded.decoded_body.clone();
     resolved.content_encoding = decoded.encoding;
     let account_id = resolved.account.id();
     crate::api::record_last_account(&account_id);
@@ -89,10 +90,7 @@ pub(crate) async fn handle_endpoint(
       model: prepared.meta.model.clone(),
       stream: prepared.meta.stream,
       initiator: prepared.meta.initiator.clone(),
-      outbound_req: prepared.capture.get().cloned().map(|mut snap| {
-        snap.body = prepared.debug_outbound_body.clone();
-        snap
-      }),
+      inbound_body: prepared.inbound_body_bytes.clone(),
     });
 
     let send_result = async {
@@ -152,13 +150,30 @@ pub(crate) async fn handle_endpoint(
       state.pool.record_session(id, &prepared.account.id());
     }
 
-    // Emit RequestResponded with upstream status
+    // Emit RequestResponded with upstream status. Routed mode: outbound request snapshot
+    // is now available via OutboundCapture (populated by the provider during send).
+    let captured_outbound = prepared.capture.get().cloned();
+    let (out_method, out_url, out_headers) = match captured_outbound.as_ref() {
+      Some(snap) => (snap.method.clone(), snap.url.clone(), Some(snap.headers.clone())),
+      None => (None, None, None),
+    };
+    // Body sent upstream: prefer the debug body (decoded) so subscribers see plain JSON;
+    // fall back to the captured (post-encoding) body if debug is empty.
+    let out_body = if !prepared.debug_outbound_body.is_empty() {
+      Some(prepared.debug_outbound_body.clone())
+    } else {
+      captured_outbound.as_ref().map(|s| s.body.clone())
+    };
     state.events.emit(llm_core::event::Event::RequestResponded {
       request_id: request_id.clone(),
       attempt: attempt_u32,
       status: status.as_u16(),
       latency_ms: started.elapsed().as_millis() as u64,
-      resp_headers: resp.headers().clone(),
+      outbound_resp_headers: resp.headers().clone(),
+      outbound_req_method: out_method,
+      outbound_req_url: out_url,
+      outbound_req_headers: out_headers,
+      outbound_req_body: out_body,
     });
 
     // Pass base request ID and attempt number into forward context via meta
@@ -384,6 +399,7 @@ mod tests {
         "input": "hi"
       }),
       raw_body: Bytes::from_static(br#"{"model":"glm-4.6","input":"hi"}"#),
+      decoded_body: Bytes::from_static(br#"{"model":"glm-4.6","input":"hi"}"#),
       content_encoding: None,
       route,
       account,

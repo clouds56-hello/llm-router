@@ -15,6 +15,8 @@ pub(crate) struct ResolvedRequest {
   pub(crate) meta: RequestMeta,
   pub(crate) body: Value,
   pub(crate) raw_body: Bytes,
+  /// Post-decompression bytes of the inbound request body.
+  pub(crate) decoded_body: Bytes,
   pub(crate) content_encoding: Option<crate::api::codec::ContentEncodingKind>,
   pub(crate) route: RouteResolution,
   pub(crate) account: Arc<AccountHandle>,
@@ -23,6 +25,8 @@ pub(crate) struct ResolvedRequest {
 pub(super) struct PreparedRequest {
   pub(super) meta: RequestMeta,
   pub(super) inbound_body: Value,
+  /// Post-decompression bytes of the inbound request body. Cheap to clone.
+  pub(super) inbound_body_bytes: Bytes,
   pub(super) upstream_body: Value,
   pub(super) upstream_wire_body: Bytes,
   pub(super) debug_outbound_body: Bytes,
@@ -101,6 +105,7 @@ fn resolve_request(state: &AppState, parsed: ParsedRequest, attempt: usize) -> R
     meta,
     body: parsed.body,
     raw_body: Bytes::new(),
+    decoded_body: Bytes::new(),
     content_encoding: None,
     route,
     account,
@@ -128,6 +133,7 @@ pub(super) fn prepare_request(req: ResolvedRequest) -> crate::provider::Result<P
   Ok(PreparedRequest {
     meta: req.meta,
     inbound_body: req.body,
+    inbound_body_bytes: req.decoded_body,
     upstream_body,
     upstream_wire_body,
     debug_outbound_body,

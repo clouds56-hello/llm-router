@@ -56,11 +56,11 @@ pub(super) async fn proxy_passthrough(
   let request_body = axum::body::to_bytes(Body::new(body), usize::MAX)
     .await
     .context("read passthrough request body")?;
-  let req_body_json = if request_body.is_empty() {
-    serde_json::Value::Null
+  let (req_body_json, inbound_decoded_body) = if request_body.is_empty() {
+    (serde_json::Value::Null, bytes::Bytes::new())
   } else {
     match crate::api::codec::decode_json_request(&parts.headers, request_body.clone()) {
-      Ok(decoded) => decoded.value,
+      Ok(decoded) => (decoded.value, decoded.decoded_body),
       Err(err) => {
         state.events.emit(llm_core::event::Event::RequestCompleted {
           request_id: request_id.clone(),
@@ -101,13 +101,7 @@ pub(super) async fn proxy_passthrough(
     model: body_meta.model.clone(),
     stream,
     initiator: body_meta.initiator,
-    outbound_req: Some(crate::db::HttpSnapshot {
-      method: Some(parts.method.to_string()),
-      url: Some(url.clone()),
-      status: None,
-      headers: outbound_req_headers.clone(),
-      body: request_body.clone(),
-    }),
+    inbound_body: inbound_decoded_body.clone(),
   });
 
   let response = match upstream.send().await {
@@ -124,7 +118,11 @@ pub(super) async fn proxy_passthrough(
     attempt: ctx.attempt,
     status: status.as_u16(),
     latency_ms: started.elapsed().as_millis() as u64,
-    resp_headers: response.headers().clone(),
+    outbound_resp_headers: response.headers().clone(),
+    outbound_req_method: Some(parts.method.to_string()),
+    outbound_req_url: Some(url.clone()),
+    outbound_req_headers: Some(outbound_req_headers.clone()),
+    outbound_req_body: Some(request_body.clone()),
   });
 
   if is_sse_response(response.headers(), stream) {

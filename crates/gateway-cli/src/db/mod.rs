@@ -96,6 +96,7 @@ struct PendingRequest {
   provider_id: String,
   inbound_req: HttpSnapshot,
   outbound_req: Option<HttpSnapshot>,
+  outbound_resp_headers: HeaderMap,
   latency_header_ms: Option<u64>,
   result_written: bool,
 }
@@ -188,6 +189,7 @@ impl EventHandler for DbEventHandler {
             provider_id: String::new(),
             inbound_req,
             outbound_req: None,
+            outbound_resp_headers: HeaderMap::new(),
             latency_header_ms: None,
             result_written: false,
           },
@@ -242,6 +244,7 @@ impl EventHandler for DbEventHandler {
           provider_id: String::new(),
           inbound_req: inbound_req.clone(),
           outbound_req: None,
+          outbound_resp_headers: HeaderMap::new(),
           latency_header_ms: None,
           result_written: false,
         });
@@ -271,7 +274,7 @@ impl EventHandler for DbEventHandler {
         model,
         stream,
         initiator,
-        outbound_req,
+        inbound_body,
       } => {
         // For retry attempts, clone from the base (attempt 0) entry
         let key = (request_id.clone(), *attempt);
@@ -289,7 +292,7 @@ impl EventHandler for DbEventHandler {
           p.model = model.clone();
           p.stream = *stream;
           p.initiator = initiator.clone();
-          p.outbound_req = outbound_req.clone();
+          p.inbound_req.body = inbound_body.clone();
           if let Err(e) = self.requests.parsed(
             request_id,
             *attempt,
@@ -301,7 +304,7 @@ impl EventHandler for DbEventHandler {
               model,
               initiator,
               stream: *stream,
-              outbound_req: outbound_req.as_ref(),
+              inbound_body: inbound_body.clone(),
             },
           ) {
             tracing::warn!(error = %e, "failed to update parsed requests db row");
@@ -313,16 +316,37 @@ impl EventHandler for DbEventHandler {
         attempt,
         status,
         latency_ms,
-        resp_headers,
-        ..
+        outbound_resp_headers,
+        outbound_req_method,
+        outbound_req_url,
+        outbound_req_headers,
+        outbound_req_body,
       } => {
         let key = (request_id.clone(), *attempt);
         if let Some(p) = self.pending.get_mut(&key) {
           p.latency_header_ms = Some(*latency_ms);
-          if let Err(e) = self
-            .requests
-            .responded(p.ts, request_id, *attempt, *latency_ms, *status, resp_headers)
-          {
+          // Build/refresh outbound_req snapshot for later CallRecord reassembly.
+          let snap = HttpSnapshot {
+            method: outbound_req_method.clone(),
+            url: outbound_req_url.clone(),
+            status: Some(*status),
+            headers: outbound_req_headers.clone().unwrap_or_default(),
+            body: outbound_req_body.clone().unwrap_or_default(),
+          };
+          p.outbound_req = Some(snap);
+          p.outbound_resp_headers = outbound_resp_headers.clone();
+          if let Err(e) = self.requests.responded(
+            p.ts,
+            request_id,
+            *attempt,
+            *latency_ms,
+            *status,
+            outbound_resp_headers,
+            outbound_req_method.as_deref(),
+            outbound_req_url.as_deref(),
+            outbound_req_headers.as_ref(),
+            outbound_req_body.as_ref(),
+          ) {
             tracing::warn!(error = %e, "failed to update responded requests db row");
           }
         }
@@ -335,8 +359,9 @@ impl EventHandler for DbEventHandler {
         status,
         usage,
         request_error,
-        inbound_resp,
-        outbound_resp,
+        inbound_resp_headers,
+        inbound_resp_body,
+        outbound_resp_body,
         messages,
       } => {
         let key = (request_id.clone(), *attempt);
@@ -354,6 +379,20 @@ impl EventHandler for DbEventHandler {
           self.pending.remove(&key)
         };
         let record = if let Some(p) = pending {
+          let outbound_resp = Some(HttpSnapshot {
+            method: None,
+            url: None,
+            status: Some(*status),
+            headers: p.outbound_resp_headers.clone(),
+            body: outbound_resp_body.clone().unwrap_or_default(),
+          });
+          let inbound_resp = HttpSnapshot {
+            method: None,
+            url: None,
+            status: Some(*status),
+            headers: inbound_resp_headers.clone(),
+            body: inbound_resp_body.clone(),
+          };
           CallRecord {
             ts: p.ts,
             session_id: p.session_id.unwrap_or_default(),
@@ -375,8 +414,8 @@ impl EventHandler for DbEventHandler {
             usage: usage.clone(),
             inbound_req: p.inbound_req,
             outbound_req: p.outbound_req,
-            outbound_resp: outbound_resp.clone(),
-            inbound_resp: inbound_resp.clone(),
+            outbound_resp,
+            inbound_resp,
             messages: messages.clone(),
           }
         } else {
@@ -408,8 +447,20 @@ impl EventHandler for DbEventHandler {
             usage: usage.clone(),
             inbound_req: HttpSnapshot::default(),
             outbound_req: None,
-            outbound_resp: outbound_resp.clone(),
-            inbound_resp: inbound_resp.clone(),
+            outbound_resp: Some(HttpSnapshot {
+              method: None,
+              url: None,
+              status: Some(*status),
+              headers: HeaderMap::new(),
+              body: outbound_resp_body.clone().unwrap_or_default(),
+            }),
+            inbound_resp: HttpSnapshot {
+              method: None,
+              url: None,
+              status: Some(*status),
+              headers: inbound_resp_headers.clone(),
+              body: inbound_resp_body.clone(),
+            },
             messages: messages.clone(),
           }
         };
@@ -476,7 +527,6 @@ impl EventHandler for DbEventHandler {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use llm_core::db::HttpSnapshot;
   use llm_core::event::{Event, EventHandler};
   use reqwest::header::HeaderMap;
   use rusqlite::Connection;
@@ -534,7 +584,7 @@ mod tests {
       model: "m".into(),
       stream: false,
       initiator: "user".into(),
-      outbound_req: None,
+      inbound_body: bytes::Bytes::new(),
     }
   }
 
@@ -561,14 +611,9 @@ mod tests {
       status,
       usage: Usage::default(),
       request_error: error.map(str::to_string),
-      inbound_resp: HttpSnapshot {
-        method: None,
-        url: None,
-        status: Some(status),
-        headers: HeaderMap::new(),
-        body: bytes::Bytes::new(),
-      },
-      outbound_resp: None,
+      inbound_resp_headers: HeaderMap::new(),
+      inbound_resp_body: bytes::Bytes::new(),
+      outbound_resp_body: None,
       messages: vec![],
     }
   }
@@ -579,7 +624,11 @@ mod tests {
       attempt,
       status: 200,
       latency_ms,
-      resp_headers: HeaderMap::new(),
+      outbound_resp_headers: HeaderMap::new(),
+      outbound_req_method: None,
+      outbound_req_url: None,
+      outbound_req_headers: None,
+      outbound_req_body: None,
     }
   }
 

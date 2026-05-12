@@ -1,7 +1,8 @@
-use crate::db::{HttpSnapshot, MessageRecord, PartRecord, SessionSource, Usage};
+use crate::db::{MessageRecord, PartRecord, SessionSource, Usage};
 use crate::provider::Endpoint;
 use bytes::Bytes;
 use llm_core::event::Event;
+use reqwest::header::HeaderMap;
 use serde_json::Value;
 use std::time::Instant;
 
@@ -14,15 +15,23 @@ pub(super) struct CompletedEventBuilder {
   request_error: Option<String>,
   req_body: Bytes,
   message_endpoint: Option<Endpoint>,
-  outbound_resp: Option<HttpSnapshot>,
-  inbound_resp: HttpSnapshot,
+  outbound_resp_body: Option<Bytes>,
+  inbound_resp_headers: HeaderMap,
+  inbound_resp_body: Bytes,
   usage: Usage,
   started: Instant,
   status: u16,
 }
 
 impl CompletedEventBuilder {
-  pub(crate) fn new(max: usize, request_id: String, inbound_resp: HttpSnapshot, started: Instant, status: u16) -> Self {
+  pub(crate) fn new(
+    max: usize,
+    request_id: String,
+    inbound_resp_headers: HeaderMap,
+    inbound_resp_body: Bytes,
+    started: Instant,
+    status: u16,
+  ) -> Self {
     Self {
       max,
       request_id,
@@ -31,8 +40,9 @@ impl CompletedEventBuilder {
       request_error: None,
       req_body: Bytes::new(),
       message_endpoint: None,
-      outbound_resp: None,
-      inbound_resp,
+      outbound_resp_body: None,
+      inbound_resp_headers,
+      inbound_resp_body,
       usage: Usage::default(),
       started,
       status,
@@ -56,23 +66,13 @@ impl CompletedEventBuilder {
     self
   }
 
-  pub(crate) fn with_outbound_response(
-    mut self,
-    headers: Option<&reqwest::header::HeaderMap>,
-    body: Option<&Bytes>,
-  ) -> Self {
-    self.outbound_resp = headers.map(|headers| HttpSnapshot {
-      method: None,
-      url: None,
-      status: Some(self.status),
-      headers: headers.clone(),
-      body: body.cloned().unwrap_or_default(),
-    });
+  pub(crate) fn with_outbound_response_body(mut self, body: Option<&Bytes>) -> Self {
+    self.outbound_resp_body = body.cloned();
     self
   }
 
   pub(crate) fn with_response_body(mut self, body: Bytes) -> Self {
-    self.inbound_resp.body = body;
+    self.inbound_resp_body = body;
     self
   }
 
@@ -93,13 +93,13 @@ impl CompletedEventBuilder {
       .message_endpoint
       .map(|endpoint| extract_request_messages(&req_body_json, endpoint, self.max))
       .unwrap_or_default();
-    if !self.inbound_resp.body.is_empty() && self.message_endpoint.is_some() {
+    if !self.inbound_resp_body.is_empty() && self.message_endpoint.is_some() {
       messages.push(MessageRecord {
         role: "assistant".into(),
         status: Some(self.status),
         parts: vec![PartRecord {
           part_type: "raw".into(),
-          content: clip_body(&self.inbound_resp.body, self.max),
+          content: clip_body(&self.inbound_resp_body, self.max),
         }],
       });
     }
@@ -117,15 +117,9 @@ impl CompletedEventBuilder {
       status: self.status,
       usage: self.usage,
       request_error: self.request_error,
-      inbound_resp: {
-        let mut snap = self.inbound_resp;
-        snap.body = clip_body(snap.body.as_ref(), self.max);
-        snap
-      },
-      outbound_resp: self.outbound_resp.map(|mut snap| {
-        snap.body = clip_body(snap.body.as_ref(), self.max);
-        snap
-      }),
+      inbound_resp_headers: self.inbound_resp_headers,
+      inbound_resp_body: clip_body(&self.inbound_resp_body, self.max),
+      outbound_resp_body: self.outbound_resp_body.map(|b| clip_body(&b, self.max)),
       messages,
     }
   }

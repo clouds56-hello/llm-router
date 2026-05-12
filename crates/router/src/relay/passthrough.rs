@@ -5,7 +5,6 @@ use super::usage::parse_usage_any_json;
 use crate::api::codec::maybe_compress_buffered_response;
 use crate::api::error::ApiError;
 use crate::api::AppState;
-use crate::db::HttpSnapshot;
 use crate::provider::Endpoint;
 use axum::body::Body;
 use axum::http::header::{CONTENT_LENGTH, CONTENT_TYPE};
@@ -52,20 +51,15 @@ pub(crate) async fn passthrough_buffered_response(
   let event = CompletedEventBuilder::new(
     s.body_max_bytes,
     ctx.request_id.clone(),
-    HttpSnapshot {
-      method: None,
-      url: None,
-      status: Some(status.as_u16()),
-      headers: resp_headers.clone(),
-      body: resp_body.clone(),
-    },
+    resp_headers.clone(),
+    resp_body.clone(),
     ctx.started,
     status.as_u16(),
   )
   .with_ids(ctx.session_id.as_deref(), None)
   .with_attempt(ctx.attempt)
   .with_request_body(req_body, ctx.endpoint)
-  .with_outbound_response(Some(&resp_headers), Some(&resp_body))
+  .with_outbound_response_body(Some(&resp_body))
   .with_usage(usage)
   .build();
   s.events.emit(event);
@@ -106,13 +100,8 @@ pub(crate) fn passthrough_streaming_response(
   let builder = CompletedEventBuilder::new(
     max_body,
     ctx.request_id.clone(),
-    HttpSnapshot {
-      method: None,
-      url: None,
-      status: Some(status.as_u16()),
-      headers: record_headers.clone(),
-      body: Bytes::new(),
-    },
+    record_headers.clone(),
+    Bytes::new(),
     ctx.started,
     status.as_u16(),
   )
@@ -129,7 +118,7 @@ pub(crate) fn passthrough_streaming_response(
     endpoint: endpoint_str,
     events: state.events.clone(),
   };
-  let tx = spawn_stream_recorder(builder, record_headers, state.events.clone(), max_body, meta);
+  let tx = spawn_stream_recorder(builder, state.events.clone(), max_body, meta);
 
   response_with_body(
     status,

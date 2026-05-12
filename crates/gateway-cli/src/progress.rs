@@ -358,7 +358,7 @@ impl EventHandler for ProgressEventHandler {
         account_id,
         provider_id,
         model,
-        outbound_req,
+        inbound_body,
         ..
       } => {
         if let Some(state) = self.bars.get_mut(request_id) {
@@ -366,12 +366,7 @@ impl EventHandler for ProgressEventHandler {
           state.request.model = model.clone();
           state.request.account = account_id.clone();
           state.request.attempt = *attempt;
-          if let Some(snap) = outbound_req {
-            if state.request.endpoint.eq_ignore_ascii_case("unknown") || state.request.endpoint.is_empty() {
-              state.request.endpoint = endpoint_label(&state.request.endpoint, snap.url.as_deref());
-            }
-            state.request.sent_bytes = snap.body.len() as u64;
-          }
+          state.request.sent_bytes = inbound_body.len() as u64;
         }
         self.refresh(request_id);
       }
@@ -400,12 +395,12 @@ impl EventHandler for ProgressEventHandler {
       }
       Event::RequestResult {
         request_id,
-        inbound_resp,
+        inbound_resp_body,
         usage,
         ..
       } => {
         if let Some(state) = self.bars.get_mut(request_id) {
-          let body_len = inbound_resp.body.len() as u64;
+          let body_len = inbound_resp_body.len() as u64;
           if body_len > state.request.recv_bytes {
             state.request.recv_bytes = body_len;
           }
@@ -711,7 +706,7 @@ impl EventHandler for ProgressLogEventHandler {
         account_id,
         provider_id,
         model,
-        outbound_req,
+        inbound_body,
         ..
       } => {
         if let Some(state) = self.requests.get_mut(request_id) {
@@ -719,12 +714,7 @@ impl EventHandler for ProgressLogEventHandler {
           state.model = model.clone();
           state.account = account_id.clone();
           state.attempt = *attempt;
-          if let Some(snap) = outbound_req {
-            if state.endpoint.eq_ignore_ascii_case("unknown") || state.endpoint.is_empty() {
-              state.endpoint = endpoint_label(&state.endpoint, snap.url.as_deref());
-            }
-            state.sent_bytes = snap.body.len() as u64;
-          }
+          state.sent_bytes = inbound_body.len() as u64;
         }
       }
       Event::RequestRetry {
@@ -748,12 +738,12 @@ impl EventHandler for ProgressLogEventHandler {
       }
       Event::RequestResult {
         request_id,
-        inbound_resp,
+        inbound_resp_body,
         usage,
         ..
       } => {
         if let Some(state) = self.requests.get_mut(request_id) {
-          let body_len = inbound_resp.body.len() as u64;
+          let body_len = inbound_resp_body.len() as u64;
           if body_len > state.recv_bytes {
             state.recv_bytes = body_len;
           }

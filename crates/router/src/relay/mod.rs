@@ -111,7 +111,7 @@ mod tests {
           model,
           stream,
           initiator,
-          outbound_req,
+          inbound_body,
         } => {
           // Retry attempts: clone from base entry (attempt 0)
           let key = (request_id.clone(), *attempt);
@@ -128,7 +128,7 @@ mod tests {
             r.model = model.clone();
             r.stream = *stream;
             r.initiator = initiator.clone();
-            r.outbound_req = outbound_req.clone();
+            r.inbound_req.body = inbound_body.clone();
             // Stamp composite request_id on the row for retries
             if *attempt > 0 {
               r.request_id = format!("{request_id}:{attempt}");
@@ -143,8 +143,9 @@ mod tests {
           status,
           usage,
           request_error,
-          inbound_resp,
-          outbound_resp,
+          inbound_resp_headers,
+          inbound_resp_body,
+          outbound_resp_body,
           messages,
         } => {
           let key = (request_id.clone(), *attempt);
@@ -183,8 +184,20 @@ mod tests {
           r.status = *status;
           r.usage = usage.clone();
           r.request_error = request_error.clone();
-          r.inbound_resp = inbound_resp.clone();
-          r.outbound_resp = outbound_resp.clone();
+          r.inbound_resp = crate::db::HttpSnapshot {
+            method: None,
+            url: None,
+            status: Some(*status),
+            headers: inbound_resp_headers.clone(),
+            body: inbound_resp_body.clone(),
+          };
+          r.outbound_resp = outbound_resp_body.as_ref().map(|b| crate::db::HttpSnapshot {
+            method: None,
+            url: None,
+            status: Some(*status),
+            headers: Default::default(),
+            body: b.clone(),
+          });
           r.messages = messages.clone();
           self.records.lock().unwrap().push(r);
         }
@@ -192,11 +205,25 @@ mod tests {
           request_id,
           attempt,
           latency_ms,
+          status,
+          outbound_req_method,
+          outbound_req_url,
+          outbound_req_headers,
+          outbound_req_body,
           ..
         } => {
           let key = (request_id.clone(), *attempt);
           if let Some(r) = self.pending.get_mut(&key) {
             r.latency_header_ms = Some(*latency_ms);
+            if outbound_req_method.is_some() || outbound_req_url.is_some() || outbound_req_body.is_some() {
+              r.outbound_req = Some(crate::db::HttpSnapshot {
+                method: outbound_req_method.clone(),
+                url: outbound_req_url.clone(),
+                status: Some(*status),
+                headers: outbound_req_headers.clone().unwrap_or_default(),
+                body: outbound_req_body.clone().unwrap_or_default(),
+              });
+            }
           }
         }
         _ => {}
@@ -361,19 +388,14 @@ mod tests {
     let event = CompletedEventBuilder::new(
       1024 * 1024,
       "test-req".to_string(),
-      crate::db::HttpSnapshot {
-        method: None,
-        url: None,
-        status: Some(200),
-        headers: HeaderMap::new(),
-        body: resp_body.clone(),
-      },
+      HeaderMap::new(),
+      resp_body.clone(),
       Instant::now(),
       200,
     )
     .with_ids(None, None)
     .with_request_body(&req_body, Some(Endpoint::ChatCompletions))
-    .with_outbound_response(Some(&HeaderMap::new()), Some(&resp_body))
+    .with_outbound_response_body(Some(&resp_body))
     .build();
     if let llm_core::event::Event::RequestResult {
       session_source,
@@ -420,13 +442,8 @@ mod tests {
     let event = CompletedEventBuilder::new(
       1024 * 1024,
       "request-123".to_string(),
-      crate::db::HttpSnapshot {
-        method: None,
-        url: None,
-        status: Some(200),
-        headers: HeaderMap::new(),
-        body: Bytes::new(),
-      },
+      HeaderMap::new(),
+      Bytes::new(),
       Instant::now(),
       200,
     )
@@ -525,13 +542,18 @@ mod tests {
       model: ctx.model.clone(),
       stream: true,
       initiator: "user".to_string(),
-      outbound_req: Some(crate::db::HttpSnapshot {
-        method: Some("POST".to_string()),
-        url: Some("https://api.openai.com/v1/chat/completions".to_string()),
-        status: None,
-        headers: req_headers.clone(),
-        body: req_body.clone(),
-      }),
+      inbound_body: req_body.clone(),
+    });
+    state.events.emit(llm_core::event::Event::RequestResponded {
+      request_id: ctx.request_id.clone(),
+      attempt: 0,
+      status: 200,
+      latency_ms: 1,
+      outbound_resp_headers: HeaderMap::new(),
+      outbound_req_method: Some("POST".to_string()),
+      outbound_req_url: Some("https://api.openai.com/v1/chat/completions".to_string()),
+      outbound_req_headers: Some(req_headers.clone()),
+      outbound_req_body: Some(req_body.clone()),
     });
 
     // Set up a mock upstream server

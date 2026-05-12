@@ -1,4 +1,5 @@
-use crate::db::{HttpSnapshot, MessageRecord, SessionSource, Usage};
+use crate::db::{MessageRecord, SessionSource, Usage};
+use bytes::Bytes;
 use reqwest::header::HeaderMap;
 use tokio::sync::{mpsc, oneshot};
 
@@ -41,10 +42,17 @@ pub enum Event {
     model: String,
     stream: bool,
     initiator: String,
-    outbound_req: Option<HttpSnapshot>,
+    /// Post-decompression raw bytes of the inbound request body.
+    /// Empty for requests without a body. Used to populate
+    /// `CallRecord.inbound_req.body` and the `inbound_req_body` DB column.
+    inbound_body: Bytes,
   },
 
   /// Upstream response headers received.
+  ///
+  /// Carries the outbound request snapshot (method/url/headers/body) because
+  /// in routed mode it only becomes known after the upstream send completes.
+  /// Proxy passthrough also fills these for consistency.
   RequestResponded {
     request_id: String,
     /// Retry attempt number (0 = first attempt).
@@ -52,7 +60,16 @@ pub enum Event {
     status: u16,
     /// Time from inbound request start until upstream response headers arrived.
     latency_ms: u64,
-    resp_headers: HeaderMap,
+    /// Upstream response headers (the response we received from upstream).
+    outbound_resp_headers: HeaderMap,
+    /// Outbound request method (us → upstream). `None` if capture was unavailable.
+    outbound_req_method: Option<String>,
+    /// Outbound request URL.
+    outbound_req_url: Option<String>,
+    /// Outbound request headers actually sent upstream.
+    outbound_req_headers: Option<HeaderMap>,
+    /// Outbound request body actually sent upstream (post-encoding).
+    outbound_req_body: Option<Bytes>,
   },
 
   /// Per-attempt result with full response data.
@@ -67,8 +84,13 @@ pub enum Event {
     status: u16,
     usage: Usage,
     request_error: Option<String>,
-    inbound_resp: HttpSnapshot,
-    outbound_resp: Option<HttpSnapshot>,
+    /// Inbound response headers (us → client).
+    inbound_resp_headers: HeaderMap,
+    /// Inbound response body (us → client), possibly truncated.
+    inbound_resp_body: Bytes,
+    /// Outbound response body (upstream → us), possibly truncated.
+    /// Headers were already delivered on `RequestResponded`.
+    outbound_resp_body: Option<Bytes>,
     messages: Vec<MessageRecord>,
   },
 

@@ -2,7 +2,6 @@ use super::context::ForwardContext;
 use super::observers::{spawn_stream_recorder, StreamMeta};
 use super::recording::CompletedEventBuilder;
 use crate::api::AppState;
-use crate::db::HttpSnapshot;
 use axum::body::Body;
 use axum::http::{HeaderMap, HeaderValue};
 use axum::response::{IntoResponse, Response};
@@ -18,20 +17,14 @@ pub(crate) async fn stream_response(
   req_body: &Value,
 ) -> Response {
   let status = resp.status();
-  let resp_headers = resp.headers().clone();
   let max_body = s.body_max_bytes;
   let headers = sse_headers(ctx.session_id.as_deref());
 
   let builder = CompletedEventBuilder::new(
     max_body,
     ctx.request_id.clone(),
-    HttpSnapshot {
-      method: None,
-      url: None,
-      status: Some(status.as_u16()),
-      headers: headers.clone(),
-      body: Bytes::new(),
-    },
+    headers.clone(),
+    Bytes::new(),
     ctx.started,
     status.as_u16(),
   )
@@ -49,7 +42,7 @@ pub(crate) async fn stream_response(
     endpoint: endpoint.as_str().to_string(),
     events: s.events.clone(),
   };
-  let tx = spawn_stream_recorder(builder, resp_headers, s.events.clone(), max_body, meta);
+  let tx = spawn_stream_recorder(builder, s.events.clone(), max_body, meta);
 
   let mut pipeline = SsePipeline::from_response_with_tap(resp, tx);
   if ctx.upstream_endpoint != endpoint {

@@ -207,7 +207,6 @@ impl RequestsDb {
   pub fn parsed(&mut self, base_request_id: &str, attempt: u32, p: ParsedUpdate<'_>) -> Result<()> {
     let request_id = composite_request_id(base_request_id, attempt);
     let conn = self.conn_for_ts(p.ts)?;
-    let outbound_req_headers = p.outbound_req.map(|s| headers_json(&s.headers));
     if attempt > 0 {
       conn.execute(
       "INSERT INTO requests (ts, session_id, source, method, request_id, endpoint, account_id, provider_id, model, initiator,
@@ -221,16 +220,13 @@ impl RequestsDb {
     }
     let updated = conn.execute(
       "UPDATE requests SET
-         endpoint=?11,
+         endpoint=?7,
          account_id=?2,
          provider_id=?3,
          model=?4,
          initiator=?5,
          stream=?6,
-         outbound_req_method=?7,
-         outbound_req_url=?8,
-         outbound_req_headers=?9,
-         outbound_req_body=?10
+         inbound_req_body=?8
        WHERE request_id=?1",
       params![
         request_id,
@@ -239,11 +235,8 @@ impl RequestsDb {
         p.model,
         p.initiator,
         p.stream as i64,
-        opt_str(p.outbound_req, |s| s.method.as_deref()),
-        opt_str(p.outbound_req, |s| s.url.as_deref()),
-        outbound_req_headers.as_ref().map(|b| b.as_ref()),
-        p.outbound_req.map(|s| s.body.as_ref()),
         p.endpoint,
+        p.inbound_body.as_ref(),
       ],
     )?;
     if updated == 0 {
@@ -252,6 +245,7 @@ impl RequestsDb {
     Ok(())
   }
 
+  #[allow(clippy::too_many_arguments)]
   pub fn responded(
     &mut self,
     ts: i64,
@@ -259,23 +253,36 @@ impl RequestsDb {
     attempt: u32,
     latency_header_ms: u64,
     status: u16,
-    resp_headers: &reqwest::header::HeaderMap,
+    outbound_resp_headers: &reqwest::header::HeaderMap,
+    outbound_req_method: Option<&str>,
+    outbound_req_url: Option<&str>,
+    outbound_req_headers: Option<&reqwest::header::HeaderMap>,
+    outbound_req_body: Option<&bytes::Bytes>,
   ) -> Result<()> {
     let request_id = composite_request_id(base_request_id, attempt);
     let conn = self.conn_for_ts(ts)?;
-    let outbound_resp_headers = headers_json(resp_headers);
+    let outbound_resp_headers_json = headers_json(outbound_resp_headers);
+    let outbound_req_headers_json = outbound_req_headers.map(headers_json);
     let updated = conn.execute(
       "UPDATE requests SET
          status=?2,
          latency_header_ms=?3,
          outbound_resp_status=?2,
-         outbound_resp_headers=?4
+         outbound_resp_headers=?4,
+         outbound_req_method=?5,
+         outbound_req_url=?6,
+         outbound_req_headers=?7,
+         outbound_req_body=?8
        WHERE request_id=?1",
       params![
         request_id,
         status as i64,
         latency_header_ms as i64,
-        outbound_resp_headers.as_ref()
+        outbound_resp_headers_json.as_ref(),
+        outbound_req_method,
+        outbound_req_url,
+        outbound_req_headers_json.as_ref().map(|b| b.as_ref()),
+        outbound_req_body.map(|b| b.as_ref()),
       ],
     )?;
     if updated == 0 {
@@ -393,7 +400,7 @@ pub struct ParsedUpdate<'a> {
   pub model: &'a str,
   pub initiator: &'a str,
   pub stream: bool,
-  pub outbound_req: Option<&'a HttpSnapshot>,
+  pub inbound_body: bytes::Bytes,
 }
 
 pub fn open_day_db(path: &Path) -> Result<Connection> {

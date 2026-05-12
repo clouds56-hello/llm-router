@@ -24,7 +24,6 @@ pub(super) struct StreamMeta {
 /// and returns the sender half for feeding into an SsePipeline.
 pub(super) fn spawn_stream_recorder(
   builder: CompletedEventBuilder,
-  resp_headers: reqwest::header::HeaderMap,
   events: Arc<llm_core::event::EventBus>,
   max_body: usize,
   meta: StreamMeta,
@@ -33,7 +32,6 @@ pub(super) fn spawn_stream_recorder(
   tokio::spawn(background_stream_recorder(
     rx,
     builder,
-    resp_headers,
     events,
     max_body,
     meta,
@@ -47,7 +45,6 @@ pub(super) fn spawn_stream_recorder(
 pub(super) async fn background_stream_recorder(
   mut rx: llm_convert::sse::ObserverReceiver,
   base_builder: CompletedEventBuilder,
-  resp_headers: reqwest::header::HeaderMap,
   events: Arc<llm_core::event::EventBus>,
   max_body: usize,
   meta: StreamMeta,
@@ -109,7 +106,7 @@ pub(super) async fn background_stream_recorder(
   let event = base_builder
     .with_request_error(request_error)
     .with_response_body(captured.clone())
-    .with_outbound_response(Some(&resp_headers), Some(&captured))
+    .with_outbound_response_body(Some(&captured))
     .with_usage(usage)
     .build();
   events.emit(event);

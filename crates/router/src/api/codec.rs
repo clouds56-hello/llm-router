@@ -26,6 +26,9 @@ impl ContentEncodingKind {
 #[derive(Clone, Debug)]
 pub(crate) struct DecodedJsonRequest {
   pub raw_body: Bytes,
+  /// Post-decompression bytes of the request body. Same as `raw_body` when no
+  /// content-encoding was applied, otherwise the inflated payload.
+  pub decoded_body: Bytes,
   pub value: Value,
   pub encoding: Option<ContentEncodingKind>,
 }
@@ -37,6 +40,7 @@ pub(crate) fn decode_json_request(headers: &HeaderMap, raw_body: Bytes) -> Resul
     serde_json::from_slice(&decoded).map_err(|e| ApiError::bad_request(format!("invalid JSON request body: {e}")))?;
   Ok(DecodedJsonRequest {
     raw_body,
+    decoded_body: decoded,
     value,
     encoding,
   })

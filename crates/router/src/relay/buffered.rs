@@ -4,7 +4,6 @@ use super::usage::parse_usage_any_json;
 use crate::api::codec::maybe_compress_buffered_response;
 use crate::api::error::ApiError;
 use crate::api::AppState;
-use crate::db::HttpSnapshot;
 use axum::http::{HeaderMap, HeaderValue};
 use axum::response::{IntoResponse, Response};
 use bytes::Bytes;
@@ -17,7 +16,6 @@ pub(crate) async fn buffered_response(
   req_body: &Value,
 ) -> Response {
   let status = resp.status();
-  let resp_headers = resp.headers().clone();
   let mut request_error = None;
   let bytes = match resp.bytes().await {
     Ok(b) => b,
@@ -69,20 +67,15 @@ pub(crate) async fn buffered_response(
   let event = CompletedEventBuilder::new(
     s.body_max_bytes,
     ctx.request_id.clone(),
-    HttpSnapshot {
-      method: None,
-      url: None,
-      status: Some(status.as_u16()),
-      headers: headers.clone(),
-      body: bytes.clone(),
-    },
+    headers.clone(),
+    bytes.clone(),
     ctx.started,
     status.as_u16(),
   )
   .with_ids(ctx.session_id.as_deref(), request_error.as_deref())
   .with_attempt(ctx.attempt)
   .with_request_body(req_body, ctx.endpoint)
-  .with_outbound_response(Some(&resp_headers), Some(&bytes))
+  .with_outbound_response_body(Some(&bytes))
   .with_usage(usage)
   .build();
   s.events.emit(event);
