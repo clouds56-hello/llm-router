@@ -4,6 +4,7 @@ use std::process::ExitCode;
 
 use llm_config as config;
 mod cli;
+mod auth_registry;
 mod db;
 mod error;
 mod logging;

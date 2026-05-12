@@ -15,7 +15,7 @@ use tracing::{debug, instrument};
 
 const USER_INFO_URL: &str = "https://api.github.com/copilot_internal/user";
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
 pub struct CopilotUserInfo {
   /// Marketing plan name, e.g. `"individual_pro"`, `"business"`, `"free"`.
   #[serde(default)]
@@ -33,7 +33,7 @@ pub struct CopilotUserInfo {
   pub quota_snapshots: BTreeMap<String, QuotaSnapshot>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
 pub struct QuotaSnapshot {
   /// Numeric `quota_id` echo, e.g. `"premium_interactions"`.
   #[serde(default)]

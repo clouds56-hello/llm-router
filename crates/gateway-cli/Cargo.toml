@@ -22,6 +22,7 @@ llm-convert = { workspace = true }
 llm-router = { workspace = true }
 llm-provider-copilot = { workspace = true }
 llm-provider-zai = { workspace = true }
+llm-auth = { workspace = true }
 anyhow = { workspace = true }
 arc-swap = { workspace = true }
 async-trait = { workspace = true }

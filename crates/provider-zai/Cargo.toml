@@ -6,6 +6,7 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 llm-core = { workspace = true }
+llm-auth = { workspace = true }
 llm-catalogue = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }

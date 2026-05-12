@@ -1,0 +1,134 @@
+//! [`ProviderAuth`] impl for the Z.ai family (zai, zhipuai, *-coding-plan).
+//!
+//! Z.ai is a static-API-key provider: there is nothing to refresh, but we
+//! still expose [`Self::verify_credential`] (a cheap `GET /models` probe)
+//! and [`Self::probe_quota`] (the existing monitor endpoint).
+
+use async_trait::async_trait;
+use llm_core::account::AccountConfig;
+use llm_auth::{
+  AuthError, ProviderAuth, QuotaSnapshot, RefreshOutcome, Result,
+};
+
+/// Singleton ZSt impl. Same instance handles every Z.ai alias because the
+/// auth flow is identical; the provider id stored on the account is what
+/// determines the upstream host.
+pub struct ZaiAuth {
+  /// The provider id reported via [`ProviderAuth::id`]. Z.ai has four
+  /// aliases that share the same auth flow — we register one impl per
+  /// alias so the dispatch table can do an exact-match lookup.
+  id: &'static str,
+}
+
+impl ZaiAuth {
+  pub const fn new(id: &'static str) -> Self {
+    Self { id }
+  }
+}
+
+/// Static accessors used by `llm-auth`'s dispatch table. One per alias.
+static ZAI_CODING_PLAN: ZaiAuth = ZaiAuth::new("zai-coding-plan");
+static ZAI: ZaiAuth = ZaiAuth::new("zai");
+static ZHIPUAI_CODING_PLAN: ZaiAuth = ZaiAuth::new("zhipuai-coding-plan");
+static ZHIPUAI: ZaiAuth = ZaiAuth::new("zhipuai");
+
+pub fn zai_coding_plan_auth() -> &'static dyn ProviderAuth {
+  &ZAI_CODING_PLAN
+}
+pub fn zai_auth() -> &'static dyn ProviderAuth {
+  &ZAI
+}
+pub fn zhipuai_coding_plan_auth() -> &'static dyn ProviderAuth {
+  &ZHIPUAI_CODING_PLAN
+}
+pub fn zhipuai_auth() -> &'static dyn ProviderAuth {
+  &ZHIPUAI
+}
+
+#[async_trait]
+impl ProviderAuth for ZaiAuth {
+  fn id(&self) -> &'static str {
+    self.id
+  }
+
+  fn supports_device_flow(&self) -> bool {
+    false
+  }
+
+  async fn refresh_credential(&self, _client: &reqwest::Client, _account: &AccountConfig) -> Result<RefreshOutcome> {
+    // Static API key: nothing to refresh.
+    Ok(RefreshOutcome::NotApplicable)
+  }
+
+  async fn verify_credential(&self, client: &reqwest::Client, account: &AccountConfig) -> Result<()> {
+    let key = account
+      .api_key
+      .as_ref()
+      .ok_or(AuthError::MissingCredential {
+        account: account.id.clone(),
+        field: "api_key",
+      })?;
+    let base = account
+      .base_url
+      .clone()
+      .unwrap_or_else(|| crate::zai::default_base_url(self.id).to_string());
+    let url = format!("{}/models", base.trim_end_matches('/'));
+    let resp = client
+      .get(&url)
+      .header("authorization", format!("Bearer {}", key.expose()))
+      .header("accept", "application/json")
+      .send()
+      .await
+      .map_err(|e| AuthError::Network(e.to_string()))?;
+    let status = resp.status();
+    if status.is_success() {
+      Ok(())
+    } else {
+      let body = resp.text().await.unwrap_or_default();
+      Err(AuthError::Upstream(format!(
+        "Z.ai rejected the key (HTTP {status}): {}",
+        body.chars().take(200).collect::<String>()
+      )))
+    }
+  }
+
+  async fn probe_quota(&self, client: &reqwest::Client, account: &AccountConfig) -> Result<QuotaSnapshot> {
+    let key = account
+      .api_key
+      .as_ref()
+      .ok_or(AuthError::MissingCredential {
+        account: account.id.clone(),
+        field: "api_key",
+      })?;
+    let raw = crate::quota::fetch(client, &account.provider, key.expose())
+      .await
+      .map_err(|e| AuthError::Upstream(e.to_string()))?;
+
+    // Build a one-line headline: prefer the weekly bucket, fall back to
+    // 5-hour or MCP-monthly.
+    let headline = if let Some(w) = &raw.weekly {
+      Some(format!("weekly: {:.1}% used", w.percent_used))
+    } else if let Some(h) = &raw.five_hour {
+      Some(format!("5h: {:.1}% used", h.percent_used))
+    } else {
+      raw
+        .mcp_monthly
+        .as_ref()
+        .map(|m| format!("mcp: {}/{}", m.used, m.total))
+    };
+
+    Ok(QuotaSnapshot {
+      plan: raw.level.clone(),
+      headline,
+      reset_date: None,
+      // `ZaiQuota` doesn't impl Serialize; serialise a minimal view.
+      provider_extra: serde_json::json!({
+        "level": raw.level,
+        "five_hour_percent": raw.five_hour.as_ref().map(|b| b.percent_used),
+        "weekly_percent": raw.weekly.as_ref().map(|b| b.percent_used),
+        "mcp_used": raw.mcp_monthly.as_ref().map(|b| b.used),
+        "mcp_total": raw.mcp_monthly.as_ref().map(|b| b.total),
+      }),
+    })
+  }
+}
