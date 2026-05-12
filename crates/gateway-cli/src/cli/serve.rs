@@ -27,10 +27,11 @@ pub struct ServeArgs {
 }
 
 pub async fn run(cfg_path: Option<PathBuf>, args: ServeArgs) -> Result<()> {
-  let (mut cfg, _) = Config::load(cfg_path.as_deref())?;
+  let (mut cfg, resolved_cfg_path) = Config::load(cfg_path.as_deref())?;
   if args.no_proxy {
     cfg.proxy = crate::config::ProxyConfig::default();
   }
+  let accounts = crate::server_runtime::load_accounts(Some(&resolved_cfg_path))?;
 
   let host = args.host.unwrap_or_else(|| cfg.server.host.clone());
   let port = args.port.unwrap_or(cfg.server.port);
@@ -45,7 +46,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: ServeArgs) -> Result<()> {
     .map(Into::into)
     .unwrap_or(cfg.proxy_mode.route_mode);
   let shared_mode = shared_route_mode(server_mode, proxy_mode, args.with_proxy);
-  let shared_state = crate::server_runtime::build_state_for_route_mode(&cfg, events.clone(), shared_mode)?;
+  let shared_state = crate::server_runtime::build_state_for_route_mode(&cfg, &accounts, events.clone(), shared_mode)?;
   let n = shared_state.pool.len();
   let app_state = crate::server_runtime::state_with_route_mode(&shared_state, server_mode, &cfg);
   let app = llm_router::api::router(app_state);

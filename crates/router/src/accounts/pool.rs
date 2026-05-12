@@ -78,16 +78,20 @@ impl AccountPool {
     })
   }
 
-  pub fn from_config_with<F>(cfg: &Config, build_provider: F) -> Result<Arc<Self>>
+  pub fn from_accounts_with<F>(
+    accounts_in: &[AccountConfig],
+    cfg: &Config,
+    build_provider: F,
+  ) -> Result<Arc<Self>>
   where
     F: Fn(Arc<AccountConfig>) -> llm_core::provider::Result<Arc<dyn Provider>>,
   {
-    if cfg.accounts.is_empty() {
+    if accounts_in.is_empty() {
       return NoAccountsSnafu.fail();
     }
-    let mut accounts = Vec::with_capacity(cfg.accounts.len());
+    let mut accounts = Vec::with_capacity(accounts_in.len());
     let mut buckets: BTreeMap<String, ProviderBucket> = BTreeMap::new();
-    for a in &cfg.accounts {
+    for a in accounts_in {
       // Disabled accounts are dropped at pool construction time and so
       // never participate in routing. Re-enable via `account switch` or
       // by editing the TOML.

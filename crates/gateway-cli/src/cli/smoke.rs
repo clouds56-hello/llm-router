@@ -94,7 +94,8 @@ fn parse_header_kv(raw: &str) -> std::result::Result<(String, String), String> {
 }
 
 pub async fn run(cfg_path: Option<PathBuf>, args: SmokeArgs) -> Result<()> {
-  let (mut cfg, _) = Config::load(cfg_path.as_deref())?;
+  let (mut cfg, resolved_cfg_path) = Config::load(cfg_path.as_deref())?;
+  let mut accounts = crate::server_runtime::load_accounts(Some(&resolved_cfg_path))?;
 
   // --route defaults to the configured serve mode.
   let route_mode = args
@@ -108,14 +109,14 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SmokeArgs) -> Result<()> {
   }
 
   // Filter accounts to honour --provider / --account before building the pool.
-  filter_accounts(&mut cfg, args.provider.as_deref(), args.account.as_deref())?;
+  filter_accounts(&mut accounts, args.provider.as_deref(), args.account.as_deref())?;
 
   // Build the same event bus the server uses: DB writer + progress spinner +
   // progress log + archive worker, all attached automatically per config + TTY.
   let (events, receiver, handlers, archive_runtime) = crate::server_runtime::build_event_bus(&cfg)?;
   let _event_thread = llm_core::event::spawn_event_loop(receiver, handlers);
 
-  let state = crate::server_runtime::build_state(&cfg, events.clone())?;
+  let state = crate::server_runtime::build_state(&cfg, &accounts, events.clone())?;
 
   // If --body-file was provided, load it now so we can extract a default
   // model from it before route resolution.
@@ -224,14 +225,18 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SmokeArgs) -> Result<()> {
   Ok(())
 }
 
-/// Mutate `cfg.accounts` in-place to keep only entries matching the optional
+/// Mutate the account list in-place to keep only entries matching the optional
 /// provider/account filters. Errors if the filter excludes everything.
-fn filter_accounts(cfg: &mut Config, provider: Option<&str>, account: Option<&str>) -> Result<()> {
+fn filter_accounts(
+  accounts: &mut Vec<llm_core::account::AccountConfig>,
+  provider: Option<&str>,
+  account: Option<&str>,
+) -> Result<()> {
   if provider.is_none() && account.is_none() {
     return Ok(());
   }
-  let before = cfg.accounts.len();
-  cfg.accounts.retain(|a| {
+  let before = accounts.len();
+  accounts.retain(|a| {
     if let Some(p) = provider {
       if a.provider != p {
         return false;
@@ -244,7 +249,7 @@ fn filter_accounts(cfg: &mut Config, provider: Option<&str>, account: Option<&st
     }
     true
   });
-  if cfg.accounts.is_empty() {
+  if accounts.is_empty() {
     anyhow::bail!(
       "no accounts match the requested filters (provider={:?}, account={:?}); had {before} configured",
       provider,

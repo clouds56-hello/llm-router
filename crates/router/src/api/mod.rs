@@ -12,6 +12,7 @@ use axum::middleware::{self, Next};
 use axum::routing::{get, post};
 use axum::Router;
 use llm_config::Config;
+use llm_core::account::AccountConfig;
 use llm_config::RouteMode;
 use llm_core::event::EventBus;
 use parking_lot::Mutex;
@@ -193,12 +194,16 @@ async fn health() -> &'static str {
   "ok"
 }
 
-pub fn build_state(cfg: &Config, events: Arc<EventBus>) -> Result<AppState> {
+pub fn build_state(
+  cfg: &Config,
+  accounts: &[AccountConfig],
+  events: Arc<EventBus>,
+) -> Result<AppState> {
   cfg.validate()?;
-  let pool = if cfg.accounts.is_empty() && matches!(cfg.server.route_mode, RouteMode::Passthrough) {
+  let pool = if accounts.is_empty() && matches!(cfg.server.route_mode, RouteMode::Passthrough) {
     AccountPool::empty(cfg)
   } else {
-    AccountPool::from_config_with(cfg, crate::accounts::registry::build_for_account)?
+    AccountPool::from_accounts_with(accounts, cfg, crate::accounts::registry::build_for_account)?
   };
   let route = Arc::new(RouteResolver::new(cfg.server.route_mode, &cfg.model_families));
   let http = llm_core::util::http::build_client(&cfg.proxy.to_http_options())?;
@@ -307,10 +312,10 @@ mod tests {
   fn build_state_allows_empty_accounts_in_passthrough_mode() {
     let mut cfg = Config::default();
     cfg.server.route_mode = RouteMode::Passthrough;
-    cfg.accounts.clear();
     let (bus, _rx) = EventBus::new(16);
 
-    let state = build_state(&cfg, Arc::new(bus)).expect("passthrough mode should allow empty accounts");
+    let state = build_state(&cfg, &[], Arc::new(bus))
+      .expect("passthrough mode should allow empty accounts");
     assert_eq!(state.pool.len(), 0);
   }
 
@@ -318,10 +323,9 @@ mod tests {
   fn build_state_rejects_empty_accounts_in_non_passthrough_mode() {
     let mut cfg = Config::default();
     cfg.server.route_mode = RouteMode::Route;
-    cfg.accounts.clear();
     let (bus, _rx) = EventBus::new(16);
 
-    let res = build_state(&cfg, Arc::new(bus));
+    let res = build_state(&cfg, &[], Arc::new(bus));
     assert!(res.is_err(), "non-passthrough mode should require accounts");
     let err = res.err().expect("checked above");
     assert!(err.to_string().contains("no accounts configured"));
@@ -329,9 +333,9 @@ mod tests {
 
   #[tokio::test]
   async fn route_mode_not_implemented_returns_json_error_body() {
-    let mut cfg = Config::default();
-    cfg.accounts.push(zai_account());
-    let state = build_state(&cfg, Arc::new(EventBus::noop())).unwrap();
+    let cfg = Config::default();
+    let accounts = vec![zai_account()];
+    let state = build_state(&cfg, &accounts, Arc::new(EventBus::noop())).unwrap();
     let app = router(state);
 
     let req = Request::builder()

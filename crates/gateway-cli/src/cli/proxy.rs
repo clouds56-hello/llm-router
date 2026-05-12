@@ -114,10 +114,11 @@ async fn start(cfg_path: Option<PathBuf>, args: StartArgs, passthrough: bool) ->
   if passthrough && args.route_mode.is_some() {
     anyhow::bail!("--passthrough and --route-mode cannot be used together");
   }
-  let (mut cfg, _) = Config::load(cfg_path.as_deref())?;
+  let (mut cfg, resolved_cfg_path) = Config::load(cfg_path.as_deref())?;
   if args.no_proxy {
     cfg.proxy = ProxyConfig::default();
   }
+  let accounts = crate::server_runtime::load_accounts(Some(&resolved_cfg_path))?;
 
   let host = args.host.unwrap_or_else(|| cfg.proxy_mode.host.clone());
   let port = args.port.unwrap_or(cfg.proxy_mode.port);
@@ -134,7 +135,7 @@ async fn start(cfg_path: Option<PathBuf>, args: StartArgs, passthrough: bool) ->
 
   let (events, receiver, handlers, archive_runtime) = crate::server_runtime::build_event_bus(&cfg)?;
   let _event_thread = llm_core::event::spawn_event_loop(receiver, handlers);
-  let state = crate::server_runtime::build_state_for_route_mode(&cfg, events.clone(), route_mode)?;
+  let state = crate::server_runtime::build_state_for_route_mode(&cfg, &accounts, events.clone(), route_mode)?;
   let n = state.pool.len();
   let addr: SocketAddr = crate::server_runtime::resolve_bind_addr(&host, port, args.allow_remote)
     .with_context(|| format!("parse bind addr {host}:{port}"))?;

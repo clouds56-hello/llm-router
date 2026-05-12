@@ -509,9 +509,9 @@ mod tests {
 
   #[test]
   fn prepare_request_converts_endpoint_and_applies_provider_transform() {
-    let mut cfg = Config::default();
-    cfg.accounts.push(zai_account());
-    let state = build_state(&cfg, Arc::new(EventBus::noop())).unwrap();
+    let cfg = Config::default();
+    let accounts = vec![zai_account()];
+    let state = build_state(&cfg, &accounts, Arc::new(EventBus::noop())).unwrap();
     let account = state.pool.all()[0].clone();
     let route = state.route.resolve("glm-4.6", None).unwrap();
     let req = ResolvedRequest {
@@ -627,8 +627,8 @@ mod tests {
 
   #[test]
   fn copilot_transformer_is_identity() {
-    let mut cfg = Config::default();
-    cfg.accounts.push(AccountCfg {
+    let cfg = Config::default();
+    let accounts = vec![AccountCfg {
       id: "acct".into(),
       provider: "github-copilot".into(),
       enabled: true,
@@ -649,8 +649,8 @@ mod tests {
       refresh_url: None,
       last_refresh: None,
       settings: toml::Table::new(),
-    });
-    let state = build_state(&cfg, Arc::new(EventBus::noop())).unwrap();
+    }];
+    let state = build_state(&cfg, &accounts, Arc::new(EventBus::noop())).unwrap();
     let provider: &dyn Provider = state.pool.all()[0].provider.as_ref();
     let transformer: &dyn InputTransformer = provider.input_transformer().expect("copilot transformer");
     let body = json!({"model": "gpt-4.1", "messages": [{"role": "user", "content": "hi"}]});

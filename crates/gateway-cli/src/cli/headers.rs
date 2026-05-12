@@ -1,6 +1,7 @@
 use crate::config::Config;
 use anyhow::{anyhow, Result};
 use clap::Args;
+use llm_auth::AuthStore;
 use std::path::PathBuf;
 
 #[derive(Args, Debug)]
@@ -11,14 +12,13 @@ pub struct HeadersArgs {
 }
 
 pub async fn run(cfg_path: Option<PathBuf>, args: HeadersArgs) -> Result<()> {
-  let (cfg, _) = Config::load(cfg_path.as_deref())?;
+  let (_cfg, path) = Config::load(cfg_path.as_deref())?;
+  let store = AuthStore::load(None, Some(&path))?;
   let headers = match args.account {
     None => llm_provider_copilot::config::CopilotHeaders::default(),
     Some(id) => {
-      let a = cfg
-        .accounts
-        .iter()
-        .find(|a| a.id == id)
+      let a = store
+        .get(&id)
         .ok_or_else(|| anyhow!("no account with id '{id}'"))?;
       if a.provider != crate::provider::ID_GITHUB_COPILOT {
         println!(

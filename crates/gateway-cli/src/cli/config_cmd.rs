@@ -7,6 +7,7 @@ use crate::util::http::build_client;
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Subcommand};
 use inquire::{Confirm, Select, Text};
+use llm_auth::AuthStore;
 use llm_config::RouteMode;
 use std::path::PathBuf;
 use toml_edit::{value, Array, DocumentMut, Item, Table, Value as EditValue};
@@ -331,25 +332,28 @@ async fn cmd_init(path: &std::path::Path, args: InitArgs) -> Result<()> {
     if args.accounts.is_empty() {
       bail!("--yes requires at least one --account spec");
     }
+    let mut store = AuthStore::load(None, Some(path))?;
     let client = build_client(&cfg.proxy)?;
     for raw in &args.accounts {
       let spec = parse_account_spec(raw)?;
       let source = account_source_from_spec(&spec, false)?;
       let account =
         crate::cli::onboarding::resolve_account(&client, &spec.provider, Some(spec.id.clone()), source).await?;
-      cfg.upsert_account(account);
+      store.upsert(account);
     }
     cfg.save(path)?;
+    store.save()?;
     println!("Initialized config and upserted {} account(s).", args.accounts.len());
     return Ok(());
   }
 
   interactive_runtime_prompts(&mut cfg)?;
+  let mut store = AuthStore::load(None, Some(path))?;
   let client = build_client(&cfg.proxy)?;
   let mut upserted = 0usize;
   loop {
     let account = crate::cli::onboarding::interactive_add_account(&client, None, None).await?;
-    cfg.upsert_account(account);
+    store.upsert(account);
     upserted += 1;
     let more = Confirm::new("Add another account?")
       .with_default(false)
@@ -361,6 +365,7 @@ async fn cmd_init(path: &std::path::Path, args: InitArgs) -> Result<()> {
   }
 
   cfg.save(path)?;
+  store.save()?;
   println!("Initialized config and upserted {upserted} account(s).");
   println!("Next: llm-router serve  # or llm-router proxy start");
   Ok(())

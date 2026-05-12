@@ -4,11 +4,14 @@ use crate::db::{DbEventHandler, DbPaths};
 use crate::progress::{ArchiveProgressEventHandler, ProgressEventHandler, ProgressLogEventHandler};
 use anyhow::Result;
 use axum::Router;
+use llm_auth::AuthStore;
 use llm_config::RouteMode;
+use llm_core::account::AccountConfig;
 use llm_core::event::{EventBus, EventHandler, EventReceiver};
 use std::future::Future;
 use std::io::IsTerminal;
 use std::net::SocketAddr;
+use std::path::Path;
 use std::sync::Arc;
 
 /// Build the event bus and its handlers. The DB event handler is included
@@ -65,18 +68,33 @@ pub fn build_event_bus(
   Ok((Arc::new(bus), receiver, handlers, archive_runtime))
 }
 
-pub fn build_state(cfg: &Config, events: Arc<EventBus>) -> Result<llm_router::api::AppState> {
-  llm_router::api::build_state(cfg, events)
+/// Load accounts from `auth.yaml`, falling back to the legacy
+/// `[[accounts]]` block in `config.toml` (with a deprecation warning).
+///
+/// `config_path` is the effective path of `config.toml` so the legacy
+/// migration can find it; pass `None` to disable the fallback.
+pub fn load_accounts(config_path: Option<&Path>) -> Result<Vec<AccountConfig>> {
+  let store = AuthStore::load(None, config_path)?;
+  Ok(store.accounts)
+}
+
+pub fn build_state(
+  cfg: &Config,
+  accounts: &[AccountConfig],
+  events: Arc<EventBus>,
+) -> Result<llm_router::api::AppState> {
+  llm_router::api::build_state(cfg, accounts, events)
 }
 
 pub fn build_state_for_route_mode(
   cfg: &Config,
+  accounts: &[AccountConfig],
   events: Arc<EventBus>,
   route_mode: RouteMode,
 ) -> Result<llm_router::api::AppState> {
   let mut cfg = cfg.clone();
   cfg.server.route_mode = route_mode;
-  build_state(&cfg, events)
+  build_state(&cfg, accounts, events)
 }
 
 pub fn state_with_route_mode(

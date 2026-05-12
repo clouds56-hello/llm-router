@@ -186,15 +186,20 @@ fn load_legacy_accounts(config_path: &Path) -> Result<Option<Vec<AccountConfig>>
   }
   let raw = std::fs::read_to_string(config_path)
     .with_context(|| format!("reading {}", config_path.display()))?;
-  // Parse via the canonical Config to preserve all defaults / aliases /
-  // validation. We don't *use* the rest of Config here; the round-trip
-  // through llm-config is just to share the deserialiser.
-  let cfg: llm_config::Config = toml::from_str(&raw)
+  // Minimal local schema: accounts have moved to auth.yaml, so we can no
+  // longer go through `llm_config::Config`. We only care about the legacy
+  // `[[accounts]]` table here; everything else in config.toml is ignored.
+  #[derive(serde::Deserialize)]
+  struct LegacyAccounts {
+    #[serde(default)]
+    accounts: Vec<AccountConfig>,
+  }
+  let parsed: LegacyAccounts = toml::from_str(&raw)
     .with_context(|| format!("parsing legacy {}", config_path.display()))?;
-  if cfg.accounts.is_empty() {
+  if parsed.accounts.is_empty() {
     Ok(None)
   } else {
-    Ok(Some(cfg.accounts))
+    Ok(Some(parsed.accounts))
   }
 }
 

@@ -4,6 +4,7 @@ use crate::provider::ID_GITHUB_COPILOT;
 use crate::util::http::build_client;
 use anyhow::Result;
 use clap::{Args, ValueEnum};
+use llm_auth::AuthStore;
 use std::path::PathBuf;
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -60,18 +61,19 @@ pub async fn run(cfg_path: Option<PathBuf>, args: ImportArgs) -> Result<()> {
   let client = build_client(&ProxyConfig::default())?;
   let account = resolve_account(&client, &args.provider, Some(args.id.clone()), source).await?;
 
-  let (mut cfg, path) = Config::load(cfg_path.as_deref())?;
+  let (_cfg, path) = Config::load(cfg_path.as_deref())?;
+  let mut store = AuthStore::load(None, Some(&path))?;
   let provider = account.provider.clone();
-  cfg.upsert_account(account);
-  cfg.save(&path)?;
+  store.upsert(account);
+  store.save()?;
   tracing::info!(
     account = %args.id,
     %provider,
     source = ?args.from,
-    path = %path.display(),
+    path = %store.path().display(),
     "account imported"
   );
-  println!("Saved account '{}' to {}", args.id, path.display());
+  println!("Saved account '{}' to {}", args.id, store.path().display());
   Ok(())
 }
 

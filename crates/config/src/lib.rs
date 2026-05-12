@@ -32,8 +32,6 @@ pub struct Config {
   pub logging: LoggingConfig,
   #[serde(default)]
   pub model_families: Vec<ModelFamily>,
-  #[serde(default)]
-  pub accounts: Vec<AccountConfig>,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -367,7 +365,7 @@ impl Config {
     }
     let cfg = raw_cfg.config;
     cfg.validate()?;
-    tracing::debug!(path = %path.display(), accounts = cfg.accounts.len(), "config loaded");
+    tracing::debug!(path = %path.display(), "config loaded");
     Ok((cfg, path))
   }
 
@@ -375,9 +373,6 @@ impl Config {
     self.proxy.validate()?;
     self.proxy_mode.validate()?;
     validate_model_families(&self.model_families)?;
-    for a in &self.accounts {
-      validate_account_common(a)?;
-    }
     Ok(())
   }
 
@@ -422,12 +417,6 @@ impl Config {
       section: "[[model_families]]",
       source: Box::new(e),
     })?;
-    for a in &cfg.accounts {
-      validate_account_common(a).map_err(|e| Error::EditValidateSection {
-        section: "[[accounts]]",
-        source: Box::new(e),
-      })?;
-    }
     if let Some(parent) = path.parent() {
       std::fs::create_dir_all(parent).context(error::CreateDirSnafu {
         path: parent.to_path_buf(),
@@ -435,16 +424,9 @@ impl Config {
     }
     write_atomic(path, &serialised)
   }
-
-  pub fn upsert_account(&mut self, a: AccountConfig) {
-    if let Some(slot) = self.accounts.iter_mut().find(|x| x.id == a.id) {
-      *slot = a;
-    } else {
-      self.accounts.push(a);
-    }
-  }
 }
 
+#[allow(dead_code)] // used by AuthStore validation in a follow-up cycle
 fn validate_account_common(account: &AccountConfig) -> Result<()> {
   if account.id.trim().is_empty() {
     return error::InvalidAccountSnafu {
@@ -495,6 +477,7 @@ fn validate_model_families(families: &[ModelFamily]) -> Result<()> {
   Ok(())
 }
 
+#[allow(dead_code)]
 fn is_token(s: &str) -> bool {
   !s.is_empty()
     && s.bytes().all(|b| {

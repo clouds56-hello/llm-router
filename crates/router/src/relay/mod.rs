@@ -362,29 +362,6 @@ mod tests {
 
   #[tokio::test]
   async fn build_call_record_generates_auto_session_and_assistant_raw_part() {
-    let mut cfg = Config::default();
-    cfg.accounts.push(AccountCfg {
-      id: "acct".into(),
-      provider: "zai-coding-plan".into(),
-      enabled: true,
-      tier: llm_core::account::AccountTier::Active,
-      tags: Vec::new(),
-      label: None,
-      base_url: None,
-      headers: Default::default(),
-      auth_type: Some(AuthType::Bearer),
-      username: None,
-      api_key: Some(Secret::new("sk-test".into())),
-      api_key_expires_at: None,
-      access_token: None,
-      access_token_expires_at: None,
-      id_token: None,
-      refresh_token: None,
-      extra: Default::default(),
-      refresh_url: None,
-      last_refresh: None,
-      settings: toml::Table::new(),
-    });
     let req_body = json!({ "model": "glm-4.6", "messages": [{ "role": "user", "content": "hi" }] });
     let resp_body = Bytes::from_static(br#"{"id":"r1"}"#);
     let event = CompletedEventBuilder::new(
@@ -417,29 +394,6 @@ mod tests {
 
   #[tokio::test]
   async fn build_call_record_persists_header_session_request_and_project_ids() {
-    let mut cfg = Config::default();
-    cfg.accounts.push(AccountCfg {
-      id: "acct".into(),
-      provider: "zai-coding-plan".into(),
-      enabled: true,
-      tier: llm_core::account::AccountTier::Active,
-      tags: Vec::new(),
-      label: None,
-      base_url: None,
-      headers: Default::default(),
-      auth_type: Some(AuthType::Bearer),
-      username: None,
-      api_key: Some(Secret::new("sk-test".into())),
-      api_key_expires_at: None,
-      access_token: None,
-      access_token_expires_at: None,
-      id_token: None,
-      refresh_token: None,
-      extra: Default::default(),
-      refresh_url: None,
-      last_refresh: None,
-      settings: toml::Table::new(),
-    });
     let req_body = json!({ "model": "glm-4.6", "messages": [] });
 
     let event = CompletedEventBuilder::new(
@@ -471,8 +425,8 @@ mod tests {
 
   #[tokio::test]
   async fn record_passthrough_call_persists_requests_row_shape() {
-    let mut cfg = Config::default();
-    cfg.accounts.push(AccountCfg {
+    let cfg = Config::default();
+    let accounts = vec![AccountCfg {
       id: "acct".into(),
       provider: "zai-coding-plan".into(),
       enabled: true,
@@ -493,9 +447,9 @@ mod tests {
       refresh_url: None,
       last_refresh: None,
       settings: toml::Table::new(),
-    });
+    }];
     let (events, records) = test_event_bus();
-    let state = build_state(&cfg, events.clone()).unwrap();
+    let state = build_state(&cfg, &accounts, events.clone()).unwrap();
     let mut req_headers = HeaderMap::new();
     req_headers.insert("x-session-id", "client-session".parse().unwrap());
     let req_body =
@@ -611,8 +565,8 @@ mod tests {
 
   #[tokio::test]
   async fn buffered_response_synthesizes_json_error_for_blank_upstream_error() {
-    let mut cfg = Config::default();
-    cfg.accounts.push(AccountCfg {
+    let cfg = Config::default();
+    let accounts = vec![AccountCfg {
       id: "acct".into(),
       provider: "zai-coding-plan".into(),
       enabled: true,
@@ -633,8 +587,8 @@ mod tests {
       refresh_url: None,
       last_refresh: None,
       settings: toml::Table::new(),
-    });
-    let state = build_state(&cfg, Arc::new(EventBus::noop())).unwrap();
+    }];
+    let state = build_state(&cfg, &accounts, Arc::new(EventBus::noop())).unwrap();
     let response = reqwest::Response::from(
       http::Response::builder()
         .status(501)
@@ -667,8 +621,8 @@ mod tests {
 
   #[tokio::test]
   async fn passthrough_streaming_response_records_sse_usage() {
-    let mut cfg = Config::default();
-    cfg.accounts.push(AccountCfg {
+    let cfg = Config::default();
+    let accounts = vec![AccountCfg {
       id: "acct".into(),
       provider: "zai-coding-plan".into(),
       enabled: true,
@@ -689,9 +643,9 @@ mod tests {
       refresh_url: None,
       last_refresh: None,
       settings: toml::Table::new(),
-    });
+    }];
     let (events, records) = test_event_bus();
-    let state = build_state(&cfg, events.clone()).unwrap();
+    let state = build_state(&cfg, &accounts, events.clone()).unwrap();
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

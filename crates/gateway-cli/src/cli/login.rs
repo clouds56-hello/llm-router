@@ -4,6 +4,7 @@ use crate::provider::{ID_GITHUB_COPILOT, ZAI_PROVIDERS};
 use crate::util::http::build_client;
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
+use llm_auth::AuthStore;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
@@ -30,7 +31,8 @@ pub struct LoginArgs {
 }
 
 pub async fn run(cfg_path: Option<PathBuf>, args: LoginArgs) -> Result<()> {
-  let (mut cfg, path) = Config::load(cfg_path.as_deref())?;
+  let (cfg, path) = Config::load(cfg_path.as_deref())?;
+  let mut store = AuthStore::load(None, Some(&path))?;
   let proxy = if args.no_proxy {
     ProxyConfig::default()
   } else {
@@ -46,10 +48,10 @@ pub async fn run(cfg_path: Option<PathBuf>, args: LoginArgs) -> Result<()> {
 
   let id = account.id.clone();
   let provider = account.provider.clone();
-  cfg.upsert_account(account);
-  cfg.save(&path)?;
-  tracing::info!(account = %id, %provider, path = %path.display(), "account saved");
-  println!("Saved account '{id}' to {}", path.display());
+  store.upsert(account);
+  store.save()?;
+  tracing::info!(account = %id, %provider, path = %store.path().display(), "account saved");
+  println!("Saved account '{id}' to {}", store.path().display());
   Ok(())
 }
 

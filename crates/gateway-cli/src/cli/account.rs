@@ -7,6 +7,7 @@ use crate::util::secret::Secret;
 use crate::util::timefmt::{relative_from_now, relative_from_now_ms};
 use anyhow::{anyhow, bail, Result};
 use clap::{Args, Subcommand};
+use llm_auth::AuthStore;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -90,26 +91,23 @@ pub struct SwitchArgs {
 }
 
 pub async fn run(cfg_path: Option<PathBuf>, cmd: AccountCmd) -> Result<()> {
-  let (mut cfg, path) = Config::load(cfg_path.as_deref())?;
+  let (cfg, path) = Config::load(cfg_path.as_deref())?;
+  let mut store = AuthStore::load(None, Some(&path))?;
   match cmd {
-    AccountCmd::List(args) => list(&mut cfg, &path, args).await?,
+    AccountCmd::List(args) => list(&cfg, &mut store, args).await?,
     AccountCmd::Remove { id } => {
-      let before = cfg.accounts.len();
-      cfg.accounts.retain(|a| a.id != id);
-      if cfg.accounts.len() == before {
-        return Err(anyhow!("no account with id '{id}'"));
-      }
-      cfg.save(&path)?;
-      tracing::info!(account = %id, remaining = cfg.accounts.len(), "account removed");
+      let removed = store.remove(&id).ok_or_else(|| anyhow!("no account with id '{id}'"))?;
+      store.save()?;
+      tracing::info!(account = %removed.id, remaining = store.accounts.len(), "account removed");
       println!("Removed '{id}'");
     }
-    AccountCmd::Show { id } => show(&cfg, &id)?,
+    AccountCmd::Show { id } => show(&store, &id)?,
     AccountCmd::Add(args) => add(cfg_path, args).await?,
     AccountCmd::Login(args) => crate::cli::login::run(cfg_path, args).await?,
     AccountCmd::Import(args) => crate::cli::import::run(cfg_path, args).await?,
-    AccountCmd::Refresh { id } => refresh(&mut cfg, &path, &id).await?,
-    AccountCmd::Status { id } => status(&mut cfg, &path, id).await?,
-    AccountCmd::Switch(args) => switch(&mut cfg, &path, args)?,
+    AccountCmd::Refresh { id } => refresh(&cfg, &mut store, &id).await?,
+    AccountCmd::Status { id } => status(&cfg, &mut store, id).await?,
+    AccountCmd::Switch(args) => switch(&mut store, args)?,
   }
   Ok(())
 }
@@ -118,8 +116,8 @@ pub async fn run(cfg_path: Option<PathBuf>, cmd: AccountCmd) -> Result<()> {
 // list
 // ---------------------------------------------------------------------------
 
-async fn list(cfg: &mut Config, cfg_path: &std::path::Path, args: ListArgs) -> Result<()> {
-  if cfg.accounts.is_empty() {
+async fn list(cfg: &Config, store: &mut AuthStore, args: ListArgs) -> Result<()> {
+  if store.accounts.is_empty() {
     println!("(no accounts)");
     return Ok(());
   }
@@ -127,11 +125,11 @@ async fn list(cfg: &mut Config, cfg_path: &std::path::Path, args: ListArgs) -> R
   // Fetch quotas concurrently. Each future is wrapped in an outer timeout
   // so a single hung upstream cannot freeze the entire CLI invocation.
   let quotas: Vec<QuotaResult> = if args.no_quota {
-    cfg.accounts.iter().map(|_| QuotaResult::Skipped).collect()
+    store.accounts.iter().map(|_| QuotaResult::Skipped).collect()
   } else {
     let http = build_client(&cfg.proxy)?;
     let timeout = Duration::from_secs(args.timeout.max(1));
-    let futs = cfg
+    let futs = store
       .accounts
       .iter()
       .map(|a| fetch_quota(http.clone(), a.clone(), timeout));
@@ -142,7 +140,7 @@ async fn list(cfg: &mut Config, cfg_path: &std::path::Path, args: ListArgs) -> R
   // `token::exchange`, so we piggy-back on its result instead of issuing a
   // second request. This is a no-op under `--no-quota`.
   let mut dirty = false;
-  for (a, q) in cfg.accounts.iter_mut().zip(quotas.iter()) {
+  for (a, q) in store.accounts.iter_mut().zip(quotas.iter()) {
     if let QuotaResult::Copilot(c) = q {
       let same_tok = a
         .access_token
@@ -158,26 +156,26 @@ async fn list(cfg: &mut Config, cfg_path: &std::path::Path, args: ListArgs) -> R
     }
   }
   if dirty {
-    cfg.save(cfg_path)?;
+    store.save()?;
   }
 
   // Render: group by provider (alphabetical), within each group sort by
   // effective state (Active → Fallback → Disabled). Account index in the
   // original Vec is preserved so we can pick the right quota slot.
   let mut by_provider: BTreeMap<String, Vec<usize>> = BTreeMap::new();
-  for (i, a) in cfg.accounts.iter().enumerate() {
+  for (i, a) in store.accounts.iter().enumerate() {
     by_provider.entry(a.provider.clone()).or_default().push(i);
   }
   let mut first = true;
   for (provider, mut idxs) in by_provider {
-    idxs.sort_by_key(|&i| state_sort_key(cfg.accounts[i].state()));
+    idxs.sort_by_key(|&i| state_sort_key(store.accounts[i].state()));
     if !first {
       println!();
     }
     first = false;
     println!("# {provider}");
     for i in idxs {
-      render_account(&cfg.accounts[i], &quotas[i]);
+      render_account(&store.accounts[i], &quotas[i]);
     }
   }
   Ok(())
@@ -432,11 +430,9 @@ fn fmt_int(mut n: u64) -> String {
 // show (unchanged behaviour, lifted into a helper)
 // ---------------------------------------------------------------------------
 
-fn show(cfg: &Config, id: &str) -> Result<()> {
-  let a = cfg
-    .accounts
-    .iter()
-    .find(|a| a.id == id)
+fn show(store: &AuthStore, id: &str) -> Result<()> {
+  let a = store
+    .get(id)
     .ok_or_else(|| anyhow!("no account with id '{id}'"))?;
   println!("id: {}", a.id);
   println!("provider: {}", a.provider);
@@ -520,15 +516,16 @@ fn state_label(s: AccountState) -> &'static str {
 // ---------------------------------------------------------------------------
 
 async fn add(cfg_path: Option<PathBuf>, args: AddArgs) -> Result<()> {
-  let (mut cfg, path) = Config::load(cfg_path.as_deref())?;
+  let (cfg, path) = Config::load(cfg_path.as_deref())?;
+  let mut store = AuthStore::load(None, Some(&path))?;
   let client = build_client(&cfg.proxy)?;
   let account = crate::cli::onboarding::interactive_add_account(&client, args.provider, args.id).await?;
   let id = account.id.clone();
   let provider = account.provider.clone();
-  cfg.upsert_account(account);
-  cfg.save(&path)?;
-  tracing::info!(account = %id, %provider, path = %path.display(), "account added");
-  println!("Saved account '{id}' ({provider}) to {}", path.display());
+  store.upsert(account);
+  store.save()?;
+  tracing::info!(account = %id, %provider, path = %store.path().display(), "account added");
+  println!("Saved account '{id}' ({provider}) to {}", store.path().display());
   Ok(())
 }
 
@@ -536,13 +533,11 @@ async fn add(cfg_path: Option<PathBuf>, args: AddArgs) -> Result<()> {
 // refresh (force token re-exchange for github-copilot)
 // ---------------------------------------------------------------------------
 
-async fn refresh(cfg: &mut Config, path: &std::path::Path, id: &str) -> Result<()> {
-  let idx = cfg
-    .accounts
-    .iter()
-    .position(|a| a.id == id)
-    .ok_or_else(|| anyhow!("no account with id '{id}'"))?;
-  let account = cfg.accounts[idx].clone();
+async fn refresh(cfg: &Config, store: &mut AuthStore, id: &str) -> Result<()> {
+  let account = store
+    .get(id)
+    .ok_or_else(|| anyhow!("no account with id '{id}'"))?
+    .clone();
 
   if account.provider != ID_GITHUB_COPILOT {
     if account.api_key.is_some() {
@@ -562,11 +557,11 @@ async fn refresh(cfg: &mut Config, path: &std::path::Path, id: &str) -> Result<(
   let resp = crate::provider::github_copilot::token::exchange(&http, gh.expose(), &core_headers)
     .await
     .map_err(|e| anyhow!("token exchange failed: {e}"))?;
-  let acct = &mut cfg.accounts[idx];
+  let acct = store.get_mut(id).expect("checked above");
   acct.access_token = Some(Secret::new(resp.token));
   acct.access_token_expires_at = Some(resp.expires_at);
   acct.last_refresh = Some(time::OffsetDateTime::now_utc().unix_timestamp());
-  cfg.save(path)?;
+  store.save()?;
   tracing::info!(account = %id, "access token refreshed");
   println!(
     "Refreshed '{id}': access_token expires {}",
@@ -579,14 +574,14 @@ async fn refresh(cfg: &mut Config, path: &std::path::Path, id: &str) -> Result<(
 // status (gh-auth-style one-line per account)
 // ---------------------------------------------------------------------------
 
-async fn status(cfg: &mut Config, cfg_path: &std::path::Path, id: Option<String>) -> Result<()> {
-  if cfg.accounts.is_empty() {
+async fn status(cfg: &Config, store: &mut AuthStore, id: Option<String>) -> Result<()> {
+  if store.accounts.is_empty() {
     println!("(no accounts) — run `llm-router account add` to add one");
     return Ok(());
   }
   let timeout = Duration::from_secs(5);
   let http = build_client(&cfg.proxy)?;
-  let futs = cfg
+  let futs = store
     .accounts
     .iter()
     .map(|a| fetch_quota(http.clone(), a.clone(), timeout));
@@ -594,7 +589,7 @@ async fn status(cfg: &mut Config, cfg_path: &std::path::Path, id: Option<String>
 
   // Persist any token side-effects, same as `list`.
   let mut dirty = false;
-  for (a, q) in cfg.accounts.iter_mut().zip(quotas.iter()) {
+  for (a, q) in store.accounts.iter_mut().zip(quotas.iter()) {
     if let QuotaResult::Copilot(c) = q {
       let same_tok = a
         .access_token
@@ -610,11 +605,11 @@ async fn status(cfg: &mut Config, cfg_path: &std::path::Path, id: Option<String>
     }
   }
   if dirty {
-    cfg.save(cfg_path)?;
+    store.save()?;
   }
 
   let mut shown = 0usize;
-  for (a, q) in cfg.accounts.iter().zip(quotas.iter()) {
+  for (a, q) in store.accounts.iter().zip(quotas.iter()) {
     if let Some(filter) = &id {
       if a.id != *filter {
         continue;
@@ -662,13 +657,13 @@ struct SwitchChange {
   new: AccountState,
 }
 
-fn switch(cfg: &mut Config, path: &std::path::Path, args: SwitchArgs) -> Result<()> {
-  let changes = apply_switch(&mut cfg.accounts, &args)?;
+fn switch(store: &mut AuthStore, args: SwitchArgs) -> Result<()> {
+  let changes = apply_switch(&mut store.accounts, &args)?;
   if changes.is_empty() {
     println!("no changes");
     return Ok(());
   }
-  cfg.save(path)?;
+  store.save()?;
   for c in &changes {
     println!(
       "{}  ({})  {} → {}",
