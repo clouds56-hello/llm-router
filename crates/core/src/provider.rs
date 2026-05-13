@@ -176,6 +176,8 @@ pub fn new_outbound_capture() -> OutboundCapture {
 
 pub struct ProviderDescriptor {
   pub id: &'static str,
+  pub hosts: &'static [&'static str],
+  pub matches_url: fn(&str, &str, &'static str) -> bool,
   pub validate: fn(&AccountConfig) -> Result<()>,
   pub build: fn(Arc<AccountConfig>) -> Result<Arc<dyn Provider>>,
 }
@@ -183,6 +185,14 @@ pub struct ProviderDescriptor {
 impl ProviderDescriptor {
   pub fn matches(&self, id: &str) -> bool {
     self.id == id
+  }
+
+  pub fn matches_host(&self, host: &str) -> bool {
+    self.hosts.contains(&host)
+  }
+
+  pub fn matches_url(&self, host: &str, path: &str) -> bool {
+    (self.matches_url)(host, path, self.id)
   }
 }
 

@@ -5,6 +5,7 @@ pub mod models;
 pub mod routing;
 
 use crate::accounts::AccountPool;
+use crate::accounts::registry::Registry as ProviderRegistry;
 use crate::api::routing::RouteResolver;
 use anyhow::Result;
 use axum::http::{HeaderMap, HeaderName, Request, Response};
@@ -25,6 +26,7 @@ use tracing::{Level, Span};
 #[derive(Clone)]
 pub struct AppState {
   pub pool: Arc<AccountPool>,
+  pub provider_registry: Arc<ProviderRegistry>,
   pub route: Arc<RouteResolver>,
   pub http: reqwest::Client,
   pub events: Arc<EventBus>,
@@ -200,16 +202,19 @@ pub fn build_state(
   events: Arc<EventBus>,
 ) -> Result<AppState> {
   cfg.validate()?;
+  let provider_registry = Arc::new(ProviderRegistry::builtin());
   let pool = if accounts.is_empty() && matches!(cfg.server.route_mode, RouteMode::Passthrough) {
     AccountPool::empty(cfg)
   } else {
-    AccountPool::from_accounts_with(accounts, cfg, crate::accounts::registry::build_for_account)?
+    let registry = provider_registry.clone();
+    AccountPool::from_accounts_with(accounts, cfg, move |account| registry.build(account))?
   };
   let route = Arc::new(RouteResolver::new(cfg.server.route_mode, &cfg.model_families));
   let http = llm_core::util::http::build_client(&cfg.proxy.to_http_options())?;
   let body_max_bytes = if cfg.db.enabled { cfg.db.body_max_bytes } else { 0 };
   Ok(AppState {
     pool,
+    provider_registry,
     route,
     http,
     events,

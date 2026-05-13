@@ -21,9 +21,15 @@ use std::sync::Arc;
 
 pub static DESCRIPTOR: llm_core::provider::ProviderDescriptor = llm_core::provider::ProviderDescriptor {
   id: ID_GITHUB_COPILOT,
+  hosts: &["api.github.com", "api.githubcopilot.com"],
+  matches_url,
   validate,
   build,
 };
+
+pub fn matches_url(host: &str, _path: &str, _id: &'static str) -> bool {
+  DESCRIPTOR.hosts.contains(&host)
+}
 
 pub fn validate(account: &llm_core::account::AccountConfig) -> llm_core::provider::Result<()> {
   github_copilot::CopilotProvider::validate_account(account)

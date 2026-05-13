@@ -21,7 +21,23 @@ pub static DESCRIPTOR_ZHIPUAI: llm_core::provider::ProviderDescriptor = descript
 pub static DESCRIPTOR_ZHIPUAI_CODING_PLAN: llm_core::provider::ProviderDescriptor = descriptor(ID_ZHIPUAI_CODING_PLAN);
 
 const fn descriptor(id: &'static str) -> llm_core::provider::ProviderDescriptor {
-  llm_core::provider::ProviderDescriptor { id, validate, build }
+  llm_core::provider::ProviderDescriptor {
+    id,
+    hosts: &["api.z.ai", "open.bigmodel.cn"],
+    matches_url,
+    validate,
+    build,
+  }
+}
+
+pub fn matches_url(host: &str, path: &str, id: &'static str) -> bool {
+  match (host, id) {
+    ("api.z.ai", ID_ZAI_CODING_PLAN) => path.starts_with("/api/coding/paas/v4"),
+    ("api.z.ai", ID_ZAI) => path.is_empty() || path.starts_with("/api/paas/v4"),
+    ("open.bigmodel.cn", ID_ZHIPUAI_CODING_PLAN) => path.starts_with("/api/coding/paas/v4"),
+    ("open.bigmodel.cn", ID_ZHIPUAI) => path.is_empty() || path.starts_with("/api/paas/v4"),
+    _ => false,
+  }
 }
 
 pub fn validate(account: &llm_core::account::AccountConfig) -> llm_core::provider::Result<()> {

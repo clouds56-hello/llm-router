@@ -122,7 +122,7 @@ pub(super) async fn proxy_passthrough(
     request_id: request_id.clone(),
     attempt: ctx.attempt,
     account_id: "passthrough".to_string(),
-    provider_id: host.to_string(),
+    provider_id: state.provider_registry.provider_id_for_url(host).unwrap_or(host).to_string(),
     model: body_meta.model.clone(),
     stream,
     initiator: body_meta.initiator,
