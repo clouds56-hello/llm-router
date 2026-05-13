@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use llm_core::account::AccountConfig;
 use llm_auth::{
   default_import_from, AuthError, CredentialResult, CredentialSource, DeviceCodeHandle,
-  DeviceFlowOutcome, ProviderAuth, QuotaSnapshot, RefreshOutcome, Result,
+  DeviceFlowOutcome, ProviderAuth, QuotaSnapshot, RefreshOutcome, Result, VerifyOutcome,
 };
 
 /// Singleton impl. Zero-sized; safe to hand out as `&'static`.
@@ -133,15 +133,27 @@ impl ProviderAuth for CopilotAuth {
     let resp = crate::token::exchange(client, gh_token.expose(), &headers)
       .await
       .map_err(|e| AuthError::Upstream(e.to_string()))?;
+    let username = fetch_github_username(client, gh_token.expose()).await.ok();
     Ok(RefreshOutcome::Refreshed {
       access_token: resp.token,
       expires_at: resp.expires_at,
+      username,
     })
   }
 
-  async fn verify_credential(&self, client: &reqwest::Client, account: &AccountConfig) -> Result<()> {
+  async fn verify_credential(&self, client: &reqwest::Client, account: &AccountConfig) -> Result<VerifyOutcome> {
     // A successful refresh proves the long-lived token still works.
-    self.refresh_credential(client, account).await.map(|_| ())
+    let refreshed = self.refresh_credential(client, account).await?;
+    let mut username = match refreshed {
+      RefreshOutcome::Refreshed { username, .. } => username,
+      RefreshOutcome::NotApplicable => None,
+    };
+    if username.is_none() {
+      if let Some(gh_token) = account.refresh_token.as_ref() {
+        username = fetch_github_username(client, gh_token.expose()).await.ok();
+      }
+    }
+    Ok(VerifyOutcome { username })
   }
 
   async fn probe_quota(&self, client: &reqwest::Client, account: &AccountConfig) -> Result<QuotaSnapshot> {

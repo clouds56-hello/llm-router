@@ -61,28 +61,29 @@ pub struct ImportArgs {
   pub api_key: bool,
 
   /// ID for the imported account.
-  #[arg(long, default_value = "imported")]
-  pub id: String,
+  #[arg(long)]
+  pub id: Option<String>,
 }
 
 pub async fn run(cfg_path: Option<PathBuf>, args: ImportArgs) -> Result<()> {
   let source = build_source(&args)?;
   let client = build_client(&ProxyConfig::default())?;
-  let account = resolve_account(&client, &args.provider, Some(args.id.clone()), source).await?;
+  let account = resolve_account(&client, &args.provider, args.id.clone(), source).await?;
 
   let (_cfg, path) = Config::load(cfg_path.as_deref())?;
   let mut store = AuthStore::load(None, Some(&path))?;
+  let id = account.id.clone();
   let provider = account.provider.clone();
   store.upsert(account);
   store.save()?;
   tracing::info!(
-    account = %args.id,
+    account = %id,
     %provider,
     from = %args.from,
     path = %store.path().display(),
     "account imported"
   );
-  println!("Saved account '{}' to {}", args.id, store.path().display());
+  println!("Saved account '{id}' to {}", store.path().display());
   Ok(())
 }
 
@@ -105,9 +106,7 @@ pub(crate) fn build_source(args: &ImportArgs) -> Result<CredentialSource> {
   }
 
   match args.from.as_str() {
-    "login" => Err(anyhow!(
-      "from=login is interactive-only; use `account login` instead"
-    )),
+    "login" => Err(anyhow!("from=login is interactive-only; use `account login` instead")),
     "env" => {
       let env_var = args
         .env_var
@@ -204,7 +203,7 @@ mod tests {
       file: None,
       refresh_token: false,
       api_key: false,
-      id: "imported".to_string(),
+      id: None,
     }
   }
 

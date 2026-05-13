@@ -171,9 +171,18 @@ pub enum RefreshOutcome {
   Refreshed {
     access_token: String,
     expires_at: i64,
+    /// Optional upstream username/account handle discovered during refresh.
+    username: Option<String>,
   },
   /// The provider uses a static credential; nothing to refresh.
   NotApplicable,
+}
+
+/// Outcome of a successful credential verification.
+#[derive(Debug, Clone, Default)]
+pub struct VerifyOutcome {
+  /// Optional upstream username/account handle discovered during verification.
+  pub username: Option<String>,
 }
 
 /// Provider-agnostic snapshot of remote quota / plan state, returned by
@@ -439,7 +448,7 @@ pub trait ProviderAuth: Send + Sync {
   /// For OAuth providers this typically runs a token exchange to confirm
   /// the refresh token is still good; for static-key providers it hits a
   /// cheap upstream endpoint (e.g. `GET /models`).
-  async fn verify_credential(&self, client: &reqwest::Client, account: &AccountConfig) -> Result<()>;
+  async fn verify_credential(&self, client: &reqwest::Client, account: &AccountConfig) -> Result<VerifyOutcome>;
 
   /// Fetch a [`QuotaSnapshot`] for status display. May be a no-op
   /// (returning `Default::default()`) when the upstream offers no quota

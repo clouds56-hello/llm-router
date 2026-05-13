@@ -141,7 +141,11 @@ async fn list(cfg: &Config, store: &mut AuthStore, args: ListArgs) -> Result<()>
   let mut dirty = false;
   for (a, q) in store.accounts.iter_mut().zip(quotas.iter()) {
     if let QuotaResult::Ok {
-      refreshed: Some(llm_auth::RefreshOutcome::Refreshed { access_token, expires_at }),
+      refreshed: Some(llm_auth::RefreshOutcome::Refreshed {
+        access_token,
+        expires_at,
+        username,
+      }),
       ..
     } = q
     {
@@ -155,6 +159,12 @@ async fn list(cfg: &Config, store: &mut AuthStore, args: ListArgs) -> Result<()>
         a.access_token_expires_at = Some(*expires_at);
         a.last_refresh = Some(time::OffsetDateTime::now_utc().unix_timestamp());
         dirty = true;
+      }
+      if let Some(name) = username.as_ref().filter(|name| !name.trim().is_empty()) {
+        if a.username.as_deref() != Some(name.as_str()) {
+          a.username = Some(name.clone());
+          dirty = true;
+        }
       }
     }
   }
@@ -463,10 +473,17 @@ async fn refresh(cfg: &Config, store: &mut AuthStore, id: &str) -> Result<()> {
       );
       Ok(())
     }
-    llm_auth::RefreshOutcome::Refreshed { access_token, expires_at } => {
+    llm_auth::RefreshOutcome::Refreshed {
+      access_token,
+      expires_at,
+      username,
+    } => {
       let acct = store.get_mut(id).expect("checked above");
       acct.access_token = Some(Secret::new(access_token));
       acct.access_token_expires_at = Some(expires_at);
+      if let Some(name) = username.filter(|name| !name.trim().is_empty()) {
+        acct.username = Some(name);
+      }
       acct.last_refresh = Some(time::OffsetDateTime::now_utc().unix_timestamp());
       store.save()?;
       tracing::info!(account = %id, "access token refreshed");
@@ -500,7 +517,11 @@ async fn status(cfg: &Config, store: &mut AuthStore, id: Option<String>) -> Resu
   let mut dirty = false;
   for (a, q) in store.accounts.iter_mut().zip(quotas.iter()) {
     if let QuotaResult::Ok {
-      refreshed: Some(llm_auth::RefreshOutcome::Refreshed { access_token, expires_at }),
+      refreshed: Some(llm_auth::RefreshOutcome::Refreshed {
+        access_token,
+        expires_at,
+        username,
+      }),
       ..
     } = q
     {
@@ -514,6 +535,12 @@ async fn status(cfg: &Config, store: &mut AuthStore, id: Option<String>) -> Resu
         a.access_token_expires_at = Some(*expires_at);
         a.last_refresh = Some(time::OffsetDateTime::now_utc().unix_timestamp());
         dirty = true;
+      }
+      if let Some(name) = username.as_ref().filter(|name| !name.trim().is_empty()) {
+        if a.username.as_deref() != Some(name.as_str()) {
+          a.username = Some(name.clone());
+          dirty = true;
+        }
       }
     }
   }

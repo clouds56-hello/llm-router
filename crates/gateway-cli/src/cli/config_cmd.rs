@@ -549,7 +549,7 @@ fn account_source_from_spec(spec: &AccountSpec, allow_login: bool) -> Result<cra
     file: spec.file.clone().map(std::path::PathBuf::from),
     refresh_token: spec.refresh_token,
     api_key: spec.api_key,
-    id: spec.id.clone(),
+    id: Some(spec.id.clone()),
   };
   let source = crate::cli::import::build_source(&args)?;
   crate::cli::onboarding::validate_provider_source(&spec.provider, &source)?;
@@ -829,10 +829,9 @@ mod tests {
 
   #[test]
   fn parse_account_spec_rejects_conflicting_flavors() {
-    let err =
-      parse_account_spec("id=w,provider=github-copilot,refresh_token=true,api_key=true")
-        .unwrap_err()
-        .to_string();
+    let err = parse_account_spec("id=w,provider=github-copilot,refresh_token=true,api_key=true")
+      .unwrap_err()
+      .to_string();
     assert!(err.contains("cannot set both"), "got: {err}");
   }
 

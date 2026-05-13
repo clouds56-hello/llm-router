@@ -6,9 +6,7 @@
 
 use async_trait::async_trait;
 use llm_core::account::AccountConfig;
-use llm_auth::{
-  AuthError, ProviderAuth, QuotaSnapshot, RefreshOutcome, Result,
-};
+use llm_auth::{AuthError, ProviderAuth, QuotaSnapshot, RefreshOutcome, Result, VerifyOutcome};
 
 /// Singleton ZSt impl. Same instance handles every Z.ai alias because the
 /// auth flow is identical; the provider id stored on the account is what
@@ -78,7 +76,7 @@ impl ProviderAuth for ZaiAuth {
     Ok(RefreshOutcome::NotApplicable)
   }
 
-  async fn verify_credential(&self, client: &reqwest::Client, account: &AccountConfig) -> Result<()> {
+  async fn verify_credential(&self, client: &reqwest::Client, account: &AccountConfig) -> Result<VerifyOutcome> {
     let key = account
       .api_key
       .as_ref()
@@ -100,7 +98,7 @@ impl ProviderAuth for ZaiAuth {
       .map_err(|e| AuthError::Network(e.to_string()))?;
     let status = resp.status();
     if status.is_success() {
-      Ok(())
+      Ok(VerifyOutcome::default())
     } else {
       let body = resp.text().await.unwrap_or_default();
       Err(AuthError::Upstream(format!(

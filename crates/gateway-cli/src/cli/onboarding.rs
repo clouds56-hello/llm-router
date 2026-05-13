@@ -12,7 +12,7 @@ use crate::auth_registry::{known_providers, provider_auth_for};
 use crate::config::{Account, AuthType};
 use crate::util::secret::Secret;
 use anyhow::{anyhow, Context, Result};
-use llm_auth::{CredentialResult, ProviderAuth};
+use llm_auth::{CredentialResult, ProviderAuth, RefreshOutcome};
 
 // Re-export so existing call sites continue to use
 // `crate::cli::onboarding::CredentialSource`. New code should import it
@@ -74,22 +74,23 @@ pub async fn resolve_account(
         .await
         .map_err(|e| anyhow!("import failed: {e}"))?;
       match result {
-        CredentialResult::Refresh(token) => oauth_account_from_token(auth, id_override, token),
-        CredentialResult::ApiKey(key) => static_key_account(auth, id_override, key),
+        CredentialResult::Refresh(token) => oauth_account_from_token(client, auth, id_override, token).await,
+        CredentialResult::ApiKey(key) => static_key_account(client, auth, id_override, key).await,
       }
     }
   }
 }
 
 /// Build an [`Account`] for an OAuth provider given a long-lived refresh
-/// token. Does not contact the upstream — the next refresh will do that.
-fn oauth_account_from_token(
+/// token, then validate it with a live refresh when the provider supports it.
+async fn oauth_account_from_token(
+  client: &reqwest::Client,
   auth: &dyn ProviderAuth,
   id_override: Option<String>,
   token: String,
 ) -> Result<Account> {
-  Ok(Account {
-    id: id_override.unwrap_or_else(|| "imported".into()),
+  let mut account = Account {
+    id: id_override.clone().unwrap_or_else(|| "imported".into()),
     provider: auth.id().into(),
     enabled: true,
     tier: llm_core::account::AccountTier::Active,
@@ -109,16 +110,61 @@ fn oauth_account_from_token(
     refresh_url: auth.default_refresh_url().map(str::to_string),
     last_refresh: None,
     settings: toml::Table::new(),
-  })
+  };
+
+  let refresh = auth
+    .refresh_credential(client, &account)
+    .await
+    .map_err(|e| anyhow!("refresh token verification failed: {e}"))?;
+  let mut username = match refresh {
+    RefreshOutcome::Refreshed {
+      access_token,
+      expires_at,
+      username,
+    } => {
+      account.access_token = Some(Secret::new(access_token));
+      account.access_token_expires_at = Some(expires_at);
+      account.last_refresh = Some(time::OffsetDateTime::now_utc().unix_timestamp());
+      username
+    }
+    RefreshOutcome::NotApplicable => None,
+  };
+  if username.is_none() {
+    username = auth.verify_credential(client, &account).await.ok().and_then(|v| v.username);
+  }
+  if id_override.is_none() {
+    if let Some(name) = username.as_ref().filter(|name| !name.trim().is_empty()) {
+      account.id = name.trim().to_string();
+    }
+  }
+  account.username = username;
+
+  Ok(account)
 }
 
 /// Build an [`Account`] for a static-API-key provider given the raw key.
-fn static_key_account(
+async fn static_key_account(
+  client: &reqwest::Client,
   auth: &dyn ProviderAuth,
   id_override: Option<String>,
   key: String,
 ) -> Result<Account> {
-  let id = id_override.unwrap_or_else(|| auth.default_account_id().to_string());
+  let mut account = static_key_account_unverified(auth, id_override.clone(), key)?;
+  let outcome = auth
+    .verify_credential(client, &account)
+    .await
+    .map_err(|e| anyhow!("key verification failed: {e}"))?;
+  if id_override.as_deref().map(str::trim).filter(|id| !id.is_empty() && *id != "imported").is_none() {
+    if let Some(name) = outcome.username.as_ref().filter(|name| !name.trim().is_empty()) {
+      account.id = name.trim().to_string();
+    }
+  }
+  account.username = outcome.username;
+  Ok(account)
+}
+
+fn static_key_account_unverified(auth: &dyn ProviderAuth, id_override: Option<String>, key: String) -> Result<Account> {
+  let id = resolve_static_key_account_id(id_override, &key);
   Ok(Account {
     id,
     provider: auth.id().into(),
@@ -141,6 +187,26 @@ fn static_key_account(
     last_refresh: None,
     settings: toml::Table::new(),
   })
+}
+
+fn resolve_static_key_account_id(id_override: Option<String>, key: &str) -> String {
+  match id_override.map(|id| id.trim().to_string()) {
+    Some(id) if !id.is_empty() && id != "imported" => id,
+    _ => account_id_from_api_key(key),
+  }
+}
+
+fn account_id_from_api_key(key: &str) -> String {
+  let last4: String = key
+    .trim()
+    .chars()
+    .rev()
+    .take(4)
+    .collect::<Vec<_>>()
+    .into_iter()
+    .rev()
+    .collect();
+  format!("account_{last4}")
 }
 
 /// Run a provider's device-flow login interactively. Splits the trait's
@@ -203,10 +269,7 @@ async fn static_key_login(
   auth: &dyn ProviderAuth,
   id_override: Option<String>,
 ) -> Result<Account> {
-  println!(
-    "{} uses a static API key. Paste your key below.",
-    auth.id()
-  );
+  println!("{} uses a static API key. Paste your key below.", auth.id());
   let key = rpassword::prompt_password("API key: ")
     .context("reading API key from stdin")?
     .trim()
@@ -216,18 +279,25 @@ async fn static_key_login(
   }
 
   // Build a throwaway Account so the trait can verify against it.
-  let probe = static_key_account(auth, Some("__probe__".into()), key.clone())?;
+  let probe = static_key_account_unverified(auth, Some("__probe__".into()), key.clone())?;
   println!(
     "Verifying key against {} …",
     probe.base_url.as_deref().unwrap_or("upstream")
   );
-  auth
+  let outcome = auth
     .verify_credential(client, &probe)
     .await
     .map_err(|e| anyhow!("key verification failed: {e}"))?;
   println!("Key OK.");
 
-  static_key_account(auth, id_override, key)
+  let mut account = static_key_account_unverified(auth, id_override.clone(), key)?;
+  if id_override.as_deref().map(str::trim).filter(|id| !id.is_empty() && *id != "imported").is_none() {
+    if let Some(name) = outcome.username.as_ref().filter(|name| !name.trim().is_empty()) {
+      account.id = name.trim().to_string();
+    }
+  }
+  account.username = outcome.username;
+  Ok(account)
 }
 
 // ---------------------------------------------------------------------------
@@ -327,9 +397,7 @@ pub(crate) fn pick_source_interactive(provider: &str) -> Result<CredentialSource
 /// Ask the user whether the credential is an API key or a refresh
 /// token. If the provider only accepts one flavor, return it without
 /// prompting.
-fn pick_flavor_interactive(
-  auth: &dyn llm_auth::ProviderAuth,
-) -> Result<llm_auth::CredentialFlavor> {
+fn pick_flavor_interactive(auth: &dyn llm_auth::ProviderAuth) -> Result<llm_auth::CredentialFlavor> {
   use llm_auth::CredentialFlavor::*;
   let api = auth.supports_auth_flavor(ApiKey);
   let refresh = auth.supports_auth_flavor(RefreshToken);
@@ -337,12 +405,20 @@ fn pick_flavor_interactive(
     (true, false) => Ok(ApiKey),
     (false, true) => Ok(RefreshToken),
     (true, true) => {
-      let default_idx = if matches!(auth.default_auth_flavor(), RefreshToken) { 1 } else { 0 };
+      let default_idx = if matches!(auth.default_auth_flavor(), RefreshToken) {
+        1
+      } else {
+        0
+      };
       let picked = inquire::Select::new("Credential flavor:", vec!["api-key", "refresh-token"])
         .with_starting_cursor(default_idx)
         .prompt()
         .context("flavor selection cancelled")?;
-      Ok(if picked == "refresh-token" { RefreshToken } else { ApiKey })
+      Ok(if picked == "refresh-token" {
+        RefreshToken
+      } else {
+        ApiKey
+      })
     }
     (false, false) => Err(anyhow!(
       "provider '{}' does not accept any credential flavor",
@@ -355,17 +431,52 @@ pub(crate) fn pick_account_id(provider: &str, source: &CredentialSource) -> Resu
   let default_id = provider_auth_for(provider)
     .map(|a| a.default_account_id())
     .unwrap_or("imported");
+  let supports_auto_api_key = provider_auth_for(provider)
+    .map(|a| {
+      a.supports_auth_flavor(llm_auth::CredentialFlavor::ApiKey)
+        && matches!(source.flavor(), Some(llm_auth::CredentialFlavor::ApiKey) | None)
+    })
+    .unwrap_or(false);
+  let supports_auto_id = matches!(source, CredentialSource::Login) || supports_auto_api_key;
   let prompt = match source {
     CredentialSource::Login => "Account id (leave empty for auto):",
+    _ if supports_auto_api_key => "Account id (leave empty for auto):",
     _ => "Account id:",
   };
-  let text = inquire::Text::new(prompt)
-    .with_initial_value(default_id)
-    .prompt()
-    .context("account id prompt cancelled")?;
+  let mut prompt = inquire::Text::new(prompt);
+  if !supports_auto_id {
+    prompt = prompt.with_initial_value(default_id);
+  }
+  let text = prompt.prompt().context("account id prompt cancelled")?;
   let trimmed = text.trim().to_string();
   if trimmed.is_empty() {
     return Ok(None);
   }
   Ok(Some(trimmed))
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn api_key_account_id_uses_last_four_when_missing() {
+    assert_eq!(resolve_static_key_account_id(None, "sk-abcdef"), "account_cdef");
+  }
+
+  #[test]
+  fn api_key_account_id_treats_imported_as_auto() {
+    assert_eq!(
+      resolve_static_key_account_id(Some("imported".into()), "sk-abcdef"),
+      "account_cdef"
+    );
+  }
+
+  #[test]
+  fn api_key_account_id_preserves_explicit_override() {
+    assert_eq!(
+      resolve_static_key_account_id(Some("custom".into()), "sk-abcdef"),
+      "custom"
+    );
+  }
 }

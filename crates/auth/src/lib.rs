@@ -23,6 +23,6 @@ pub use llm_core::account::{AccountConfig, AccountState, AccountTier};
 pub use provider::{
   default_import_from, AuthError, CredentialFlavor, CredentialResult, CredentialSource,
   CredentialSourceKind, DeviceCodeHandle, DeviceFlowOutcome, MeteredBucket, ProviderAuth,
-  QuotaSnapshot, RefreshOutcome, Result, UsageBucket,
+  QuotaSnapshot, RefreshOutcome, Result, UsageBucket, VerifyOutcome,
 };
 pub use store::AuthStore;
