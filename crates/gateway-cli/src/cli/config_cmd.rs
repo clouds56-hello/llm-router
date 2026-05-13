@@ -316,10 +316,19 @@ fn cmd_list_profiles() -> Result<()> {
 struct AccountSpec {
   id: String,
   provider: String,
+  /// `env` (default), `string`, `file`, `stdin`, `login`, or any
+  /// provider-defined custom key (e.g. `gh`, `copilot-plugin`).
   from: String,
+  /// Env var name when `from=env`; defaults to provider-derived.
   env_var: Option<String>,
-  refresh_token: Option<String>,
-  refresh_token_env_var: Option<String>,
+  /// Literal credential bytes when `from=string`.
+  credential: Option<String>,
+  /// File path when `from=file`.
+  file: Option<String>,
+  /// Force `RefreshToken` flavor (overrides provider default).
+  refresh_token: bool,
+  /// Force `ApiKey` flavor (overrides provider default).
+  api_key: bool,
 }
 
 async fn cmd_init(path: &std::path::Path, args: InitArgs) -> Result<()> {
@@ -471,8 +480,10 @@ fn parse_account_spec(raw: &str) -> Result<AccountSpec> {
   let mut provider: Option<String> = None;
   let mut from: Option<String> = None;
   let mut env_var: Option<String> = None;
-  let mut refresh_token: Option<String> = None;
-  let mut refresh_token_env_var: Option<String> = None;
+  let mut credential: Option<String> = None;
+  let mut file: Option<String> = None;
+  let mut refresh_token = false;
+  let mut api_key = false;
 
   for part in raw.split(',') {
     let (k, v) = part
@@ -488,83 +499,59 @@ fn parse_account_spec(raw: &str) -> Result<AccountSpec> {
       "provider" => provider = Some(val.to_string()),
       "from" => from = Some(val.to_string()),
       "env_var" => env_var = Some(val.to_string()),
-      "refresh_token" => refresh_token = Some(val.to_string()),
-      "refresh_token_env_var" => refresh_token_env_var = Some(val.to_string()),
+      "credential" => credential = Some(val.to_string()),
+      "file" => file = Some(val.to_string()),
+      "refresh_token" => refresh_token = parse_bool(key, val)?,
+      "api_key" => api_key = parse_bool(key, val)?,
       _ => bail!("unknown account spec key '{key}'"),
     }
+  }
+  if refresh_token && api_key {
+    bail!("account spec cannot set both refresh_token=true and api_key=true");
   }
 
   let spec = AccountSpec {
     id: id.ok_or_else(|| anyhow!("account spec missing required key 'id'"))?,
     provider: provider.ok_or_else(|| anyhow!("account spec missing required key 'provider'"))?,
-    from: from.ok_or_else(|| anyhow!("account spec missing required key 'from'"))?,
+    from: from.unwrap_or_else(|| "env".to_string()),
     env_var,
+    credential,
+    file,
     refresh_token,
-    refresh_token_env_var,
+    api_key,
   };
   crate::cli::onboarding::validate_provider(&spec.provider)?;
   Ok(spec)
 }
 
+fn parse_bool(key: &str, val: &str) -> Result<bool> {
+  match val.to_ascii_lowercase().as_str() {
+    "true" | "1" | "yes" => Ok(true),
+    "false" | "0" | "no" => Ok(false),
+    _ => Err(anyhow!("account spec key '{key}' must be true/false, got '{val}'")),
+  }
+}
+
 fn account_source_from_spec(spec: &AccountSpec, allow_login: bool) -> Result<crate::cli::onboarding::CredentialSource> {
-  let source = match spec.from.as_str() {
-    "login" => {
-      if !allow_login {
-        bail!("from=login is interactive-only; use env/refresh-token (or a provider-specific source like gh / copilot-plugin) in --yes mode");
-      }
-      crate::cli::onboarding::CredentialSource::Login
+  if spec.from == "login" {
+    if !allow_login {
+      bail!("from=login is interactive-only; use env/string/file/stdin (or a provider-specific source like gh / copilot-plugin) in --yes mode");
     }
-    "refresh-token" => {
-      let token = if let Some(t) = spec.refresh_token.clone() {
-        let trimmed = t.trim().to_string();
-        if trimmed.is_empty() {
-          bail!("refresh_token cannot be empty");
-        }
-        trimmed
-      } else {
-        let env_name = spec
-          .refresh_token_env_var
-          .clone()
-          .unwrap_or_else(|| "GITHUB_COPILOT_REFRESH_TOKEN".to_string());
-        let value = std::env::var(&env_name)
-          .map_err(|_| anyhow!("environment variable `{env_name}` is not set; set it or pass refresh_token=..."))?;
-        let trimmed = value.trim().to_string();
-        if trimmed.is_empty() {
-          bail!("environment variable `{env_name}` is empty");
-        }
-        trimmed
-      };
-      crate::cli::onboarding::CredentialSource::RefreshToken { token }
-    }
-    "env" => crate::cli::onboarding::CredentialSource::Env {
-      env_var: spec.env_var.clone().unwrap_or_else(|| "ZAI_API_KEY".to_string()),
-    },
-    // Anything else is treated as a provider-defined Custom key
-    // (e.g. `gh`, `copilot-plugin`). Resolve against the provider's
-    // advertised list so the resulting Custom value carries a real
-    // `&'static str` rather than a freshly-allocated string.
-    other => {
-      let auth = crate::auth_registry::provider_auth_for(&spec.provider)
-        .ok_or_else(|| anyhow!("unknown provider '{}'", spec.provider))?;
-      let key = auth
-        .custom_credential_sources()
-        .iter()
-        .copied()
-        .find(|k| *k == other)
-        .ok_or_else(|| {
-          anyhow!(
-            "unsupported from='{other}'; expected one of: {}",
-            auth
-              .credential_sources()
-              .iter()
-              .map(|k| k.as_str())
-              .collect::<Vec<_>>()
-              .join("|")
-          )
-        })?;
-      crate::cli::onboarding::CredentialSource::Custom { key, value: None }
-    }
+    return Ok(crate::cli::onboarding::CredentialSource::Login);
+  }
+  // Reuse the import command's source builder — same semantics for
+  // CLI flags and `--yes` account specs.
+  let args = crate::cli::import::ImportArgs {
+    from: spec.from.clone(),
+    provider: spec.provider.clone(),
+    env_var: spec.env_var.clone(),
+    credential: spec.credential.clone(),
+    file: spec.file.clone().map(std::path::PathBuf::from),
+    refresh_token: spec.refresh_token,
+    api_key: spec.api_key,
+    id: spec.id.clone(),
   };
+  let source = crate::cli::import::build_source(&args)?;
   crate::cli::onboarding::validate_provider_source(&spec.provider, &source)?;
   Ok(source)
 }
@@ -817,12 +804,20 @@ mod tests {
     assert_eq!(spec.provider, "github-copilot");
     assert_eq!(spec.from, "gh");
     assert_eq!(spec.env_var, None);
-    assert_eq!(spec.refresh_token, None);
-    assert_eq!(spec.refresh_token_env_var, None);
+    assert_eq!(spec.credential, None);
+    assert_eq!(spec.file, None);
+    assert!(!spec.refresh_token);
+    assert!(!spec.api_key);
   }
 
   #[test]
-  fn parse_account_spec_requires_id_provider_from() {
+  fn parse_account_spec_defaults_from_to_env() {
+    let spec = parse_account_spec("id=work,provider=zai").unwrap();
+    assert_eq!(spec.from, "env");
+  }
+
+  #[test]
+  fn parse_account_spec_requires_id_and_provider() {
     let err = parse_account_spec("provider=github-copilot,from=gh")
       .unwrap_err()
       .to_string();
@@ -830,11 +825,15 @@ mod tests {
 
     let err = parse_account_spec("id=work,from=gh").unwrap_err().to_string();
     assert!(err.contains("missing required key 'provider'"));
+  }
 
-    let err = parse_account_spec("id=work,provider=github-copilot")
-      .unwrap_err()
-      .to_string();
-    assert!(err.contains("missing required key 'from'"));
+  #[test]
+  fn parse_account_spec_rejects_conflicting_flavors() {
+    let err =
+      parse_account_spec("id=w,provider=github-copilot,refresh_token=true,api_key=true")
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("cannot set both"), "got: {err}");
   }
 
   #[test]
@@ -844,8 +843,10 @@ mod tests {
       provider: "zai".into(),
       from: "gh".into(),
       env_var: None,
-      refresh_token: None,
-      refresh_token_env_var: None,
+      credential: None,
+      file: None,
+      refresh_token: false,
+      api_key: false,
     };
     let err = account_source_from_spec(&spec, false).unwrap_err().to_string();
     assert!(err.contains("unsupported"), "got: {err}");
@@ -859,8 +860,10 @@ mod tests {
       provider: "github-copilot".into(),
       from: "login".into(),
       env_var: None,
-      refresh_token: None,
-      refresh_token_env_var: None,
+      credential: None,
+      file: None,
+      refresh_token: false,
+      api_key: false,
     };
     let err = account_source_from_spec(&spec, false).unwrap_err().to_string();
     assert!(err.contains("interactive-only"));
@@ -871,15 +874,20 @@ mod tests {
     let spec = AccountSpec {
       id: "work".into(),
       provider: "github-copilot".into(),
-      from: "refresh-token".into(),
+      from: "string".into(),
       env_var: None,
-      refresh_token: Some("rtok".into()),
-      refresh_token_env_var: None,
+      credential: Some("rtok".into()),
+      file: None,
+      refresh_token: true,
+      api_key: false,
     };
     let source = account_source_from_spec(&spec, false).unwrap();
     assert!(matches!(
       source,
-      crate::cli::onboarding::CredentialSource::RefreshToken { .. }
+      crate::cli::onboarding::CredentialSource::String {
+        flavor: llm_auth::CredentialFlavor::RefreshToken,
+        ..
+      }
     ));
   }
 }

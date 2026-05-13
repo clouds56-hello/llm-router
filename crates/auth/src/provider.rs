@@ -52,17 +52,31 @@ pub struct DeviceCodeHandle {
   pub interval: u64,
 }
 
-/// Where the CLI is being told to fetch a credential from. This is the
-/// *location* (or method) only — the actual credential bytes (and
-/// whether they form an API key or a refresh token) come back as a
-/// [`CredentialResult`].
+/// What *shape* a credential is in. Determines whether the provider
+/// treats it as a static API key (used as-is on every request) or a
+/// long-lived refresh token (exchanged for short-lived access tokens).
+///
+/// Carried on every non-`Login` [`CredentialSource`] so the CLI can
+/// say "this thing is a refresh token" without the provider having to
+/// guess from the source.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum CredentialFlavor {
+  /// Static API key.
+  ApiKey,
+  /// Long-lived OAuth refresh token.
+  RefreshToken,
+}
+
+/// Where the CLI is being told to fetch a credential from.
+///
+/// Each non-`Login` variant carries a [`CredentialFlavor`] — the caller
+/// declares whether the bytes form an API key or a refresh token — and
+/// `import_from` simply produces the matching [`CredentialResult`].
 ///
 /// `Custom { key, value }` is the escape hatch for provider-specific
 /// sources that don't fit the generic shape (e.g. Copilot's `gh` and
 /// `copilot-plugin` scrapers). The `key` is `&'static str` — providers
-/// advertise the legal set via [`ProviderAuth::custom_credential_sources`],
-/// and runtime-supplied source strings (e.g. from `--from <name>`) must
-/// be resolved against that list before constructing a `Custom` value.
+/// advertise the legal set via [`ProviderAuth::custom_credential_sources`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CredentialSource {
   /// Run the provider's interactive flow (device-flow OAuth or static-key
@@ -70,13 +84,16 @@ pub enum CredentialSource {
   /// it via [`ProviderAuth::request_device_code`] /
   /// [`ProviderAuth::poll_device_code`] or the static-key prompt.
   Login,
-  /// Caller already has a long-lived OAuth refresh token.
-  RefreshToken { token: String },
-  /// Read a static API key from a named environment variable.
-  Env { env_var: String },
-  /// Provider-defined source. `key` is the well-known identifier
-  /// (e.g. `"gh"`, `"copilot-plugin"`); `value` is an optional payload
-  /// the user typed at the prompt (most custom sources don't need one).
+  /// Read the credential from a named environment variable.
+  Env { env_var: String, flavor: CredentialFlavor },
+  /// Caller already has the credential bytes in hand (e.g. typed at a
+  /// prompt, piped via stdin).
+  String { value: String, flavor: CredentialFlavor },
+  /// Read the credential from a file on disk.
+  File { path: std::path::PathBuf, flavor: CredentialFlavor },
+  /// Provider-defined source. The provider chooses the resulting
+  /// flavor itself; `value` is an optional payload the user typed at
+  /// the prompt (most custom sources don't need one).
   Custom { key: &'static str, value: Option<String> },
 }
 
@@ -88,8 +105,9 @@ pub enum CredentialSource {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum CredentialSourceKind {
   Login,
-  RefreshToken,
   Env,
+  String,
+  File,
   Custom(&'static str),
 }
 
@@ -97,9 +115,21 @@ impl CredentialSource {
   pub fn kind(&self) -> CredentialSourceKind {
     match self {
       Self::Login => CredentialSourceKind::Login,
-      Self::RefreshToken { .. } => CredentialSourceKind::RefreshToken,
       Self::Env { .. } => CredentialSourceKind::Env,
+      Self::String { .. } => CredentialSourceKind::String,
+      Self::File { .. } => CredentialSourceKind::File,
       Self::Custom { key, .. } => CredentialSourceKind::Custom(key),
+    }
+  }
+
+  /// Flavor declared on this source, if any. `Login` and `Custom` both
+  /// return `None` (the provider chooses).
+  pub fn flavor(&self) -> Option<CredentialFlavor> {
+    match self {
+      Self::Env { flavor, .. } | Self::String { flavor, .. } | Self::File { flavor, .. } => {
+        Some(*flavor)
+      }
+      Self::Login | Self::Custom { .. } => None,
     }
   }
 }
@@ -110,8 +140,9 @@ impl CredentialSourceKind {
   pub fn as_str(&self) -> &'static str {
     match self {
       Self::Login => "login",
-      Self::RefreshToken => "refresh-token",
       Self::Env => "env",
+      Self::String => "string",
+      Self::File => "file",
       Self::Custom(key) => key,
     }
   }
@@ -267,25 +298,17 @@ pub trait ProviderAuth: Send + Sync {
   /// uses this both to build its interactive picker and to validate
   /// `account import --from`.
   ///
-  /// Default impl derives the list from [`Self::supports_device_flow`],
-  /// [`Self::supports_static_key`], and [`Self::custom_credential_sources`]:
-  ///   * always `Login`
-  ///   * OAuth providers also accept `RefreshToken`
-  ///   * static-key providers also accept `Env`
-  ///   * each entry from `custom_credential_sources()` becomes a
-  ///     `Custom(key)` variant
-  ///
-  /// Providers should override [`Self::custom_credential_sources`] for
-  /// the common case; only override this method if the standard
-  /// `Login`/`RefreshToken`/`Env` shape doesn't apply.
+  /// The generic sources (`Env` / `String` / `File`) are always
+  /// available — `flavor` (carried on the source itself) is what gets
+  /// validated against [`Self::supports_auth_flavor`]. `Custom` keys
+  /// come from [`Self::custom_credential_sources`].
   fn credential_sources(&self) -> Vec<CredentialSourceKind> {
-    let mut out = vec![CredentialSourceKind::Login];
-    if self.supports_device_flow() {
-      out.push(CredentialSourceKind::RefreshToken);
-    }
-    if self.supports_static_key() {
-      out.push(CredentialSourceKind::Env);
-    }
+    let mut out = vec![
+      CredentialSourceKind::Login,
+      CredentialSourceKind::Env,
+      CredentialSourceKind::String,
+      CredentialSourceKind::File,
+    ];
     for key in self.custom_credential_sources() {
       out.push(CredentialSourceKind::Custom(key));
     }
@@ -302,50 +325,51 @@ pub trait ProviderAuth: Send + Sync {
     &[]
   }
 
+  /// True if this provider accepts the given credential flavor.
+  /// Default impl returns true for `RefreshToken` if
+  /// [`Self::supports_device_flow`] and `ApiKey` if
+  /// [`Self::supports_static_key`].
+  fn supports_auth_flavor(&self, flavor: CredentialFlavor) -> bool {
+    match flavor {
+      CredentialFlavor::RefreshToken => self.supports_device_flow(),
+      CredentialFlavor::ApiKey => self.supports_static_key(),
+    }
+  }
+
+  /// The flavor to assume when the caller doesn't specify one (e.g. the
+  /// CLI default for `--from env` without `--refresh-token`). Default:
+  /// `RefreshToken` for OAuth providers, `ApiKey` otherwise.
+  fn default_auth_flavor(&self) -> CredentialFlavor {
+    if self.supports_device_flow() {
+      CredentialFlavor::RefreshToken
+    } else {
+      CredentialFlavor::ApiKey
+    }
+  }
+
   /// True if a [`CredentialSource`] is supported by this provider.
-  /// Default impl checks against [`Self::credential_sources`]; rarely
-  /// overridden.
+  /// Default impl checks both that the source *kind* is advertised in
+  /// [`Self::credential_sources`] and that the flavor (when present) is
+  /// accepted by [`Self::supports_auth_flavor`].
   fn supports_credential_source(&self, src: &CredentialSource) -> bool {
-    self.credential_sources().contains(&src.kind())
+    if !self.credential_sources().contains(&src.kind()) {
+      return false;
+    }
+    src.flavor().map(|f| self.supports_auth_flavor(f)).unwrap_or(true)
   }
 
   /// Acquire a credential from the named source. The CLI has already
-  /// gathered any user input (env-var name, raw refresh token, …) and
-  /// packed it into [`CredentialSource`]; this method turns that into
-  /// the actual credential bytes plus its shape (refresh token vs API
-  /// key) via [`CredentialResult`].
+  /// gathered any user input (env-var name, literal token, file path)
+  /// and packed it into [`CredentialSource`]; this method turns that
+  /// into the actual credential bytes wrapped in a [`CredentialResult`].
   ///
-  /// Default impl handles the generic variants:
-  ///   * `RefreshToken { token }` → `CredentialResult::Refresh(token)`
-  ///   * `Env { env_var }` → reads the env var, returns
-  ///     `CredentialResult::ApiKey(value)`
-  ///   * `Custom { .. }` → [`AuthError::Unsupported`] (override to handle)
-  ///   * `Login` → unreachable (the CLI dispatches it via
-  ///     `request_device_code` / `poll_device_code` or the static-key
-  ///     prompt, never through `import_from`)
+  /// Default impl delegates to [`default_import_from`], which handles
+  /// the generic `Env`/`String`/`File` variants and rejects `Custom` /
+  /// `Login`. Providers override this to add `Custom` source handling
+  /// (and typically delegate the generic cases back to
+  /// [`default_import_from`]).
   async fn import_from(&self, source: &CredentialSource) -> Result<CredentialResult> {
-    match source {
-      CredentialSource::RefreshToken { token } => Ok(CredentialResult::Refresh(token.clone())),
-      CredentialSource::Env { env_var } => {
-        let value = std::env::var(env_var).map_err(|_| {
-          AuthError::Other(format!("environment variable `{env_var}` is not set"))
-        })?;
-        let trimmed = value.trim().to_string();
-        if trimmed.is_empty() {
-          return Err(AuthError::Other(format!(
-            "environment variable `{env_var}` is empty"
-          )));
-        }
-        Ok(CredentialResult::ApiKey(trimmed))
-      }
-      CredentialSource::Custom { key, .. } => Err(AuthError::Unsupported(format!(
-        "{} does not support custom credential source `{key}`",
-        self.id()
-      ))),
-      CredentialSource::Login => Err(AuthError::Unsupported(
-        "Login is dispatched via request_device_code / poll_device_code".into(),
-      )),
-    }
+    default_import_from(self.id(), source)
   }
 
   /// Suggested account id when the caller hasn't picked one and the
@@ -427,5 +451,52 @@ pub trait ProviderAuth: Send + Sync {
   /// endpoints.
   fn quota_timeout(&self) -> Duration {
     Duration::from_secs(5)
+  }
+}
+
+/// Trim `raw` and wrap it in the matching [`CredentialResult`] variant.
+/// Errors with [`AuthError::Other`] when the trimmed bytes are empty,
+/// using `source_label` to identify the origin in the message.
+pub fn wrap_bytes(raw: String, flavor: CredentialFlavor, source_label: &str) -> Result<CredentialResult> {
+  let trimmed = raw.trim().to_string();
+  if trimmed.is_empty() {
+    return Err(AuthError::Other(format!("{source_label} is empty")));
+  }
+  Ok(match flavor {
+    CredentialFlavor::ApiKey => CredentialResult::ApiKey(trimmed),
+    CredentialFlavor::RefreshToken => CredentialResult::Refresh(trimmed),
+  })
+}
+
+/// The default `import_from` body, exposed as a free function so that
+/// providers overriding [`ProviderAuth::import_from`] can delegate the
+/// generic `Env`/`String`/`File` cases without duplicating the logic.
+///
+/// `provider_id` is used only for the error message when `source` is a
+/// `Custom` variant the provider doesn't recognise (or `Login`).
+pub fn default_import_from(
+  provider_id: &str,
+  source: &CredentialSource,
+) -> Result<CredentialResult> {
+  match source {
+    CredentialSource::Env { env_var, flavor } => {
+      let value = std::env::var(env_var)
+        .map_err(|_| AuthError::Other(format!("environment variable `{env_var}` is not set")))?;
+      wrap_bytes(value, *flavor, &format!("environment variable `{env_var}`"))
+    }
+    CredentialSource::String { value, flavor } => {
+      wrap_bytes(value.clone(), *flavor, "credential value")
+    }
+    CredentialSource::File { path, flavor } => {
+      let raw = std::fs::read_to_string(path)
+        .map_err(|e| AuthError::Other(format!("read {}: {e}", path.display())))?;
+      wrap_bytes(raw, *flavor, &format!("file `{}`", path.display()))
+    }
+    CredentialSource::Custom { key, .. } => Err(AuthError::Unsupported(format!(
+      "{provider_id} does not support custom credential source `{key}`"
+    ))),
+    CredentialSource::Login => Err(AuthError::Unsupported(
+      "Login is dispatched via request_device_code / poll_device_code".into(),
+    )),
   }
 }

@@ -8,8 +8,8 @@ use crate::config::CopilotHeaders;
 use async_trait::async_trait;
 use llm_core::account::AccountConfig;
 use llm_auth::{
-  AuthError, CredentialResult, CredentialSource, DeviceCodeHandle, DeviceFlowOutcome, ProviderAuth,
-  QuotaSnapshot, RefreshOutcome, Result,
+  default_import_from, AuthError, CredentialResult, CredentialSource, DeviceCodeHandle,
+  DeviceFlowOutcome, ProviderAuth, QuotaSnapshot, RefreshOutcome, Result,
 };
 
 /// Singleton impl. Zero-sized; safe to hand out as `&'static`.
@@ -52,14 +52,12 @@ impl ProviderAuth for CopilotAuth {
       CredentialSource::Custom { key: "copilot-plugin", .. } => crate::import::from_copilot_plugin()
         .map(CredentialResult::Refresh)
         .map_err(AuthError::Other),
-      CredentialSource::RefreshToken { token } => Ok(CredentialResult::Refresh(token.clone())),
       CredentialSource::Custom { key, .. } => Err(AuthError::Unsupported(format!(
         "github-copilot does not support custom credential source `{key}`"
       ))),
-      CredentialSource::Env { .. } | CredentialSource::Login => Err(AuthError::Unsupported(format!(
-        "github-copilot does not support credential source {:?}",
-        source.kind()
-      ))),
+      // Env / String / File / Login → fall through to the default impl,
+      // which uses the source's `flavor` to wrap correctly.
+      _ => default_import_from(self.id(), source),
     }
   }
 

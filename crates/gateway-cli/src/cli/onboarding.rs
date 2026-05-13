@@ -278,33 +278,36 @@ pub(crate) fn pick_source_interactive(provider: &str) -> Result<CredentialSource
 
   match picked.as_str() {
     "login" => Ok(CredentialSource::Login),
-    "refresh-token" => {
-      let token = inquire::Text::new("Refresh token (leave empty to use env var):")
-        .prompt()
-        .context("refresh token prompt cancelled")?;
-      let trimmed = token.trim().to_string();
-      let token = if trimmed.is_empty() {
-        let env_var = inquire::Text::new("Refresh token env var:")
-          .with_initial_value("GITHUB_COPILOT_REFRESH_TOKEN")
-          .prompt()
-          .context("refresh token env var prompt cancelled")?;
-        let value = std::env::var(&env_var).map_err(|_| anyhow!("environment variable `{env_var}` is not set"))?;
-        let v = value.trim().to_string();
-        if v.is_empty() {
-          return Err(anyhow!("environment variable `{env_var}` is empty"));
-        }
-        v
-      } else {
-        trimmed
-      };
-      Ok(CredentialSource::RefreshToken { token })
-    }
     "env" => {
-      let env_var = inquire::Text::new("Environment variable containing API key:")
-        .with_initial_value("ZAI_API_KEY")
+      let flavor = pick_flavor_interactive(auth)?;
+      let default_name = crate::cli::import::default_env_var_name(provider, flavor);
+      let env_var = inquire::Text::new("Environment variable name:")
+        .with_initial_value(&default_name)
         .prompt()
         .context("env var prompt cancelled")?;
-      Ok(CredentialSource::Env { env_var })
+      Ok(CredentialSource::Env { env_var, flavor })
+    }
+    "string" => {
+      let flavor = pick_flavor_interactive(auth)?;
+      let label = match flavor {
+        llm_auth::CredentialFlavor::ApiKey => "Paste API key:",
+        llm_auth::CredentialFlavor::RefreshToken => "Paste refresh token:",
+      };
+      let value = inquire::Password::new(label)
+        .without_confirmation()
+        .prompt()
+        .context("credential prompt cancelled")?;
+      Ok(CredentialSource::String { value, flavor })
+    }
+    "file" => {
+      let flavor = pick_flavor_interactive(auth)?;
+      let path_str = inquire::Text::new("Path to credential file:")
+        .prompt()
+        .context("file path prompt cancelled")?;
+      Ok(CredentialSource::File {
+        path: std::path::PathBuf::from(path_str),
+        flavor,
+      })
     }
     // Anything else is a provider-defined Custom source. Look up the
     // matching `&'static str` from the provider's advertised list so
@@ -318,6 +321,33 @@ pub(crate) fn pick_source_interactive(provider: &str) -> Result<CredentialSource
         .ok_or_else(|| anyhow!("unsupported credential source `{other}`"))?;
       Ok(CredentialSource::Custom { key, value: None })
     }
+  }
+}
+
+/// Ask the user whether the credential is an API key or a refresh
+/// token. If the provider only accepts one flavor, return it without
+/// prompting.
+fn pick_flavor_interactive(
+  auth: &dyn llm_auth::ProviderAuth,
+) -> Result<llm_auth::CredentialFlavor> {
+  use llm_auth::CredentialFlavor::*;
+  let api = auth.supports_auth_flavor(ApiKey);
+  let refresh = auth.supports_auth_flavor(RefreshToken);
+  match (api, refresh) {
+    (true, false) => Ok(ApiKey),
+    (false, true) => Ok(RefreshToken),
+    (true, true) => {
+      let default_idx = if matches!(auth.default_auth_flavor(), RefreshToken) { 1 } else { 0 };
+      let picked = inquire::Select::new("Credential flavor:", vec!["api-key", "refresh-token"])
+        .with_starting_cursor(default_idx)
+        .prompt()
+        .context("flavor selection cancelled")?;
+      Ok(if picked == "refresh-token" { RefreshToken } else { ApiKey })
+    }
+    (false, false) => Err(anyhow!(
+      "provider '{}' does not accept any credential flavor",
+      auth.id()
+    )),
   }
 }
 
