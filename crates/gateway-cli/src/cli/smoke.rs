@@ -113,7 +113,8 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SmokeArgs) -> Result<()> {
 
   // Build the same event bus the server uses: DB writer + progress spinner +
   // progress log + archive worker, all attached automatically per config + TTY.
-  let (events, receiver, handlers, archive_runtime) = crate::server_runtime::build_event_bus(&cfg)?;
+  let credential_index = crate::db::CredentialAccountIndex::from_accounts(&accounts);
+  let (events, receiver, handlers, archive_runtime) = crate::server_runtime::build_event_bus(&cfg, credential_index)?;
   let _event_thread = llm_core::event::spawn_event_loop(receiver, handlers);
 
   let state = crate::server_runtime::build_state(&cfg, &accounts, events.clone())?;

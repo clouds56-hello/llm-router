@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::db::archive::{ArchiveEventHandler, ArchiveRuntime};
-use crate::db::{DbEventHandler, DbPaths};
+use crate::db::{CredentialAccountIndex, DbEventHandler, DbPaths};
 use crate::progress::{ArchiveProgressEventHandler, ProgressEventHandler, ProgressLogEventHandler};
 use anyhow::Result;
 use axum::Router;
@@ -19,6 +19,7 @@ use std::sync::Arc;
 /// automatically when stdout is a terminal.
 pub fn build_event_bus(
   cfg: &Config,
+  credential_index: CredentialAccountIndex,
 ) -> Result<(
   Arc<EventBus>,
   EventReceiver,
@@ -33,11 +34,11 @@ pub fn build_event_bus(
 
   if cfg.db.enabled {
     let paths = cfg.db.resolve_paths()?;
-    let db_handler = DbEventHandler::new(DbPaths {
+    let db_handler = DbEventHandler::with_credential_index(DbPaths {
       usage_db: paths.usage_db,
       sessions_db: paths.sessions_db,
       requests_dir: paths.requests_dir,
-    })?;
+    }, credential_index)?;
     handlers.push(Box::new(db_handler));
   }
 

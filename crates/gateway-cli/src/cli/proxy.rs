@@ -133,7 +133,8 @@ async fn start(cfg_path: Option<PathBuf>, args: StartArgs, passthrough: bool) ->
     .map(Ok)
     .unwrap_or_else(|| cfg.proxy_mode.resolved_ca_dir())?;
 
-  let (events, receiver, handlers, archive_runtime) = crate::server_runtime::build_event_bus(&cfg)?;
+  let credential_index = crate::db::CredentialAccountIndex::from_accounts(&accounts);
+  let (events, receiver, handlers, archive_runtime) = crate::server_runtime::build_event_bus(&cfg, credential_index)?;
   let _event_thread = llm_core::event::spawn_event_loop(receiver, handlers);
   let state = crate::server_runtime::build_state_for_route_mode(&cfg, &accounts, events.clone(), route_mode)?;
   let n = state.pool.len();

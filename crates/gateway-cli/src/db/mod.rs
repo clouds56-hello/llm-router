@@ -5,6 +5,7 @@ pub mod sessions;
 pub mod usage;
 
 use bytes::Bytes;
+use llm_core::account::AccountConfig;
 use reqwest::header::HeaderMap;
 use snafu::Snafu;
 
@@ -80,6 +81,78 @@ fn write_record(usage: &mut usage::UsageDb, sessions: &mut Option<sessions::Sess
 use llm_core::event::{Event, EventHandler};
 use std::collections::HashMap;
 
+#[derive(Clone, Debug, Default)]
+pub struct CredentialAccountIndex {
+  by_fingerprint: HashMap<String, CredentialAccount>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CredentialAccount {
+  account_id: String,
+  provider_id: String,
+}
+
+impl CredentialAccountIndex {
+  pub fn from_accounts(accounts: &[AccountConfig]) -> Self {
+    let mut index = Self::default();
+    for account in accounts {
+      for secret in [account.api_key.as_ref(), account.access_token.as_ref(), account.id_token.as_ref()]
+        .into_iter()
+        .flatten()
+      {
+        index.insert(secret.expose(), account);
+      }
+    }
+    index
+  }
+
+  fn insert(&mut self, secret: &str, account: &AccountConfig) {
+    if secret.trim().is_empty() {
+      return;
+    }
+    self.by_fingerprint.insert(
+      llm_core::util::redact::token_fingerprint(secret.trim()),
+      CredentialAccount {
+        account_id: account.id.clone(),
+        provider_id: account.provider.clone(),
+      },
+    );
+  }
+
+  fn match_headers(&self, headers: &HeaderMap) -> Option<&CredentialAccount> {
+    credential_candidates(headers).find_map(|candidate| self.match_secret(candidate))
+  }
+
+  fn match_secret(&self, secret: &str) -> Option<&CredentialAccount> {
+    let secret = secret.trim();
+    if secret.is_empty() {
+      return None;
+    }
+    self.by_fingerprint
+      .get(&llm_core::util::redact::token_fingerprint(secret))
+  }
+}
+
+fn credential_candidates(headers: &HeaderMap) -> impl Iterator<Item = &str> {
+  let authorization = headers
+    .get(reqwest::header::AUTHORIZATION)
+    .and_then(|v| v.to_str().ok())
+    .into_iter()
+    .flat_map(|value| {
+      let bearer = value
+        .trim()
+        .strip_prefix("Bearer ")
+        .or_else(|| value.trim().strip_prefix("bearer "));
+      bearer.into_iter().chain(std::iter::once(value.trim()))
+    });
+  let x_api_key = headers
+    .get("x-api-key")
+    .and_then(|v| v.to_str().ok())
+    .into_iter()
+    .map(str::trim);
+  authorization.chain(x_api_key)
+}
+
 /// Partial request data accumulated from lifecycle events before completion.
 #[derive(Clone)]
 struct PendingRequest {
@@ -97,6 +170,8 @@ struct PendingRequest {
   stream: bool,
   account_id: String,
   provider_id: String,
+  guessed_account_id: Option<String>,
+  guessed_provider_id: Option<String>,
   inbound_url: Option<String>,
   inbound_req_headers: HeaderMap,
   inbound_req_body: Bytes,
@@ -116,11 +191,16 @@ pub struct DbEventHandler {
   usage: usage::UsageDb,
   requests: requests::RequestsDb,
   sessions: Option<sessions::SessionsDb>,
+  credentials: CredentialAccountIndex,
   pending: HashMap<(String, u32), PendingRequest>,
 }
 
 impl DbEventHandler {
   pub fn new(paths: DbPaths) -> Result<Self> {
+    Self::with_credential_index(paths, CredentialAccountIndex::default())
+  }
+
+  pub fn with_credential_index(paths: DbPaths, credentials: CredentialAccountIndex) -> Result<Self> {
     let usage = usage::UsageDb::open(&paths.usage_db)?;
     let requests = requests::RequestsDb::new(paths.requests_dir)?;
     let sessions = match sessions::SessionsDb::open(&paths.sessions_db) {
@@ -134,6 +214,7 @@ impl DbEventHandler {
       usage,
       requests,
       sessions,
+      credentials,
       pending: HashMap::new(),
     })
   }
@@ -202,6 +283,8 @@ impl EventHandler for DbEventHandler {
             stream: false,
             account_id: String::new(),
             provider_id: String::new(),
+            guessed_account_id: None,
+            guessed_provider_id: None,
             inbound_url: url.clone(),
             inbound_req_headers: HeaderMap::new(),
             inbound_req_body: Bytes::new(),
@@ -272,6 +355,8 @@ impl EventHandler for DbEventHandler {
           stream: false,
           account_id: String::new(),
           provider_id: String::new(),
+          guessed_account_id: None,
+          guessed_provider_id: None,
           inbound_url: url.map(str::to_string),
           inbound_req_headers: inbound_headers.clone(),
           inbound_req_body: Bytes::new(),
@@ -287,6 +372,10 @@ impl EventHandler for DbEventHandler {
         pending.ts = *ts;
         pending.session_id = session_id.clone().or_else(|| pending.session_id.clone());
         pending.project_id = project_id.clone().or_else(|| pending.project_id.clone());
+        if let Some(credential) = self.credentials.match_headers(inbound_headers) {
+          pending.guessed_account_id = Some(credential.account_id.clone());
+          pending.guessed_provider_id = Some(credential.provider_id.clone());
+        }
         pending.hosts = host.clone().or_else(|| pending.hosts.clone());
         pending.mode = mode.clone().or_else(|| pending.mode.clone());
         pending.method = pending.method.clone().or_else(|| method.map(str::to_string));
@@ -456,9 +545,17 @@ impl EventHandler for DbEventHandler {
             request_id: composite_id,
             request_error: request_error.clone(),
             project_id: p.project_id,
-            endpoint: p.endpoint,
-            account_id: p.account_id,
-            provider_id: p.provider_id,
+              endpoint: p.endpoint,
+              account_id: if p.account_id.is_empty() {
+                p.guessed_account_id.unwrap_or_default()
+              } else {
+                p.account_id
+              },
+              provider_id: if p.provider_id.is_empty() {
+                p.guessed_provider_id.unwrap_or_default()
+              } else {
+                p.provider_id
+              },
             model: p.model,
             initiator: p.initiator,
             status: *inbound_status,
@@ -565,9 +662,17 @@ impl EventHandler for DbEventHandler {
               request_id: request_id.clone(),
               request_error: error.clone(),
               project_id: p.project_id,
-              endpoint: p.endpoint,
-              account_id: p.account_id,
-              provider_id: p.provider_id,
+            endpoint: p.endpoint,
+            account_id: if p.account_id.is_empty() {
+              p.guessed_account_id.unwrap_or_default()
+            } else {
+              p.account_id
+            },
+            provider_id: if p.provider_id.is_empty() {
+              p.guessed_provider_id.unwrap_or_default()
+            } else {
+              p.provider_id
+            },
               model: p.model,
               initiator: p.initiator,
               status: final_status.unwrap_or(0),
@@ -596,6 +701,7 @@ impl EventHandler for DbEventHandler {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use llm_core::account::{AccountConfig, AuthType, Secret};
   use llm_core::event::{Event, EventHandler};
   use reqwest::header::HeaderMap;
   use rusqlite::{params, Connection};
@@ -616,6 +722,31 @@ mod tests {
     std::fs::create_dir_all(&paths.requests_dir).unwrap();
     let h = DbEventHandler::new(paths).unwrap();
     (h, dir)
+  }
+
+  fn account(id: &str, provider: &str, api_key: Option<&str>, access_token: Option<&str>) -> AccountConfig {
+    AccountConfig {
+      id: id.into(),
+      provider: provider.into(),
+      enabled: true,
+      tier: Default::default(),
+      tags: Vec::new(),
+      label: None,
+      base_url: None,
+      headers: Default::default(),
+      auth_type: Some(AuthType::Bearer),
+      username: None,
+      api_key: api_key.map(|s| Secret::new(s.to_string())),
+      api_key_expires_at: None,
+      access_token: access_token.map(|s| Secret::new(s.to_string())),
+      access_token_expires_at: None,
+      id_token: None,
+      refresh_token: None,
+      extra: Default::default(),
+      refresh_url: None,
+      last_refresh: None,
+      settings: Default::default(),
+    }
   }
 
   fn started(req_id: &str, ts: i64) -> Event {
@@ -994,6 +1125,63 @@ mod tests {
         )
       ]
     );
+  }
+
+  #[test]
+  fn credential_index_matches_bearer_and_x_api_key_without_refresh_token() {
+    let accounts = vec![
+      account("acct-api", "zai", Some("api-secret"), None),
+      account("acct-access", "github-copilot", None, Some("access-secret")),
+    ];
+    let index = CredentialAccountIndex::from_accounts(&accounts);
+
+    let mut headers = HeaderMap::new();
+    headers.insert(reqwest::header::AUTHORIZATION, "Bearer access-secret".parse().unwrap());
+    let matched = index.match_headers(&headers).unwrap();
+    assert_eq!(matched.account_id, "acct-access");
+    assert_eq!(matched.provider_id, "github-copilot");
+
+    let mut headers = HeaderMap::new();
+    headers.insert("x-api-key", "api-secret".parse().unwrap());
+    let matched = index.match_headers(&headers).unwrap();
+    assert_eq!(matched.account_id, "acct-api");
+    assert_eq!(matched.provider_id, "zai");
+
+    let refresh_only = AccountConfig {
+      refresh_token: Some(Secret::new("refresh-secret".into())),
+      ..account("acct-refresh", "github-copilot", None, None)
+    };
+    let index = CredentialAccountIndex::from_accounts(&[refresh_only]);
+    let mut headers = HeaderMap::new();
+    headers.insert(reqwest::header::AUTHORIZATION, "Bearer refresh-secret".parse().unwrap());
+    assert!(index.match_headers(&headers).is_none());
+  }
+
+  #[test]
+  fn parse_failure_uses_credential_guess_for_account_and_provider() {
+    let dir = tempdir();
+    let paths = DbPaths {
+      usage_db: dir.join("usage.db"),
+      sessions_db: dir.join("sessions.db"),
+      requests_dir: dir.join("requests"),
+    };
+    std::fs::create_dir_all(&paths.requests_dir).unwrap();
+    let credentials = CredentialAccountIndex::from_accounts(&[account("acct-api", "zai", Some("api-secret"), None)]);
+    let mut h = DbEventHandler::with_credential_index(paths, credentials).unwrap();
+    let req = "req-credential-guess";
+    let ts = 1_700_000_000;
+    let mut headers_event = headers(req, ts);
+    if let Event::RequestHeaders { inbound_headers, .. } = &mut headers_event {
+      inbound_headers.insert("x-api-key", "api-secret".parse().unwrap());
+    }
+
+    h.handle(&started(req, ts));
+    h.handle(&headers_event);
+    h.handle(&completed(req, false, 1, Some(400), Some("invalid JSON request body")));
+
+    let row = fetch_row_map(&dir, req);
+    assert_eq!(as_text(&row["account_id"]).as_deref(), Some("acct-api"));
+    assert_eq!(as_text(&row["provider_id"]).as_deref(), Some("zai"));
   }
 
   /// Lifecycle persistence inserts a partial row before a final result exists,
