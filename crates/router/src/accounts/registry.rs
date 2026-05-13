@@ -46,11 +46,20 @@ impl Registry {
 
   pub fn provider_id_for_url(&self, url_or_host: &str) -> Option<&'static str> {
     let target = normalize_target(url_or_host)?;
-    self
+    let matches = self
       .descriptors
       .values()
-      .find(|descriptor| descriptor.matches_url(&target.host, &target.path))
-      .map(|descriptor| descriptor.id)
+      .copied()
+      .filter(|descriptor| descriptor.matches_host(&target.host))
+      .collect::<Vec<_>>();
+    match matches.as_slice() {
+      [] => None,
+      [descriptor] => Some(descriptor.id),
+      _ => matches
+        .into_iter()
+        .find(|descriptor| descriptor.matches_url(&target.host, &target.path))
+        .map(|descriptor| descriptor.id),
+    }
   }
 }
 
