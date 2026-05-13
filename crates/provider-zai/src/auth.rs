@@ -7,7 +7,7 @@
 use async_trait::async_trait;
 use llm_core::account::AccountConfig;
 use llm_auth::{
-  AuthError, ProviderAuth, QuotaSnapshot, RefreshOutcome, Result,
+  AuthError, CredentialSource, ProviderAuth, QuotaSnapshot, RefreshOutcome, Result,
 };
 
 /// Singleton ZSt impl. Same instance handles every Z.ai alias because the
@@ -71,6 +71,26 @@ impl ProviderAuth for ZaiAuth {
 
   fn default_base_url(&self) -> Option<&'static str> {
     Some(crate::zai::default_base_url(self.id))
+  }
+
+  async fn import_from(&self, source: &CredentialSource) -> Result<String> {
+    match source {
+      CredentialSource::Env { env_var } => {
+        let value = std::env::var(env_var)
+          .map_err(|_| AuthError::Other(format!("environment variable `{env_var}` is not set")))?;
+        let trimmed = value.trim().to_string();
+        if trimmed.is_empty() {
+          return Err(AuthError::Other(format!(
+            "environment variable `{env_var}` is empty"
+          )));
+        }
+        Ok(trimmed)
+      }
+      _ => Err(AuthError::Unsupported(format!(
+        "zai does not support credential source {:?}",
+        source.kind()
+      ))),
+    }
   }
 
   async fn refresh_credential(&self, _client: &reqwest::Client, _account: &AccountConfig) -> Result<RefreshOutcome> {

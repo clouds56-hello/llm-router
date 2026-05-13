@@ -70,12 +70,20 @@ pub async fn resolve_account(
         static_key_login(client, auth, id_override).await
       }
     }
-    CredentialSource::Gh => oauth_account_from_token(auth, id_override, from_gh()?),
-    CredentialSource::CopilotPlugin => {
-      oauth_account_from_token(auth, id_override, from_copilot_plugin()?)
+    // All non-Login sources delegate to the trait. The provider knows
+    // whether it wants an OAuth refresh-token-shaped account or a
+    // static-key account, so we ask via supports_static_key.
+    other => {
+      let token = auth
+        .import_from(&other)
+        .await
+        .map_err(|e| anyhow!("import failed: {e}"))?;
+      if auth.supports_static_key() {
+        static_key_account(auth, id_override, token)
+      } else {
+        oauth_account_from_token(auth, id_override, token)
+      }
     }
-    CredentialSource::RefreshToken { token } => oauth_account_from_token(auth, id_override, token),
-    CredentialSource::Env { env_var } => static_key_account(auth, id_override, from_env(&env_var)?),
   }
 }
 
@@ -226,73 +234,6 @@ async fn static_key_login(
   println!("Key OK.");
 
   static_key_account(auth, id_override, key)
-}
-
-fn from_env(name: &str) -> Result<String> {
-  let v = std::env::var(name).with_context(|| format!("environment variable `{name}` is not set"))?;
-  let v = v.trim().to_string();
-  if v.is_empty() {
-    return Err(anyhow!("environment variable `{name}` is empty"));
-  }
-  Ok(v)
-}
-
-fn from_gh() -> Result<String> {
-  let out = std::process::Command::new("gh")
-    .args(["auth", "token"])
-    .output()
-    .context("running `gh auth token` (is the GitHub CLI installed?)")?;
-  if !out.status.success() {
-    return Err(anyhow!(
-      "`gh auth token` failed: {}",
-      String::from_utf8_lossy(&out.stderr)
-    ));
-  }
-  let token = String::from_utf8_lossy(&out.stdout).trim().to_string();
-  if token.is_empty() {
-    return Err(anyhow!("`gh auth token` returned an empty token"));
-  }
-  Ok(token)
-}
-
-fn from_copilot_plugin() -> Result<String> {
-  let home = directories::BaseDirs::new()
-    .ok_or_else(|| anyhow!("cannot resolve home dir"))?
-    .home_dir()
-    .to_path_buf();
-  let candidates = [
-    home.join(".config/github-copilot/apps.json"),
-    home.join(".config/github-copilot/hosts.json"),
-  ];
-  for path in &candidates {
-    if !path.exists() {
-      continue;
-    }
-    let raw = std::fs::read_to_string(path)?;
-    let v: serde_json::Value = serde_json::from_str(&raw).with_context(|| format!("parse {}", path.display()))?;
-    if let Some(t) = scan_token(&v) {
-      return Ok(t);
-    }
-  }
-  Err(anyhow!("no Copilot plugin token found in ~/.config/github-copilot/"))
-}
-
-fn scan_token(v: &serde_json::Value) -> Option<String> {
-  match v {
-    serde_json::Value::Object(m) => {
-      for (k, val) in m {
-        if (k == "oauth_token" || k == "token") && val.as_str().filter(|s| !s.is_empty()).is_some() {
-          return val.as_str().map(|s| s.to_string());
-        }
-        if let Some(found) = scan_token(val) {
-          return Some(found);
-        }
-      }
-      None
-    }
-    serde_json::Value::Array(a) => a.iter().find_map(scan_token),
-    _ => None,
-  }
 }
 
 // ---------------------------------------------------------------------------

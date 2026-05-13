@@ -8,7 +8,8 @@ use crate::config::CopilotHeaders;
 use async_trait::async_trait;
 use llm_core::account::AccountConfig;
 use llm_auth::{
-  AuthError, DeviceCodeHandle, DeviceFlowOutcome, ProviderAuth, QuotaSnapshot, RefreshOutcome, Result,
+  AuthError, CredentialSource, DeviceCodeHandle, DeviceFlowOutcome, ProviderAuth, QuotaSnapshot,
+  RefreshOutcome, Result,
 };
 
 /// Singleton impl. Zero-sized; safe to hand out as `&'static`.
@@ -37,6 +38,18 @@ impl ProviderAuth for CopilotAuth {
 
   fn default_refresh_url(&self) -> Option<&'static str> {
     Some(crate::github_copilot::TOKEN_EXCHANGE_URL)
+  }
+
+  async fn import_from(&self, source: &CredentialSource) -> Result<String> {
+    match source {
+      CredentialSource::Gh => crate::import::from_gh().map_err(AuthError::Other),
+      CredentialSource::CopilotPlugin => crate::import::from_copilot_plugin().map_err(AuthError::Other),
+      CredentialSource::RefreshToken { token } => Ok(token.clone()),
+      _ => Err(AuthError::Unsupported(format!(
+        "github-copilot does not support credential source {:?}",
+        source.kind()
+      ))),
+    }
   }
 
   async fn request_device_code(&self, client: &reqwest::Client) -> Result<DeviceCodeHandle> {

@@ -10,6 +10,7 @@ llm-auth = { workspace = true }
 llm-catalogue = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
+directories = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
