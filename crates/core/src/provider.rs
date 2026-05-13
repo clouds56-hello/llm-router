@@ -174,6 +174,15 @@ pub fn new_outbound_capture() -> OutboundCapture {
   Arc::new(OnceLock::new())
 }
 
+pub struct HeaderPatchCtx<'a> {
+  pub endpoint: Endpoint,
+  pub body: &'a Value,
+  pub content_encoding: Option<&'a str>,
+  pub stream: bool,
+  pub initiator: &'a str,
+  pub inbound_headers: &'a HeaderMap,
+}
+
 pub struct ProviderDescriptor {
   pub id: &'static str,
   pub hosts: &'static [&'static str],
@@ -211,6 +220,10 @@ pub trait Provider: Send + Sync {
 
   fn supports(&self, _model: &str, endpoint: Endpoint) -> bool {
     matches!(endpoint, Endpoint::ChatCompletions)
+  }
+
+  fn patch_headers(&self, _headers: &mut HeaderMap, _ctx: &HeaderPatchCtx<'_>) -> Result<()> {
+    Ok(())
   }
 
   async fn list_models(&self, http: &reqwest::Client) -> Result<Value>;

@@ -1,4 +1,5 @@
 mod ca;
+pub mod header_pipeline;
 mod passthrough;
 mod transport;
 
