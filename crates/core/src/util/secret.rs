@@ -22,6 +22,7 @@
 //! [`Secret::expose`] and a constant-time comparator if you really need it.
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use sha2::{Digest, Sha256};
 use std::fmt;
 
 #[derive(Clone, Default)]
@@ -43,6 +44,30 @@ impl<T> Secret<T> {
   pub fn into_inner(self) -> T {
     self.0
   }
+}
+
+impl<T: AsRef<str>> Secret<T> {
+  /// Return `sha256[..8]` of this secret as a lowercase hex string with a
+  /// stable prefix so logs can correlate credentials without exposing them.
+  pub fn fingerprint(&self) -> String {
+    fingerprint_str(self.0.as_ref())
+  }
+}
+
+pub(crate) fn fingerprint_str(secret: &str) -> String {
+  if secret.is_empty() {
+    return "fp:<empty>".into();
+  }
+  let mut h = Sha256::new();
+  h.update(secret.as_bytes());
+  let digest = h.finalize();
+  let mut s = String::with_capacity(3 + 16);
+  s.push_str("fp:");
+  for b in digest.iter().take(8) {
+    use std::fmt::Write as _;
+    let _ = write!(s, "{b:02x}");
+  }
+  s
 }
 
 impl<T> From<T> for Secret<T> {
@@ -107,5 +132,21 @@ mod tests {
   fn deserialize_passes_through() {
     let s: Secret<String> = serde_json::from_str("\"hello\"").unwrap();
     assert_eq!(s.expose(), "hello");
+  }
+
+  #[test]
+  fn fingerprint_is_stable_and_short() {
+    let a = Secret::new("hunter2".to_string()).fingerprint();
+    let b = Secret::new("hunter2".to_string()).fingerprint();
+    let c = Secret::new("hunter3".to_string()).fingerprint();
+    assert_eq!(a, b);
+    assert_ne!(a, c);
+    assert!(a.starts_with("fp:"));
+    assert_eq!(a.len(), 3 + 16);
+  }
+
+  #[test]
+  fn fingerprint_tags_empty() {
+    assert_eq!(Secret::new(String::new()).fingerprint(), "fp:<empty>");
   }
 }

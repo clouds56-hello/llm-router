@@ -12,7 +12,6 @@
 //! never log inbound or upstream headers, request bodies, or response bodies
 //! — even truncated, even at trace.
 
-use sha2::{Digest, Sha256};
 use std::fmt;
 
 /// Return `sha256[..8]` of `secret` as a lowercase hex string with a
@@ -21,19 +20,7 @@ use std::fmt;
 /// Two refreshes of the same secret yield identical fingerprints, which is
 /// useful for verifying that token caching / rotation actually rotated.
 pub fn token_fingerprint(secret: &str) -> String {
-  if secret.is_empty() {
-    return "fp:<empty>".into();
-  }
-  let mut h = Sha256::new();
-  h.update(secret.as_bytes());
-  let digest = h.finalize();
-  let mut s = String::with_capacity(3 + 16);
-  s.push_str("fp:");
-  for b in digest.iter().take(8) {
-    use std::fmt::Write as _;
-    let _ = write!(s, "{b:02x}");
-  }
-  s
+  crate::util::secret::fingerprint_str(secret)
 }
 
 /// `Display` adapter for an optional persona name. Renders the name verbatim

@@ -3,7 +3,7 @@
 pub use crate::{headers, models, oauth, token, user};
 
 use crate::config::{CopilotHeaders, InitiatorMode};
-use crate::util::redact::{token_fingerprint, BehaveAs};
+use crate::util::redact::BehaveAs;
 use crate::util::secret::Secret;
 use async_trait::async_trait;
 use llm_core::account::AccountConfig;
@@ -97,7 +97,7 @@ impl CopilotProvider {
       if exp - SKEW_SECS > now {
         let span = tracing::Span::current();
         span.record("refreshed", false);
-        span.record("fp", tracing::field::display(token_fingerprint(tok.expose())));
+        span.record("fp", tracing::field::display(tok.fingerprint()));
         return Ok(tok);
       }
     }
@@ -106,7 +106,7 @@ impl CopilotProvider {
       if exp - SKEW_SECS > now {
         let span = tracing::Span::current();
         span.record("refreshed", false);
-        span.record("fp", tracing::field::display(token_fingerprint(tok.expose())));
+        span.record("fp", tracing::field::display(tok.fingerprint()));
         return Ok(tok);
       }
     }
@@ -120,7 +120,7 @@ impl CopilotProvider {
     }
     let span = tracing::Span::current();
     span.record("refreshed", true);
-    span.record("fp", tracing::field::display(token_fingerprint(token.expose())));
+    span.record("fp", tracing::field::display(token.fingerprint()));
     Ok(token)
   }
 

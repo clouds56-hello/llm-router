@@ -16,7 +16,6 @@
 
 pub use crate::{models, quota, transform};
 
-use crate::util::redact::token_fingerprint;
 use crate::util::secret::Secret;
 use async_trait::async_trait;
 use llm_core::account::AccountConfig;
@@ -152,7 +151,7 @@ impl Provider for ZaiProvider {
   #[instrument(
     name = "zai_list_models",
     skip_all,
-    fields(account = %self.id, key_fp = %token_fingerprint(self.api_key.expose()), status = tracing::field::Empty, count = tracing::field::Empty),
+    fields(account = %self.id, key_fp = %self.api_key.fingerprint(), status = tracing::field::Empty, count = tracing::field::Empty),
   )]
   async fn list_models(&self, http: &reqwest::Client) -> Result<Value> {
     let url = format!("{}/models", self.base_url.trim_end_matches('/'));
@@ -184,7 +183,7 @@ impl Provider for ZaiProvider {
     skip_all,
     fields(
       account = %self.id,
-      key_fp = %token_fingerprint(self.api_key.expose()),
+      key_fp = %self.api_key.fingerprint(),
       stream = ctx.stream,
       model = tracing::field::Empty,
       reasoning = tracing::field::Empty,
@@ -231,7 +230,7 @@ impl Provider for ZaiProvider {
     // rotate. We log loudly so they notice.
     warn!(
       account = %self.id,
-      key_fp = %token_fingerprint(self.api_key.expose()),
+      key_fp = %self.api_key.fingerprint(),
       "zai upstream returned 401: api_key likely revoked or expired"
     );
   }
