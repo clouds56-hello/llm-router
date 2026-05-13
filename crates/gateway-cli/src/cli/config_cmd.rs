@@ -826,7 +826,7 @@ mod tests {
       refresh_token_env_var: None,
     };
     let err = account_source_from_spec(&spec, false).unwrap_err().to_string();
-    assert!(err.contains("static-API-key provider"));
+    assert!(err.contains("static API key"));
   }
 
   #[test]

@@ -55,6 +55,24 @@ impl ProviderAuth for ZaiAuth {
     false
   }
 
+  fn supports_static_key(&self) -> bool {
+    true
+  }
+
+  fn default_account_id(&self) -> &'static str {
+    // The "coding-plan" alias is keyed against an account commonly named
+    // "coding-plan" in shared docs; surface that as the suggested id.
+    if self.id == "zai-coding-plan" || self.id == "zhipuai-coding-plan" {
+      "coding-plan"
+    } else {
+      self.id
+    }
+  }
+
+  fn default_base_url(&self) -> Option<&'static str> {
+    Some(crate::zai::default_base_url(self.id))
+  }
+
   async fn refresh_credential(&self, _client: &reqwest::Client, _account: &AccountConfig) -> Result<RefreshOutcome> {
     // Static API key: nothing to refresh.
     Ok(RefreshOutcome::NotApplicable)

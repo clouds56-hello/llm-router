@@ -8,7 +8,7 @@ use crate::config::CopilotHeaders;
 use async_trait::async_trait;
 use llm_core::account::AccountConfig;
 use llm_auth::{
-  AuthError, DeviceFlowOutcome, ProviderAuth, QuotaSnapshot, RefreshOutcome, Result,
+  AuthError, DeviceCodeHandle, DeviceFlowOutcome, ProviderAuth, QuotaSnapshot, RefreshOutcome, Result,
 };
 
 /// Singleton impl. Zero-sized; safe to hand out as `&'static`.
@@ -29,15 +29,20 @@ impl ProviderAuth for CopilotAuth {
     true
   }
 
-  async fn device_flow_login(&self, client: &reqwest::Client) -> Result<DeviceFlowOutcome> {
-    // Step 1: device-code dance.
+  fn default_account_id(&self) -> &'static str {
+    // Copilot login attempts a GitHub username lookup; this is only used
+    // when that lookup fails.
+    "default"
+  }
+
+  fn default_refresh_url(&self) -> Option<&'static str> {
+    Some(crate::github_copilot::TOKEN_EXCHANGE_URL)
+  }
+
+  async fn request_device_code(&self, client: &reqwest::Client) -> Result<DeviceCodeHandle> {
     let dc = crate::oauth::request_device_code(client)
       .await
       .map_err(|e| AuthError::Upstream(e.to_string()))?;
-    // Side-effecting prompts (the user-facing "Open: …" message) are the
-    // CLI's responsibility — `llm-auth` just orchestrates. We surface the
-    // verification URI / user code via `tracing` so callers can hook in
-    // before polling.
     tracing::info!(
       target: "llm_auth::login",
       verification_uri = %dc.verification_uri,
@@ -45,17 +50,41 @@ impl ProviderAuth for CopilotAuth {
       expires_in = dc.expires_in,
       "device code issued"
     );
+    Ok(DeviceCodeHandle {
+      device_code: dc.device_code,
+      user_code: dc.user_code,
+      verification_uri: dc.verification_uri,
+      expires_in: dc.expires_in,
+      interval: dc.interval,
+    })
+  }
+
+  async fn poll_device_code(
+    &self,
+    client: &reqwest::Client,
+    handle: DeviceCodeHandle,
+  ) -> Result<DeviceFlowOutcome> {
+    // Reconstruct the upstream DeviceCode from our public handle. Both
+    // structs are field-for-field identical; we keep them separate so the
+    // trait surface stays free of provider types.
+    let dc = crate::oauth::DeviceCode {
+      device_code: handle.device_code,
+      user_code: handle.user_code,
+      verification_uri: handle.verification_uri,
+      expires_in: handle.expires_in,
+      interval: handle.interval,
+    };
     let gh_token = crate::oauth::poll_for_token(client, &dc)
       .await
       .map_err(|e| AuthError::Upstream(e.to_string()))?;
 
-    // Step 2: exchange long-lived OAuth token for short-lived access token.
+    // Exchange long-lived OAuth token for a short-lived access token.
     let headers = CopilotHeaders::default();
     let exchange = crate::token::exchange(client, &gh_token, &headers)
       .await
       .map_err(|e| AuthError::Upstream(e.to_string()))?;
 
-    // Step 3: best-effort GitHub username lookup for id suggestion.
+    // Best-effort GitHub username lookup for id suggestion.
     let username = fetch_github_username(client, &gh_token).await.ok();
 
     Ok(DeviceFlowOutcome {

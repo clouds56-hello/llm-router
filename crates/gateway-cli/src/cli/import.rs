@@ -1,6 +1,5 @@
 use crate::cli::onboarding::{resolve_account, CredentialSource};
 use crate::config::{Config, ProxyConfig};
-use crate::provider::ID_GITHUB_COPILOT;
 use crate::util::http::build_client;
 use anyhow::Result;
 use clap::{Args, ValueEnum};
@@ -26,7 +25,7 @@ pub struct ImportArgs {
   pub from: Source,
 
   /// Provider to associate the imported credential with.
-  #[arg(long, default_value = ID_GITHUB_COPILOT)]
+  #[arg(long, default_value = "github-copilot")]
   pub provider: String,
 
   /// Environment variable name for `--from env`. Defaults to `ZAI_API_KEY`.
@@ -102,7 +101,7 @@ mod tests {
   fn args() -> ImportArgs {
     ImportArgs {
       from: Source::RefreshToken,
-      provider: ID_GITHUB_COPILOT.to_string(),
+      provider: "github-copilot".to_string(),
       env_var: "ZAI_API_KEY".to_string(),
       refresh_token: None,
       refresh_token_env_var: "TEST_GH_REFRESH_TOKEN".to_string(),

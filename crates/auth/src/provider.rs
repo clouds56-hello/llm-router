@@ -29,6 +29,52 @@ pub struct DeviceFlowOutcome {
   pub username: Option<String>,
 }
 
+/// Opaque handle returned by [`ProviderAuth::request_device_code`] and
+/// consumed by [`ProviderAuth::poll_device_code`]. The CLI uses
+/// `verification_uri` + `user_code` to instruct the user, then hands the
+/// whole struct back to the provider for polling.
+///
+/// `device_code` is the provider-internal identifier (opaque to the CLI);
+/// it is sent back to the upstream authorization server during polling.
+#[derive(Debug, Clone)]
+pub struct DeviceCodeHandle {
+  /// Provider-internal device code string. Opaque to the caller — but
+  /// the CLI never needs to read it; the field is only public so that
+  /// providers can construct the handle in their own crates.
+  pub device_code: String,
+  /// Short user-facing code to type at `verification_uri`.
+  pub user_code: String,
+  /// URL the user should visit in a browser.
+  pub verification_uri: String,
+  /// Seconds until the device code expires (display only).
+  pub expires_in: u64,
+  /// Minimum interval (seconds) between poll attempts.
+  pub interval: u64,
+}
+
+/// Credential acquisition strategies offered by `account add` and
+/// `account login`. Providers advertise which sources they accept via
+/// [`ProviderAuth::supports_credential_source`].
+///
+/// Variants intentionally carry their inputs (refresh token, env var
+/// name) so the trait surface stays narrow: the CLI gathers the user
+/// input, packs it here, and the provider does the rest.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CredentialSource {
+  /// Run the provider's interactive flow (device-flow OAuth or static-key
+  /// prompt).
+  Login,
+  /// Shell out to `gh auth token` (Copilot-only).
+  Gh,
+  /// Scrape `~/.config/github-copilot/{apps,hosts}.json` (Copilot-only).
+  CopilotPlugin,
+  /// Provide a long-lived refresh token directly (Copilot-only).
+  RefreshToken { token: String },
+  /// Read a static API key from an environment variable (static-key
+  /// providers only).
+  Env { env_var: String },
+}
+
 /// Outcome of a refresh-credential call. For OAuth providers this is a
 /// fresh access token; for static-key providers it is a no-op (and
 /// [`ProviderAuth::refresh_credential`] returns
@@ -149,18 +195,85 @@ pub trait ProviderAuth: Send + Sync {
   /// [`AccountConfig::provider`] exactly.
   fn id(&self) -> &'static str;
 
-  /// True if [`Self::device_flow_login`] is implemented.
+  /// True if [`Self::request_device_code`] / [`Self::poll_device_code`]
+  /// (and the convenience [`Self::device_flow_login`] wrapper) are
+  /// implemented.
   fn supports_device_flow(&self) -> bool {
     false
   }
 
-  /// Run the full device-flow OAuth dance: request a device code, poll
-  /// until the user completes the browser flow, and exchange the resulting
-  /// long-lived token for a short-lived access token.
+  /// True if this provider authenticates with a static API key (no OAuth
+  /// dance). Used to gate `--from env` / interactive key-paste prompts.
+  fn supports_static_key(&self) -> bool {
+    false
+  }
+
+  /// True if the CLI's [`CredentialSource`] is supported by this
+  /// provider. Default impl uses [`Self::supports_device_flow`] and
+  /// [`Self::supports_static_key`] to derive a sensible answer; providers
+  /// can override for finer control.
+  fn supports_credential_source(&self, src: &CredentialSource) -> bool {
+    match src {
+      CredentialSource::Login => self.supports_device_flow() || self.supports_static_key(),
+      CredentialSource::Gh | CredentialSource::CopilotPlugin | CredentialSource::RefreshToken { .. } => {
+        // These are all "I already have a long-lived OAuth token" paths;
+        // only OAuth providers accept them.
+        self.supports_device_flow()
+      }
+      CredentialSource::Env { .. } => self.supports_static_key(),
+    }
+  }
+
+  /// Suggested account id when the caller hasn't picked one and the
+  /// flow can't infer one (e.g. failed username lookup, env-var import).
+  /// Defaults to the provider id, which is fine for static-key providers.
+  fn default_account_id(&self) -> &'static str {
+    self.id()
+  }
+
+  /// Default upstream base URL to seed `AccountConfig::base_url` when
+  /// onboarding a new account. `None` means "no override; let the
+  /// provider's runtime choose".
+  fn default_base_url(&self) -> Option<&'static str> {
+    None
+  }
+
+  /// Default OAuth token-exchange URL to seed
+  /// `AccountConfig::refresh_url`. Only meaningful for OAuth providers.
+  fn default_refresh_url(&self) -> Option<&'static str> {
+    None
+  }
+
+  /// Step 1 of device-flow OAuth: request a fresh device code from the
+  /// upstream authorization server. Returns a handle to be passed back
+  /// to [`Self::poll_device_code`].
   ///
   /// Default impl returns `Unsupported`; OAuth providers override.
-  async fn device_flow_login(&self, _client: &reqwest::Client) -> Result<DeviceFlowOutcome> {
+  async fn request_device_code(&self, _client: &reqwest::Client) -> Result<DeviceCodeHandle> {
     Err(AuthError::Unsupported(self.id().to_string()))
+  }
+
+  /// Step 2 of device-flow OAuth: poll the upstream until the user has
+  /// approved the device code in their browser, then exchange the
+  /// resulting long-lived token for a short-lived access token and
+  /// (best-effort) look up a username for id suggestion.
+  ///
+  /// Default impl returns `Unsupported`; OAuth providers override.
+  async fn poll_device_code(
+    &self,
+    _client: &reqwest::Client,
+    _handle: DeviceCodeHandle,
+  ) -> Result<DeviceFlowOutcome> {
+    Err(AuthError::Unsupported(self.id().to_string()))
+  }
+
+  /// Convenience wrapper that calls [`Self::request_device_code`] then
+  /// [`Self::poll_device_code`] back-to-back. Callers that want to
+  /// display the user code between request and poll (e.g. an interactive
+  /// CLI) should call the two methods directly.
+  async fn device_flow_login(&self, client: &reqwest::Client) -> Result<DeviceFlowOutcome> {
+    let handle = self.request_device_code(client).await?;
+    self.poll_device_code(client, handle).await
   }
 
   /// Refresh the account's short-lived credential (e.g. exchange a refresh

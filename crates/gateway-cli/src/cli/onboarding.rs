@@ -1,54 +1,54 @@
+//! Interactive onboarding helpers shared by `account add`, `login`, and
+//! `import`.
+//!
+//! All provider-specific work — device-flow OAuth, key verification —
+//! is delegated to the [`ProviderAuth`] trait via [`auth_registry`]. The
+//! CLI's job is purely to gather user input, render progress, and
+//! assemble the resulting [`Account`].
+//!
+//! [`auth_registry`]: crate::auth_registry
+
+use crate::auth_registry::{known_providers, provider_auth_for};
 use crate::config::{Account, AuthType};
-use crate::provider::{github_copilot as gh, zai, ID_GITHUB_COPILOT, ID_ZAI_CODING_PLAN, ZAI_PROVIDERS};
 use crate::util::secret::Secret;
 use anyhow::{anyhow, Context, Result};
+use llm_auth::ProviderAuth;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum CredentialSource {
-  Login,
-  Gh,
-  CopilotPlugin,
-  RefreshToken { token: String },
-  Env { env_var: String },
-}
-
-pub fn known_providers() -> Vec<&'static str> {
-  // Single source of truth: the auth registry.
-  crate::auth_registry::known_providers().to_vec()
-}
+// Re-export so existing call sites continue to use
+// `crate::cli::onboarding::CredentialSource`. New code should import it
+// directly from `llm_auth`.
+pub use llm_auth::CredentialSource;
 
 pub fn validate_provider(provider: &str) -> Result<()> {
-  if crate::auth_registry::provider_auth_for(provider).is_some() {
+  if provider_auth_for(provider).is_some() {
     return Ok(());
   }
   Err(anyhow!(
-    "unknown provider '{provider}'. Try one of: {}, {}",
-    ID_GITHUB_COPILOT,
-    ZAI_PROVIDERS.join(" | ")
+    "unknown provider '{provider}'. Try one of: {}",
+    known_providers().join(" | ")
   ))
 }
 
 pub fn validate_provider_source(provider: &str, source: &CredentialSource) -> Result<()> {
-  let is_zai = ZAI_PROVIDERS.contains(&provider);
-  let is_copilot = provider == ID_GITHUB_COPILOT;
-  match (source, is_copilot, is_zai) {
-    (CredentialSource::Login, true, _) => Ok(()),
-    (CredentialSource::Login, _, true) => Ok(()),
-    (CredentialSource::Gh, true, _) => Ok(()),
-    (CredentialSource::CopilotPlugin, true, _) => Ok(()),
-    (CredentialSource::RefreshToken { .. }, true, _) => Ok(()),
-    (CredentialSource::Env { .. }, _, true) => Ok(()),
-    (CredentialSource::Env { .. }, true, _) => Err(anyhow!(
-      "`from=env` is not supported for github-copilot (it needs a long-lived OAuth token, not an API key). Use `from=login|gh|copilot-plugin`."
-    )),
-    (CredentialSource::Gh, _, true)
-    | (CredentialSource::CopilotPlugin, _, true)
-    | (CredentialSource::RefreshToken { .. }, _, true) => Err(anyhow!(
-      "provider '{}' is a static-API-key provider. Use `from=login` or `from=env`.",
-      provider
-    )),
-    _ => Err(anyhow!("unsupported provider/source combination")),
+  let auth = provider_auth_for(provider).ok_or_else(|| anyhow!("unknown provider '{provider}'"))?;
+  if auth.supports_credential_source(source) {
+    return Ok(());
   }
+  // Provider-specific hint for the most common mistake.
+  let hint = match source {
+    CredentialSource::Env { .. } if auth.supports_device_flow() => {
+      " — this provider needs a long-lived OAuth token; try `from=login|gh|copilot-plugin`."
+    }
+    CredentialSource::Gh | CredentialSource::CopilotPlugin | CredentialSource::RefreshToken { .. }
+      if auth.supports_static_key() =>
+    {
+      " — this provider uses a static API key; try `from=login` or `from=env`."
+    }
+    _ => "",
+  };
+  Err(anyhow!(
+    "credential source not supported by provider '{provider}'{hint}"
+  ))
 }
 
 pub async fn resolve_account(
@@ -59,45 +59,41 @@ pub async fn resolve_account(
 ) -> Result<Account> {
   validate_provider(provider)?;
   validate_provider_source(provider, &source)?;
+  let auth = provider_auth_for(provider).expect("validated above");
 
   match source {
     CredentialSource::Login => {
-      if provider == ID_GITHUB_COPILOT {
-        copilot_login(client, id_override).await
+      if auth.supports_device_flow() {
+        device_flow_login(client, auth, id_override).await
       } else {
-        zai_login(client, provider, id_override).await
+        // Static-key provider: prompt for the key, verify, build account.
+        static_key_login(client, auth, id_override).await
       }
     }
-    CredentialSource::Gh => copilot_account(id_override.unwrap_or_else(|| "imported".into()), from_gh()?),
+    CredentialSource::Gh => oauth_account_from_token(auth, id_override, from_gh()?),
     CredentialSource::CopilotPlugin => {
-      copilot_account(id_override.unwrap_or_else(|| "imported".into()), from_copilot_plugin()?)
+      oauth_account_from_token(auth, id_override, from_copilot_plugin()?)
     }
-    CredentialSource::RefreshToken { token } => {
-      copilot_account(id_override.unwrap_or_else(|| "imported".into()), token)
-    }
-    CredentialSource::Env { env_var } => zai_account(
-      id_override.unwrap_or_else(|| {
-        if provider == ID_ZAI_CODING_PLAN {
-          "coding-plan".into()
-        } else {
-          provider.into()
-        }
-      }),
-      provider,
-      from_env(&env_var)?,
-    ),
+    CredentialSource::RefreshToken { token } => oauth_account_from_token(auth, id_override, token),
+    CredentialSource::Env { env_var } => static_key_account(auth, id_override, from_env(&env_var)?),
   }
 }
 
-fn copilot_account(id: String, token: String) -> Result<Account> {
+/// Build an [`Account`] for an OAuth provider given a long-lived refresh
+/// token. Does not contact the upstream — the next refresh will do that.
+fn oauth_account_from_token(
+  auth: &dyn ProviderAuth,
+  id_override: Option<String>,
+  token: String,
+) -> Result<Account> {
   Ok(Account {
-    id,
-    provider: ID_GITHUB_COPILOT.into(),
+    id: id_override.unwrap_or_else(|| "imported".into()),
+    provider: auth.id().into(),
     enabled: true,
     tier: llm_core::account::AccountTier::Active,
     tags: Vec::new(),
     label: None,
-    base_url: None,
+    base_url: auth.default_base_url().map(str::to_string),
     headers: Default::default(),
     auth_type: Some(AuthType::Bearer),
     username: None,
@@ -108,21 +104,27 @@ fn copilot_account(id: String, token: String) -> Result<Account> {
     id_token: None,
     refresh_token: Some(Secret::new(token)),
     extra: Default::default(),
-    refresh_url: Some(gh::TOKEN_EXCHANGE_URL.into()),
+    refresh_url: auth.default_refresh_url().map(str::to_string),
     last_refresh: None,
     settings: toml::Table::new(),
   })
 }
 
-fn zai_account(id: String, provider: &str, key: String) -> Result<Account> {
+/// Build an [`Account`] for a static-API-key provider given the raw key.
+fn static_key_account(
+  auth: &dyn ProviderAuth,
+  id_override: Option<String>,
+  key: String,
+) -> Result<Account> {
+  let id = id_override.unwrap_or_else(|| auth.default_account_id().to_string());
   Ok(Account {
     id,
-    provider: provider.into(),
+    provider: auth.id().into(),
     enabled: true,
     tier: llm_core::account::AccountTier::Active,
     tags: Vec::new(),
     label: None,
-    base_url: Some(zai::default_base_url(provider).into()),
+    base_url: auth.default_base_url().map(str::to_string),
     headers: Default::default(),
     auth_type: Some(AuthType::Bearer),
     username: None,
@@ -139,54 +141,70 @@ fn zai_account(id: String, provider: &str, key: String) -> Result<Account> {
   })
 }
 
-async fn copilot_login(client: &reqwest::Client, id_override: Option<String>) -> Result<Account> {
-  println!("Requesting device code from GitHub…");
-  let dc = gh::oauth::request_device_code(client).await?;
+/// Run a provider's device-flow login interactively. Splits the trait's
+/// request/poll calls so the user code can be displayed *between* the
+/// two — the polling step blocks for ~minutes waiting on the browser.
+async fn device_flow_login(
+  client: &reqwest::Client,
+  auth: &dyn ProviderAuth,
+  id_override: Option<String>,
+) -> Result<Account> {
+  println!("Requesting device code from {} …", auth.id());
+  let handle = auth
+    .request_device_code(client)
+    .await
+    .map_err(|e| anyhow!("device code request failed: {e}"))?;
   println!();
-  println!("  Open: {}", dc.verification_uri);
-  println!("  Code: {}", dc.user_code);
+  println!("  Open: {}", handle.verification_uri);
+  println!("  Code: {}", handle.user_code);
   println!();
-  println!("Waiting for authorization (expires in {}s)…", dc.expires_in);
+  println!("Waiting for authorization (expires in {}s) …", handle.expires_in);
 
-  let gh_token = gh::oauth::poll_for_token(client, &dc).await?;
-  println!("Got GitHub token. Verifying Copilot access…");
+  let outcome = auth
+    .poll_device_code(client, handle)
+    .await
+    .map_err(|e| anyhow!("device-flow polling failed: {e}"))?;
+  println!("Got token. ");
 
-  let headers = llm_provider_copilot::config::CopilotHeaders::default();
-  let resp = gh::token::exchange(client, &gh_token, &headers).await?;
-  let id = match id_override {
-    Some(s) => s,
-    None => fetch_username(client, &gh_token)
-      .await
-      .unwrap_or_else(|_| "default".into()),
-  };
+  let id = id_override
+    .or(outcome.username)
+    .unwrap_or_else(|| auth.default_account_id().to_string());
 
   Ok(Account {
     id,
-    provider: ID_GITHUB_COPILOT.into(),
+    provider: auth.id().into(),
     enabled: true,
     tier: llm_core::account::AccountTier::Active,
     tags: Vec::new(),
     label: None,
-    base_url: None,
+    base_url: auth.default_base_url().map(str::to_string),
     headers: Default::default(),
     auth_type: Some(AuthType::Bearer),
     username: None,
     api_key: None,
     api_key_expires_at: None,
-    access_token: Some(Secret::new(resp.token)),
-    access_token_expires_at: Some(resp.expires_at),
+    access_token: Some(Secret::new(outcome.access_token)),
+    access_token_expires_at: Some(outcome.access_token_expires_at),
     id_token: None,
-    refresh_token: Some(Secret::new(gh_token)),
+    refresh_token: Some(Secret::new(outcome.refresh_token)),
     extra: Default::default(),
-    refresh_url: Some(gh::TOKEN_EXCHANGE_URL.into()),
+    refresh_url: auth.default_refresh_url().map(str::to_string),
     last_refresh: Some(time::OffsetDateTime::now_utc().unix_timestamp()),
     settings: toml::Table::new(),
   })
 }
 
-async fn zai_login(client: &reqwest::Client, provider_alias: &str, id_override: Option<String>) -> Result<Account> {
-  println!("Z.ai uses a static API key. Create one at https://z.ai/manage-apikey/apikey-list");
-  println!("(China endpoint: https://open.bigmodel.cn/usercenter/apikeys)");
+/// Prompt for a static API key, verify it via the provider's
+/// [`ProviderAuth::verify_credential`], and return the assembled account.
+async fn static_key_login(
+  client: &reqwest::Client,
+  auth: &dyn ProviderAuth,
+  id_override: Option<String>,
+) -> Result<Account> {
+  println!(
+    "{} uses a static API key. Paste your key below.",
+    auth.id()
+  );
   let key = rpassword::prompt_password("API key: ")
     .context("reading API key from stdin")?
     .trim()
@@ -195,38 +213,19 @@ async fn zai_login(client: &reqwest::Client, provider_alias: &str, id_override: 
     return Err(anyhow!("empty API key"));
   }
 
-  println!("Verifying key against {} …", zai::DEFAULT_BASE_URL);
-  verify_zai_key(client, &key).await?;
+  // Build a throwaway Account so the trait can verify against it.
+  let probe = static_key_account(auth, Some("__probe__".into()), key.clone())?;
+  println!(
+    "Verifying key against {} …",
+    probe.base_url.as_deref().unwrap_or("upstream")
+  );
+  auth
+    .verify_credential(client, &probe)
+    .await
+    .map_err(|e| anyhow!("key verification failed: {e}"))?;
   println!("Key OK.");
 
-  let id = id_override.unwrap_or_else(|| {
-    if provider_alias == ID_ZAI_CODING_PLAN {
-      "coding-plan".into()
-    } else {
-      provider_alias.into()
-    }
-  });
-  zai_account(id, provider_alias, key)
-}
-
-async fn verify_zai_key(client: &reqwest::Client, key: &str) -> Result<()> {
-  let url = format!("{}/models", zai::DEFAULT_BASE_URL.trim_end_matches('/'));
-  let resp = client
-    .get(&url)
-    .header("authorization", format!("Bearer {key}"))
-    .header("accept", "application/json")
-    .send()
-    .await
-    .context("contacting Z.ai")?;
-  let status = resp.status();
-  if status.is_success() {
-    return Ok(());
-  }
-  let body = resp.text().await.unwrap_or_default();
-  Err(anyhow!(
-    "Z.ai rejected the key (HTTP {status}). Body: {}",
-    body.chars().take(200).collect::<String>()
-  ))
+  static_key_account(auth, id_override, key)
 }
 
 fn from_env(name: &str) -> Result<String> {
@@ -296,31 +295,13 @@ fn scan_token(v: &serde_json::Value) -> Option<String> {
   }
 }
 
-async fn fetch_username(client: &reqwest::Client, gh_token: &str) -> Result<String> {
-  #[derive(serde::Deserialize)]
-  struct Me {
-    login: String,
-  }
-  let me: Me = client
-    .get("https://api.github.com/user")
-    .header("authorization", format!("token {gh_token}"))
-    .header("accept", "application/json")
-    .header("user-agent", "llm-router")
-    .send()
-    .await?
-    .error_for_status()?
-    .json()
-    .await?;
-  Ok(me.login)
-}
-
 // ---------------------------------------------------------------------------
 // Interactive helpers (used by `account add` and `config init`).
 // ---------------------------------------------------------------------------
 
 /// One-shot interactive flow: pick provider → pick credential source →
 /// pick id → resolve account. Caller is responsible for upserting +
-/// saving the resulting `Account`.
+/// saving the resulting [`Account`].
 pub(crate) async fn interactive_add_account(
   client: &reqwest::Client,
   provider_override: Option<String>,
@@ -340,7 +321,7 @@ pub(crate) async fn interactive_add_account(
 }
 
 pub(crate) fn pick_provider() -> Result<String> {
-  let options = known_providers();
+  let options = known_providers().to_vec();
   let selected = inquire::Select::new("Pick account provider:", options)
     .with_starting_cursor(0)
     .prompt()
@@ -349,11 +330,23 @@ pub(crate) fn pick_provider() -> Result<String> {
 }
 
 pub(crate) fn pick_source_interactive(provider: &str) -> Result<CredentialSource> {
-  let options: Vec<&str> = if provider == ID_GITHUB_COPILOT {
-    vec!["login", "gh", "copilot-plugin", "refresh-token"]
-  } else {
-    vec!["login", "env"]
-  };
+  // Build the menu from the trait capabilities so the list automatically
+  // tracks any new provider.
+  let auth = provider_auth_for(provider).ok_or_else(|| anyhow!("unknown provider '{provider}'"))?;
+  let mut options: Vec<&str> = vec!["login"];
+  if auth.supports_credential_source(&CredentialSource::Gh) {
+    options.push("gh");
+  }
+  if auth.supports_credential_source(&CredentialSource::CopilotPlugin) {
+    options.push("copilot-plugin");
+  }
+  if auth.supports_credential_source(&CredentialSource::RefreshToken { token: String::new() }) {
+    options.push("refresh-token");
+  }
+  if auth.supports_credential_source(&CredentialSource::Env { env_var: String::new() }) {
+    options.push("env");
+  }
+
   let picked = inquire::Select::new("Credential source:", options)
     .with_starting_cursor(0)
     .prompt()
@@ -363,7 +356,7 @@ pub(crate) fn pick_source_interactive(provider: &str) -> Result<CredentialSource
     "gh" => Ok(CredentialSource::Gh),
     "copilot-plugin" => Ok(CredentialSource::CopilotPlugin),
     "refresh-token" => {
-      let token = inquire::Text::new("GitHub Copilot refresh token (leave empty to use env var):")
+      let token = inquire::Text::new("Refresh token (leave empty to use env var):")
         .prompt()
         .context("refresh token prompt cancelled")?;
       let trimmed = token.trim().to_string();
@@ -395,11 +388,9 @@ pub(crate) fn pick_source_interactive(provider: &str) -> Result<CredentialSource
 }
 
 pub(crate) fn pick_account_id(provider: &str, source: &CredentialSource) -> Result<Option<String>> {
-  let default_id = if provider == ID_GITHUB_COPILOT {
-    "imported"
-  } else {
-    provider
-  };
+  let default_id = provider_auth_for(provider)
+    .map(|a| a.default_account_id())
+    .unwrap_or("imported");
   let prompt = match source {
     CredentialSource::Login => "Account id (leave empty for auto):",
     _ => "Account id:",

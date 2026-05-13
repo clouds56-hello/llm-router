@@ -1,6 +1,6 @@
-use crate::cli::onboarding::{known_providers, resolve_account, CredentialSource};
+use crate::auth_registry::known_providers;
+use crate::cli::onboarding::{resolve_account, CredentialSource};
 use crate::config::{Config, ProxyConfig};
-use crate::provider::{ID_GITHUB_COPILOT, ZAI_PROVIDERS};
 use crate::util::http::build_client;
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
@@ -61,12 +61,11 @@ pub async fn run(cfg_path: Option<PathBuf>, args: LoginArgs) -> Result<()> {
 fn pick_provider_interactive() -> Result<String> {
   if !std::io::stdin().is_terminal() {
     return Err(anyhow!(
-      "no --provider given and stdin is not a TTY; pass --provider <id> (one of: {}, {})",
-      ID_GITHUB_COPILOT,
-      ZAI_PROVIDERS.join(" | ")
+      "no --provider given and stdin is not a TTY; pass --provider <id> (one of: {})",
+      known_providers().join(" | ")
     ));
   }
-  let options = known_providers();
+  let options = known_providers().to_vec();
 
   let pick = inquire::Select::new("Pick a provider:", options)
     .with_starting_cursor(0) // github-copilot

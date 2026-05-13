@@ -21,7 +21,7 @@ pub mod store;
 
 pub use llm_core::account::{AccountConfig, AccountState, AccountTier};
 pub use provider::{
-  AuthError, DeviceFlowOutcome, MeteredBucket, ProviderAuth, QuotaSnapshot, RefreshOutcome, Result,
-  UsageBucket,
+  AuthError, CredentialSource, DeviceCodeHandle, DeviceFlowOutcome, MeteredBucket, ProviderAuth,
+  QuotaSnapshot, RefreshOutcome, Result, UsageBucket,
 };
 pub use store::AuthStore;
