@@ -134,6 +134,8 @@ pub(crate) fn rewrite_target(host: &str, path: &str, method: &Method) -> Option<
     ("api.openai.com", &Method::POST, "/v1/responses") => Some("/v1/responses"),
     ("api.anthropic.com", &Method::POST, "/v1/messages") => Some("/v1/messages"),
     ("api.githubcopilot.com", &Method::POST, "/v1/chat/completions") => Some("/v1/chat/completions"),
+    ("api.deepseek.com", &Method::POST, "/chat/completions") => Some("/v1/chat/completions"),
+    ("api.deepseek.com", &Method::POST, "/v1/chat/completions") => Some("/v1/chat/completions"),
     ("api.z.ai", &Method::POST, "/v1/chat/completions") => Some("/v1/chat/completions"),
     ("open.bigmodel.cn", &Method::POST, "/api/paas/v4/chat/completions") => Some("/v1/chat/completions"),
     ("openrouter.ai", &Method::POST, "/api/v1/chat/completions") => Some("/v1/chat/completions"),

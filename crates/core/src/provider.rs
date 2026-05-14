@@ -11,6 +11,9 @@ pub mod error;
 pub use error::{Error, Result};
 
 pub const ID_GITHUB_COPILOT: &str = "github-copilot";
+pub const ID_DEEPSEEK: &str = "deepseek";
+pub const ID_OPENAI: &str = "openai";
+pub const ID_CODEX: &str = "codex";
 pub const ID_ZAI_CODING_PLAN: &str = "zai-coding-plan";
 pub const ID_ZAI: &str = "zai";
 pub const ID_ZHIPUAI_CODING_PLAN: &str = "zhipuai-coding-plan";

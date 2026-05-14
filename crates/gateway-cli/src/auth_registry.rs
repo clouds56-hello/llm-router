@@ -15,9 +15,14 @@ use llm_auth::ProviderAuth;
 /// stored account verbatim.
 pub fn provider_auth_for(id: &str) -> Option<&'static dyn ProviderAuth> {
   use llm_provider_copilot::auth as cop;
+  use llm_provider_deepseek::auth as deepseek;
+  use llm_provider_openai::auth as openai;
   use llm_provider_zai::auth as zai;
   match id {
+    "codex" => Some(openai::codex_auth()),
+    "deepseek" => Some(deepseek::provider_auth()),
     "github-copilot" => Some(cop::provider_auth()),
+    "openai" => Some(openai::openai_auth()),
     "zai-coding-plan" => Some(zai::zai_coding_plan_auth()),
     "zai" => Some(zai::zai_auth()),
     "zhipuai-coding-plan" => Some(zai::zhipuai_coding_plan_auth()),
@@ -29,7 +34,10 @@ pub fn provider_auth_for(id: &str) -> Option<&'static dyn ProviderAuth> {
 /// All provider ids known to the registry. Useful for CLI pickers.
 pub fn known_providers() -> &'static [&'static str] {
   &[
+    "codex",
+    "deepseek",
     "github-copilot",
+    "openai",
     "zai-coding-plan",
     "zai",
     "zhipuai-coding-plan",

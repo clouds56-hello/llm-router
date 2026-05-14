@@ -8,6 +8,8 @@ members = [
   "crates/router",
   "crates/gateway-cli",
   "crates/provider-copilot",
+  "crates/provider-deepseek",
+  "crates/provider-openai",
   "crates/provider-zai",
 ]
 resolver = "2"
@@ -20,6 +22,8 @@ llm-catalogue = { path = "crates/catalogue" }
 llm-convert = { path = "crates/convert" }
 llm-router = { path = "crates/router" }
 llm-provider-copilot = { path = "crates/provider-copilot" }
+llm-provider-deepseek = { path = "crates/provider-deepseek" }
+llm-provider-openai = { path = "crates/provider-openai" }
 llm-provider-zai = { path = "crates/provider-zai" }
 
 anyhow = "1"

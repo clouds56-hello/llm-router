@@ -13,10 +13,8 @@ pub struct LoginArgs {
   /// Provider to log in to. If omitted and stdin is a TTY, you'll be
   /// prompted to pick one.
   ///
-  /// Accepted: `github-copilot`, `zai-coding-plan`, `zai`,
-  /// `zhipuai-coding-plan`, `zhipuai`. The four `zai*`/`zhipuai*` aliases
-  /// all route to the same Z.ai backend; whichever you pick is preserved
-  /// verbatim in the saved account so usage logs reflect operator intent.
+  /// Accepted provider ids are shown by the interactive picker. Z.ai aliases
+  /// route to the same backend; whichever you pick is preserved verbatim.
   #[arg(long)]
   pub provider: Option<String>,
 

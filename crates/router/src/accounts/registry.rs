@@ -13,6 +13,9 @@ impl Registry {
       descriptors: BTreeMap::new(),
     };
     r.register(&llm_provider_copilot::DESCRIPTOR);
+    r.register(&llm_provider_deepseek::DESCRIPTOR);
+    r.register(&llm_provider_openai::DESCRIPTOR_OPENAI);
+    r.register(&llm_provider_openai::DESCRIPTOR_CODEX);
     r.register(&llm_provider_zai::DESCRIPTOR_ZAI);
     r.register(&llm_provider_zai::DESCRIPTOR_ZAI_CODING_PLAN);
     r.register(&llm_provider_zai::DESCRIPTOR_ZHIPUAI);
@@ -123,7 +126,9 @@ pub fn build_for_account(account: Arc<AccountConfig>) -> Result<Arc<dyn Provider
 #[cfg(test)]
 mod tests {
   use super::*;
-  use llm_core::provider::{ID_GITHUB_COPILOT, ID_ZAI, ID_ZAI_CODING_PLAN, ID_ZHIPUAI, ID_ZHIPUAI_CODING_PLAN};
+  use llm_core::provider::{
+    ID_CODEX, ID_DEEPSEEK, ID_GITHUB_COPILOT, ID_OPENAI, ID_ZAI, ID_ZAI_CODING_PLAN, ID_ZHIPUAI, ID_ZHIPUAI_CODING_PLAN,
+  };
 
   #[test]
   fn registry_matches_provider_hosts() {
@@ -135,6 +140,12 @@ mod tests {
     );
     assert_eq!(registry.provider_id_for_url("api.z.ai"), Some(ID_ZAI));
     assert_eq!(registry.provider_id_for_url("open.bigmodel.cn"), Some(ID_ZHIPUAI));
+    assert_eq!(registry.provider_id_for_url("api.deepseek.com"), Some(ID_DEEPSEEK));
+    assert_eq!(registry.provider_id_for_url("api.openai.com"), Some(ID_OPENAI));
+    assert_eq!(
+      registry.provider_id_for_url("chatgpt.com/backend-api/codex/responses"),
+      Some(ID_CODEX)
+    );
   }
 
   #[test]
@@ -171,9 +182,8 @@ mod tests {
   #[test]
   fn registry_does_not_invent_unknown_provider_ids() {
     let registry = Registry::builtin();
-    assert_eq!(registry.provider_id_for_url("api.openai.com"), None);
     assert_eq!(registry.provider_id_for_url("api.anthropic.com"), None);
     assert_eq!(registry.provider_id_for_url("openrouter.ai"), None);
-    assert_eq!(registry.provider_id_for_url("chatgpt.com"), None);
+    assert_eq!(registry.provider_id_for_url("chatgpt.com/backend-api/unknown"), None);
   }
 }
