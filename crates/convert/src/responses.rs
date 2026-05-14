@@ -228,12 +228,18 @@ pub fn delta_from_responses_event(v: &Value) -> Vec<IrDelta> {
         out.push(IrDelta::Reasoning(delta.to_string()));
       }
     }
-    Some("response.function_call_arguments.delta") => out.push(IrDelta::ToolCall {
-      index: v.get("output_index").and_then(Value::as_u64).unwrap_or(0) as usize,
-      id: None,
-      name: None,
-      arguments_delta: v.get("delta").and_then(Value::as_str).unwrap_or_default().to_string(),
-    }),
+    Some("response.function_call_arguments.delta") | Some("response.custom_tool_call_input.delta") => {
+      out.push(IrDelta::ToolCall {
+        index: v.get("output_index").and_then(Value::as_u64).unwrap_or(0) as usize,
+        id: v
+          .get("call_id")
+          .or_else(|| v.get("item_id"))
+          .and_then(Value::as_str)
+          .map(str::to_string),
+        name: None,
+        arguments_delta: v.get("delta").and_then(Value::as_str).unwrap_or_default().to_string(),
+      })
+    }
     Some("response.completed") => {
       if let Some(resp) = v.get("response") {
         if let Some(usage) = resp.get("usage").map(|u| Usage {

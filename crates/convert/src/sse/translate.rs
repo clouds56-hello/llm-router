@@ -236,4 +236,158 @@ mod tests {
     assert_eq!(done.len(), 1);
     assert!(done[0].is_done());
   }
+
+  #[test]
+  fn responses_to_chat_tracks_official_output_item_lifecycle() {
+    let mut t = EndpointTranslator::new(Endpoint::Responses, Endpoint::ChatCompletions);
+
+    assert!(t
+      .transform(SseEvent::json(
+        Some("response.output_item.added"),
+        json!({"type":"response.output_item.added","output_index":0,"item":{"id":"msg_1","type":"message","status":"in_progress","role":"assistant","content":[]}}),
+      ))
+      .unwrap()
+      .is_empty());
+    assert!(t
+      .transform(SseEvent::json(
+        Some("response.content_part.added"),
+        json!({"type":"response.content_part.added","item_id":"msg_1","output_index":0,"content_index":0,"part":{"type":"output_text","text":"","annotations":[]}}),
+      ))
+      .unwrap()
+      .is_empty());
+
+    let text = t
+      .transform(SseEvent::json(
+        Some("response.output_text.delta"),
+        json!({"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"content_index":0,"delta":"Hi"}),
+      ))
+      .unwrap();
+    assert_eq!(text[0].json.as_ref().unwrap()["choices"][0]["delta"]["content"], "Hi");
+
+    assert!(t
+      .transform(SseEvent::json(
+        Some("response.output_text.done"),
+        json!({"type":"response.output_text.done","item_id":"msg_1","output_index":0,"content_index":0,"text":"Hi"}),
+      ))
+      .unwrap()
+      .is_empty());
+    assert!(t
+      .transform(SseEvent::json(
+        Some("response.output_item.done"),
+        json!({"type":"response.output_item.done","output_index":0,"item":{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Hi","annotations":[]}]}}),
+      ))
+      .unwrap()
+      .is_empty());
+
+    let completed = t
+      .transform(SseEvent::json(
+        Some("response.completed"),
+        json!({"type":"response.completed","response":{"usage":{"input_tokens":37,"output_tokens":11,"total_tokens":48}}}),
+      ))
+      .unwrap();
+    assert_eq!(completed[0].json.as_ref().unwrap()["usage"]["prompt_tokens"], 37);
+    assert_eq!(completed[1].json.as_ref().unwrap()["choices"][0]["finish_reason"], "stop");
+  }
+
+  #[test]
+  fn responses_to_chat_uses_output_item_metadata_for_function_calls() {
+    let mut t = EndpointTranslator::new(Endpoint::Responses, Endpoint::ChatCompletions);
+
+    assert!(t
+      .transform(SseEvent::json(
+        Some("response.output_item.added"),
+        json!({"type":"response.output_item.added","output_index":1,"item":{"id":"fc_1","call_id":"call_1","type":"function_call","status":"in_progress","name":"exec_command","arguments":""}}),
+      ))
+      .unwrap()
+      .is_empty());
+
+    let tool = t
+      .transform(SseEvent::json(
+        Some("response.function_call_arguments.delta"),
+        json!({"type":"response.function_call_arguments.delta","output_index":1,"delta":"{\"cmd\":"}),
+      ))
+      .unwrap();
+    let call = &tool[0].json.as_ref().unwrap()["choices"][0]["delta"]["tool_calls"][0];
+    assert_eq!(call["index"], 1);
+    assert_eq!(call["id"], "call_1");
+    assert_eq!(call["function"]["name"], "exec_command");
+    assert_eq!(call["function"]["arguments"], "{\"cmd\":");
+
+    assert!(t
+      .transform(SseEvent::json(
+        Some("response.function_call_arguments.done"),
+        json!({"type":"response.function_call_arguments.done","output_index":1,"arguments":"{\"cmd\": \"ls\"}"}),
+      ))
+      .unwrap()
+      .is_empty());
+  }
+
+  #[test]
+  fn responses_to_chat_supports_reasoning_summary_text_events() {
+    let mut t = EndpointTranslator::new(Endpoint::Responses, Endpoint::ChatCompletions);
+
+    assert!(t
+      .transform(SseEvent::json(
+        Some("response.reasoning_summary_part.added"),
+        json!({"type":"response.reasoning_summary_part.added","item_id":"rs_1","output_index":0,"summary_index":0,"part":{"type":"summary_text","text":""}}),
+      ))
+      .unwrap()
+      .is_empty());
+    let reasoning = t
+      .transform(SseEvent::json(
+        Some("response.reasoning_summary_text.delta"),
+        json!({"type":"response.reasoning_summary_text.delta","item_id":"rs_1","output_index":0,"summary_index":0,"delta":"Thinking"}),
+      ))
+      .unwrap();
+    assert_eq!(reasoning[0].json.as_ref().unwrap()["choices"][0]["delta"]["reasoning_content"], "Thinking");
+    assert!(t
+      .transform(SseEvent::json(
+        Some("response.reasoning_summary_text.done"),
+        json!({"type":"response.reasoning_summary_text.done","item_id":"rs_1","output_index":0,"summary_index":0,"text":"Thinking"}),
+      ))
+      .unwrap()
+      .is_empty());
+  }
+
+  #[test]
+  fn responses_to_chat_supports_custom_tool_call_input_delta() {
+    let mut t = EndpointTranslator::new(Endpoint::Responses, Endpoint::ChatCompletions);
+
+    assert!(t
+      .transform(SseEvent::json(
+        Some("response.output_item.added"),
+        json!({"type":"response.output_item.added","output_index":2,"item":{"id":"ctc_1","call_id":"call_custom","type":"custom_tool_call","status":"in_progress","name":"apply_patch","input":""}}),
+      ))
+      .unwrap()
+      .is_empty());
+
+    let tool = t
+      .transform(SseEvent::json(
+        Some("response.custom_tool_call_input.delta"),
+        json!({"type":"response.custom_tool_call_input.delta","output_index":2,"item_id":"ctc_1","call_id":"call_custom","delta":"*** Begin"}),
+      ))
+      .unwrap();
+
+    let call = &tool[0].json.as_ref().unwrap()["choices"][0]["delta"]["tool_calls"][0];
+    assert_eq!(call["index"], 2);
+    assert_eq!(call["id"], "call_custom");
+    assert_eq!(call["function"]["name"], "apply_patch");
+    assert_eq!(call["function"]["arguments"], "*** Begin");
+  }
+
+  #[test]
+  fn responses_to_chat_uses_delta_item_id_when_no_output_item_metadata_exists() {
+    let mut t = EndpointTranslator::new(Endpoint::Responses, Endpoint::ChatCompletions);
+
+    let tool = t
+      .transform(SseEvent::json(
+        Some("response.custom_tool_call_input.delta"),
+        json!({"type":"response.custom_tool_call_input.delta","item_id":"ctc_1","delta":"abc"}),
+      ))
+      .unwrap();
+
+    let call = &tool[0].json.as_ref().unwrap()["choices"][0]["delta"]["tool_calls"][0];
+    assert_eq!(call["id"], "ctc_1");
+    assert_eq!(call["function"]["arguments"], "abc");
+  }
 }
