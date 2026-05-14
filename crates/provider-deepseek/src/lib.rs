@@ -9,14 +9,28 @@ pub use llm_core::{account as config, provider, util};
 
 pub use deepseek::*;
 
+use llm_auth::descriptor::{EndpointSpec, ProviderDescriptor};
+use llm_auth::provider::CredentialFlavor;
 use std::sync::Arc;
 
-pub static DESCRIPTOR: llm_core::provider::ProviderDescriptor = llm_core::provider::ProviderDescriptor {
+pub static DESCRIPTOR: ProviderDescriptor = ProviderDescriptor {
   id: ID_DEEPSEEK,
+  display_name: "DeepSeek",
   hosts: &["api.deepseek.com"],
+  base_url: deepseek::DEFAULT_BASE_URL,
+  credentials: &[CredentialFlavor::ApiKey],
+  endpoints: &[EndpointSpec {
+    endpoint: Endpoint::ChatCompletions,
+    method: "POST",
+    path: "/v1/chat/completions",
+    aliases: &["/chat/completions"],
+  }],
+  rewrites: &[],
+  auth_urls: &[],
   matches_url,
   validate,
   build,
+  build_auth: Some(crate::auth::provider_auth),
 };
 
 pub fn matches_url(host: &str, _path: &str, _id: &'static str) -> bool {

@@ -1,6 +1,7 @@
 use super::ca::DynamicResolver;
 use super::passthrough::proxy_passthrough;
 use super::{extract_proxy_auth_mode, rewrite_target, split_authority, HostPolicy, ProxyCa};
+use crate::accounts::registry::Registry;
 use crate::api::routing::RouteResolver;
 use crate::api::{error::ApiError, AppState};
 use anyhow::{Context, Result};
@@ -12,6 +13,7 @@ use http::header::{HeaderValue, CONNECTION, HOST, UPGRADE};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper_util::rt::TokioIo;
+use llm_auth::descriptor::RewriteTarget;
 use llm_config::RouteMode;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -232,8 +234,13 @@ async fn route_intercepted_request(
     return Ok(ApiError::not_implemented(path, host).into_response());
   };
 
+  let rewritten_path = match rewritten {
+    RewriteTarget::Endpoint(endpoint) => Registry::builtin().endpoint_path(endpoint).unwrap_or(path.as_str()),
+    RewriteTarget::Path(path) => path,
+  };
+
   let path_and_query = req.uri().path_and_query().map(|v| v.as_str()).unwrap_or(&path);
-  let rewritten_path_and_query = path_and_query.replacen(&path, rewritten, 1);
+  let rewritten_path_and_query = path_and_query.replacen(&path, rewritten_path, 1);
   let uri = Uri::builder()
     .path_and_query(rewritten_path_and_query.as_str())
     .build()

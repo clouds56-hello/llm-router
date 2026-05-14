@@ -9,11 +9,10 @@
 use crate::config::CopilotHeaders;
 use crate::provider::Result;
 use crate::util::redact::token_fingerprint;
+use crate::COPILOT_USER_INFO_URL;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use tracing::{debug, instrument};
-
-const USER_INFO_URL: &str = "https://api.github.com/copilot_internal/user";
 
 #[derive(Debug, Clone, Deserialize, serde::Serialize)]
 pub struct CopilotUserInfo {
@@ -75,7 +74,7 @@ pub async fn fetch(client: &reqwest::Client, github_token: &str, headers: &Copil
   let resp = crate::util::http::send(
     client,
     reqwest::Method::GET,
-    USER_INFO_URL,
+    COPILOT_USER_INFO_URL,
     h,
     None,
     None,

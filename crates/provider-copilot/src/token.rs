@@ -44,7 +44,7 @@ pub async fn exchange(
   let resp = crate::util::http::send(
     client,
     reqwest::Method::GET,
-    crate::github_copilot::TOKEN_EXCHANGE_URL,
+    crate::COPILOT_TOKEN_EXCHANGE_URL,
     h,
     None,
     None,

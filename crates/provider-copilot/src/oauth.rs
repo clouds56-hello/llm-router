@@ -4,6 +4,7 @@
 
 use crate::provider::{error, Result};
 use crate::util::redact::token_fingerprint;
+use crate::{COPILOT_ACCESS_TOKEN_URL, COPILOT_DEVICE_CODE_URL};
 use serde::Deserialize;
 use snafu::ResultExt;
 use std::time::Duration;
@@ -11,8 +12,6 @@ use tracing::{debug, info, instrument, warn};
 
 /// VS Code Copilot Chat client ID. Public, well-known.
 pub const COPILOT_CLIENT_ID: &str = "Iv1.b507a08c87ecfe98";
-const DEVICE_CODE_URL: &str = "https://github.com/login/device/code";
-const ACCESS_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
 
 #[derive(Debug, Deserialize)]
 pub struct DeviceCode {
@@ -43,7 +42,7 @@ struct TokenOk {
 pub async fn request_device_code(client: &reqwest::Client) -> Result<DeviceCode> {
   debug!("requesting GitHub device code");
   let resp = client
-    .post(DEVICE_CODE_URL)
+    .post(COPILOT_DEVICE_CODE_URL)
     .header("accept", "application/json")
     .form(&[("client_id", COPILOT_CLIENT_ID), ("scope", "read:user")])
     .send()
@@ -98,7 +97,7 @@ pub async fn poll_for_token(client: &reqwest::Client, dc: &DeviceCode) -> Result
     polls += 1;
 
     let resp = client
-      .post(ACCESS_TOKEN_URL)
+      .post(COPILOT_ACCESS_TOKEN_URL)
       .header("accept", "application/json")
       .form(&[
         ("client_id", COPILOT_CLIENT_ID),

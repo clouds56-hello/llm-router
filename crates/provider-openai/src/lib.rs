@@ -12,20 +12,69 @@ pub use llm_core::{account as config, provider, util};
 
 pub use openai::*;
 
+use llm_auth::descriptor::{EndpointSpec, ProviderDescriptor};
+use llm_auth::provider::CredentialFlavor;
 use std::sync::Arc;
 
-pub static DESCRIPTOR_OPENAI: llm_core::provider::ProviderDescriptor = descriptor(ID_OPENAI);
-pub static DESCRIPTOR_CODEX: llm_core::provider::ProviderDescriptor = descriptor(ID_CODEX);
+pub const CODEX_DEVICE_USERCODE_URL: &str = "https://auth.openai.com/api/accounts/deviceauth/usercode";
+pub const CODEX_DEVICE_TOKEN_URL: &str = "https://auth.openai.com/api/accounts/deviceauth/token";
+pub const CODEX_OAUTH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
+pub const CODEX_DEVICE_VERIFY_URL: &str = "https://auth.openai.com/codex/device";
+pub const CODEX_DEVICE_REDIRECT_URL: &str = "https://auth.openai.com/deviceauth/callback";
 
-const fn descriptor(id: &'static str) -> llm_core::provider::ProviderDescriptor {
-  llm_core::provider::ProviderDescriptor {
-    id,
-    hosts: &["api.openai.com", "chatgpt.com"],
-    matches_url,
-    validate,
-    build,
-  }
-}
+pub static DESCRIPTOR_OPENAI: ProviderDescriptor = ProviderDescriptor {
+  id: ID_OPENAI,
+  display_name: "OpenAI",
+  hosts: &["api.openai.com"],
+  base_url: openai::OPENAI_BASE_URL,
+  credentials: &[CredentialFlavor::ApiKey],
+  endpoints: &[
+    EndpointSpec {
+      endpoint: Endpoint::ChatCompletions,
+      method: "POST",
+      path: "/v1/chat/completions",
+      aliases: &[],
+    },
+    EndpointSpec {
+      endpoint: Endpoint::Responses,
+      method: "POST",
+      path: "/v1/responses",
+      aliases: &[],
+    },
+  ],
+  rewrites: &[],
+  auth_urls: &[],
+  matches_url,
+  validate,
+  build,
+  build_auth: Some(crate::auth::openai_auth),
+};
+
+pub static DESCRIPTOR_CODEX: ProviderDescriptor = ProviderDescriptor {
+  id: ID_CODEX,
+  display_name: "ChatGPT (Codex)",
+  hosts: &["chatgpt.com"],
+  base_url: openai::CODEX_BASE_URL,
+  credentials: &[CredentialFlavor::RefreshToken, CredentialFlavor::ApiKey],
+  endpoints: &[EndpointSpec {
+    endpoint: Endpoint::Responses,
+    method: "POST",
+    path: "/v1/responses",
+    aliases: &["/backend-api/codex/responses"],
+  }],
+  rewrites: &[],
+  auth_urls: &[
+    ("device_usercode", CODEX_DEVICE_USERCODE_URL),
+    ("device_token", CODEX_DEVICE_TOKEN_URL),
+    ("oauth_token", CODEX_OAUTH_TOKEN_URL),
+    ("device_verify", CODEX_DEVICE_VERIFY_URL),
+    ("device_redirect", CODEX_DEVICE_REDIRECT_URL),
+  ],
+  matches_url,
+  validate,
+  build,
+  build_auth: Some(crate::auth::codex_auth),
+};
 
 pub fn matches_url(host: &str, path: &str, id: &'static str) -> bool {
   match (host, id) {

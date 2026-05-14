@@ -31,14 +31,13 @@ use serde::Deserialize;
 use std::time::Duration;
 
 use crate::jwt;
+use crate::{
+  CODEX_DEVICE_REDIRECT_URL, CODEX_DEVICE_TOKEN_URL, CODEX_DEVICE_USERCODE_URL, CODEX_DEVICE_VERIFY_URL,
+  CODEX_OAUTH_TOKEN_URL,
+};
 
 pub const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 pub const ISSUER: &str = "https://auth.openai.com";
-pub const DEVICE_USERCODE_URL: &str = "https://auth.openai.com/api/accounts/deviceauth/usercode";
-pub const DEVICE_TOKEN_URL: &str = "https://auth.openai.com/api/accounts/deviceauth/token";
-pub const OAUTH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
-pub const DEVICE_VERIFICATION_URI: &str = "https://auth.openai.com/codex/device";
-pub const DEVICE_REDIRECT_URI: &str = "https://auth.openai.com/deviceauth/callback";
 const DEFAULT_EXPIRES_IN_SECS: u64 = 3600;
 const REFRESH_SKEW_SECS: i64 = 60;
 
@@ -130,11 +129,11 @@ async fn exchange_authorization_code(
 ) -> Result<TokenResponse> {
   let resp = http_form(
     client,
-    OAUTH_TOKEN_URL,
+    CODEX_OAUTH_TOKEN_URL,
     vec![
       ("grant_type", "authorization_code".into()),
       ("code", code.into()),
-      ("redirect_uri", DEVICE_REDIRECT_URI.into()),
+      ("redirect_uri", CODEX_DEVICE_REDIRECT_URL.into()),
       ("client_id", CLIENT_ID.into()),
       ("code_verifier", code_verifier.into()),
     ],
@@ -146,7 +145,7 @@ async fn exchange_authorization_code(
 async fn refresh_with_token(client: &reqwest::Client, refresh_token: &str) -> Result<TokenResponse> {
   let resp = http_form(
     client,
-    OAUTH_TOKEN_URL,
+    CODEX_OAUTH_TOKEN_URL,
     vec![
       ("grant_type", "refresh_token".into()),
       ("refresh_token", refresh_token.into()),
@@ -198,11 +197,16 @@ impl ProviderAuth for CodexAuth {
   }
 
   fn default_refresh_url(&self) -> Option<&'static str> {
-    Some(OAUTH_TOKEN_URL)
+    Some(CODEX_OAUTH_TOKEN_URL)
   }
 
   async fn request_device_code(&self, client: &reqwest::Client) -> Result<DeviceCodeHandle> {
-    let resp = http_json(client, DEVICE_USERCODE_URL, serde_json::json!({"client_id": CLIENT_ID})).await?;
+    let resp = http_json(
+      client,
+      CODEX_DEVICE_USERCODE_URL,
+      serde_json::json!({"client_id": CLIENT_ID}),
+    )
+    .await?;
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
     if !status.is_success() {
@@ -217,7 +221,7 @@ impl ProviderAuth for CodexAuth {
     Ok(DeviceCodeHandle {
       device_code: parsed.device_auth_id,
       user_code: parsed.user_code,
-      verification_uri: DEVICE_VERIFICATION_URI.to_string(),
+      verification_uri: CODEX_DEVICE_VERIFY_URL.to_string(),
       expires_in: parsed.expires_in.unwrap_or(900),
       interval,
     })
@@ -232,7 +236,7 @@ impl ProviderAuth for CodexAuth {
       }
       let resp = http_json(
         client,
-        DEVICE_TOKEN_URL,
+        CODEX_DEVICE_TOKEN_URL,
         serde_json::json!({
           "device_auth_id": handle.device_code,
           "user_code": handle.user_code,

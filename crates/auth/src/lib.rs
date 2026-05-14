@@ -16,9 +16,11 @@
 //! lives in the consumer that already pulls in every provider — currently
 //! `gateway-cli::auth_registry`.
 
+pub mod descriptor;
 pub mod provider;
 pub mod store;
 
+pub use descriptor::{EndpointSpec, PathRewrite, ProviderDescriptor};
 pub use llm_core::account::{AccountConfig, AccountState, AccountTier};
 pub use provider::{
   default_import_from, AuthError, CredentialFlavor, CredentialResult, CredentialSource, CredentialSourceKind,

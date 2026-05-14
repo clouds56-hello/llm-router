@@ -37,7 +37,7 @@ impl ProviderAuth for CopilotAuth {
   }
 
   fn default_refresh_url(&self) -> Option<&'static str> {
-    Some(crate::github_copilot::TOKEN_EXCHANGE_URL)
+    Some(crate::COPILOT_TOKEN_EXCHANGE_URL)
   }
 
   fn custom_credential_sources(&self) -> &'static [&'static str] {

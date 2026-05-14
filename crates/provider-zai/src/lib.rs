@@ -13,22 +13,94 @@ pub use llm_core::{account as config, provider, util};
 
 pub use zai::*;
 
+use llm_auth::descriptor::{EndpointSpec, ProviderDescriptor};
+use llm_auth::provider::CredentialFlavor;
 use std::sync::Arc;
 
-pub static DESCRIPTOR_ZAI: llm_core::provider::ProviderDescriptor = descriptor(ID_ZAI);
-pub static DESCRIPTOR_ZAI_CODING_PLAN: llm_core::provider::ProviderDescriptor = descriptor(ID_ZAI_CODING_PLAN);
-pub static DESCRIPTOR_ZHIPUAI: llm_core::provider::ProviderDescriptor = descriptor(ID_ZHIPUAI);
-pub static DESCRIPTOR_ZHIPUAI_CODING_PLAN: llm_core::provider::ProviderDescriptor = descriptor(ID_ZHIPUAI_CODING_PLAN);
+const ZAI_HOSTS: &[&str] = &["api.z.ai"];
+const ZHIPU_HOSTS: &[&str] = &["open.bigmodel.cn"];
+const CHAT_COMPLETIONS_PATH_PAAS: &str = "/api/paas/v4/chat/completions";
+const CHAT_COMPLETIONS_PATH_CODING: &str = "/api/coding/paas/v4/chat/completions";
 
-const fn descriptor(id: &'static str) -> llm_core::provider::ProviderDescriptor {
-  llm_core::provider::ProviderDescriptor {
-    id,
-    hosts: &["api.z.ai", "open.bigmodel.cn"],
-    matches_url,
-    validate,
-    build,
-  }
-}
+pub static DESCRIPTOR_ZAI: ProviderDescriptor = ProviderDescriptor {
+  id: ID_ZAI,
+  display_name: "Z.ai",
+  hosts: ZAI_HOSTS,
+  base_url: "https://api.z.ai/api/paas/v4",
+  credentials: &[CredentialFlavor::ApiKey],
+  endpoints: &[EndpointSpec {
+    endpoint: Endpoint::ChatCompletions,
+    method: "POST",
+    path: "/v1/chat/completions",
+    aliases: &[CHAT_COMPLETIONS_PATH_PAAS],
+  }],
+  rewrites: &[],
+  auth_urls: &[],
+  matches_url,
+  validate,
+  build,
+  build_auth: Some(crate::auth::zai_auth),
+};
+
+pub static DESCRIPTOR_ZAI_CODING_PLAN: ProviderDescriptor = ProviderDescriptor {
+  id: ID_ZAI_CODING_PLAN,
+  display_name: "Z.ai Coding Plan",
+  hosts: ZAI_HOSTS,
+  base_url: "https://api.z.ai/api/coding/paas/v4",
+  credentials: &[CredentialFlavor::ApiKey],
+  endpoints: &[EndpointSpec {
+    endpoint: Endpoint::ChatCompletions,
+    method: "POST",
+    path: "/v1/chat/completions",
+    aliases: &[CHAT_COMPLETIONS_PATH_CODING],
+  }],
+  rewrites: &[],
+  auth_urls: &[],
+  matches_url,
+  validate,
+  build,
+  build_auth: Some(crate::auth::zai_coding_plan_auth),
+};
+
+pub static DESCRIPTOR_ZHIPUAI: ProviderDescriptor = ProviderDescriptor {
+  id: ID_ZHIPUAI,
+  display_name: "Zhipu BigModel",
+  hosts: ZHIPU_HOSTS,
+  base_url: "https://open.bigmodel.cn/api/paas/v4",
+  credentials: &[CredentialFlavor::ApiKey],
+  endpoints: &[EndpointSpec {
+    endpoint: Endpoint::ChatCompletions,
+    method: "POST",
+    path: "/v1/chat/completions",
+    aliases: &[CHAT_COMPLETIONS_PATH_PAAS],
+  }],
+  rewrites: &[],
+  auth_urls: &[],
+  matches_url,
+  validate,
+  build,
+  build_auth: Some(crate::auth::zhipuai_auth),
+};
+
+pub static DESCRIPTOR_ZHIPUAI_CODING_PLAN: ProviderDescriptor = ProviderDescriptor {
+  id: ID_ZHIPUAI_CODING_PLAN,
+  display_name: "Zhipu BigModel Coding Plan",
+  hosts: ZHIPU_HOSTS,
+  base_url: "https://open.bigmodel.cn/api/coding/paas/v4",
+  credentials: &[CredentialFlavor::ApiKey],
+  endpoints: &[EndpointSpec {
+    endpoint: Endpoint::ChatCompletions,
+    method: "POST",
+    path: "/v1/chat/completions",
+    aliases: &[CHAT_COMPLETIONS_PATH_CODING],
+  }],
+  rewrites: &[],
+  auth_urls: &[],
+  matches_url,
+  validate,
+  build,
+  build_auth: Some(crate::auth::zhipuai_coding_plan_auth),
+};
 
 pub fn matches_url(host: &str, path: &str, id: &'static str) -> bool {
   match (host, id) {

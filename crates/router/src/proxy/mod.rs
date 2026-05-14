@@ -3,11 +3,13 @@ pub mod header_pipeline;
 mod passthrough;
 mod transport;
 
+use crate::accounts::registry::Registry;
 use crate::api::AppState;
 use anyhow::{Context, Result};
 use axum::http::Method;
 use axum::Router;
 pub use ca::{load_or_generate_ca, ProxyCa};
+use llm_auth::descriptor::RewriteTarget;
 use std::collections::HashSet;
 use std::future::Future;
 use std::net::SocketAddr;
@@ -15,18 +17,24 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use transport::handle_client;
-const DEFAULT_INTERCEPT_HOSTS: &[&str] = &[
+
+/// Full built-in intercept set. Keep this explicit so default interception
+/// does not shrink when a provider crate is conditionally unavailable.
+pub(crate) const INTERCEPT_HOSTS: &[&str] = &[
   "api.openai.com",
-  "api.anthropic.com",
   "api.githubcopilot.com",
   "api.z.ai",
   "open.bigmodel.cn",
-  "openrouter.ai",
-  "api.openai.com",
   "chatgpt.com",
   // "ab.chatgpt.com",
-  "opencode.ai",
   "api.deepseek.com",
+];
+
+/// Hosts the proxy intercepts even though no provider claims them.
+const EXTRA_INTERCEPT_HOSTS: &[&str] = &[
+  "openrouter.ai",
+  "api.anthropic.com",
+  "opencode.ai",
 ];
 
 #[derive(Clone, Debug)]
@@ -85,10 +93,8 @@ pub(super) struct HostPolicy {
 
 impl HostPolicy {
   fn new(options: &ProxyOptions) -> Self {
-    let mut intercept = DEFAULT_INTERCEPT_HOSTS
-      .iter()
-      .map(|s| s.to_string())
-      .collect::<HashSet<_>>();
+    let mut intercept = INTERCEPT_HOSTS.iter().map(|s| s.to_string()).collect::<HashSet<_>>();
+    intercept.extend(EXTRA_INTERCEPT_HOSTS.iter().map(|s| s.to_string()));
     intercept.extend(options.intercept_hosts.iter().map(|s| s.to_ascii_lowercase()));
     for host in &options.passthrough_hosts {
       intercept.remove(&host.to_ascii_lowercase());
@@ -127,21 +133,15 @@ fn base64_decode(input: &str) -> Option<Vec<u8>> {
   base64::engine::general_purpose::STANDARD.decode(input).ok()
 }
 
-pub(crate) fn rewrite_target(host: &str, path: &str, method: &Method) -> Option<&'static str> {
-  match (host, method, path) {
-    (_, &Method::GET, "/v1/models") => Some("/v1/models"),
-    ("api.openai.com", &Method::POST, "/v1/chat/completions") => Some("/v1/chat/completions"),
-    ("api.openai.com", &Method::POST, "/v1/responses") => Some("/v1/responses"),
-    ("api.anthropic.com", &Method::POST, "/v1/messages") => Some("/v1/messages"),
-    ("api.githubcopilot.com", &Method::POST, "/v1/chat/completions") => Some("/v1/chat/completions"),
-    ("api.deepseek.com", &Method::POST, "/chat/completions") => Some("/v1/chat/completions"),
-    ("api.deepseek.com", &Method::POST, "/v1/chat/completions") => Some("/v1/chat/completions"),
-    ("api.z.ai", &Method::POST, "/v1/chat/completions") => Some("/v1/chat/completions"),
-    ("open.bigmodel.cn", &Method::POST, "/api/paas/v4/chat/completions") => Some("/v1/chat/completions"),
-    ("openrouter.ai", &Method::POST, "/api/v1/chat/completions") => Some("/v1/chat/completions"),
-    ("chatgpt.com", &Method::POST, "/backend-api/codex/responses") => Some("/v1/responses"),
-    _ => None,
+/// Look up the canonical path for an inbound `(host, method, path)` by
+/// consulting the registry's descriptor table. Falls back to a single
+/// global rule for `GET /v1/models` (which every provider serves at the
+/// same path).
+pub(crate) fn rewrite_target(host: &str, path: &str, method: &Method) -> Option<RewriteTarget> {
+  if method == Method::GET && path == "/v1/models" {
+    return Some(RewriteTarget::Path("/v1/models"));
   }
+  Registry::builtin().rewrite_target(host, method.as_str(), path)
 }
 
 fn proxy_router(state: AppState) -> Router {

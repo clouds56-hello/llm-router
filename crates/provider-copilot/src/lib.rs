@@ -17,14 +17,53 @@ pub use llm_core::{provider, util};
 
 pub use github_copilot::*;
 
+use llm_auth::descriptor::{EndpointSpec, ProviderDescriptor};
+use llm_auth::provider::CredentialFlavor;
 use std::sync::Arc;
 
-pub static DESCRIPTOR: llm_core::provider::ProviderDescriptor = llm_core::provider::ProviderDescriptor {
+pub const COPILOT_BASE_URL: &str = "https://api.githubcopilot.com";
+pub const COPILOT_DEVICE_CODE_URL: &str = "https://github.com/login/device/code";
+pub const COPILOT_ACCESS_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
+pub const COPILOT_TOKEN_EXCHANGE_URL: &str = "https://api.github.com/copilot_internal/v2/token";
+pub const COPILOT_USER_INFO_URL: &str = "https://api.github.com/copilot_internal/user";
+
+pub static DESCRIPTOR: ProviderDescriptor = ProviderDescriptor {
   id: ID_GITHUB_COPILOT,
+  display_name: "GitHub Copilot",
   hosts: &["api.github.com", "api.githubcopilot.com"],
+  base_url: COPILOT_BASE_URL,
+  credentials: &[CredentialFlavor::RefreshToken],
+  endpoints: &[
+    EndpointSpec {
+      endpoint: Endpoint::ChatCompletions,
+      method: "POST",
+      path: "/v1/chat/completions",
+      aliases: &[],
+    },
+    EndpointSpec {
+      endpoint: Endpoint::Messages,
+      method: "POST",
+      path: "/v1/messages",
+      aliases: &[],
+    },
+    EndpointSpec {
+      endpoint: Endpoint::Responses,
+      method: "POST",
+      path: "/v1/responses",
+      aliases: &[],
+    },
+  ],
+  rewrites: &[],
+  auth_urls: &[
+    ("device_authorize", COPILOT_DEVICE_CODE_URL),
+    ("device_token", COPILOT_ACCESS_TOKEN_URL),
+    ("token_exchange", COPILOT_TOKEN_EXCHANGE_URL),
+    ("user_info", COPILOT_USER_INFO_URL),
+  ],
   matches_url,
   validate,
   build,
+  build_auth: Some(crate::auth::provider_auth),
 };
 
 pub fn matches_url(host: &str, _path: &str, _id: &'static str) -> bool {

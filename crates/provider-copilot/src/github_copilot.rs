@@ -21,8 +21,6 @@ use crate::{error, AuthKind, Endpoint, HeaderPatchCtx, Provider, ProviderInfo, R
 #[allow(dead_code)]
 pub const GITHUB_API: &str = "https://api.github.com";
 pub const COPILOT_API: &str = "https://api.githubcopilot.com";
-pub const TOKEN_EXCHANGE_URL: &str = "https://api.github.com/copilot_internal/v2/token";
-
 /// Cached short-lived API token state.
 struct ApiToken {
   token: Option<Secret<String>>,
