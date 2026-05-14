@@ -45,7 +45,8 @@ pub(super) async fn background_stream_recorder(
 ) {
   use tokio::time::{interval, Duration};
 
-  let mut body_buf: Vec<u8> = Vec::new();
+  let mut inbound_body_buf: Vec<u8> = Vec::new();
+  let mut outbound_body_buf: Vec<u8> = Vec::new();
   let mut usage = Usage::default();
   let mut had_error = false;
   let mut bytes_streamed: u64 = 0;
@@ -59,13 +60,21 @@ pub(super) async fn background_stream_recorder(
     tokio::select! {
       msg = rx.recv() => {
         match msg {
+          Some(ObserverMsg::From(bytes)) => {
+            if max_body > 0 {
+              let remaining = max_body.saturating_sub(outbound_body_buf.len());
+              if remaining > 0 {
+                outbound_body_buf.extend_from_slice(&bytes[..bytes.len().min(remaining)]);
+              }
+            }
+          }
           Some(ObserverMsg::To(bytes)) => {
             bytes_streamed += bytes.len() as u64;
             chunks += 1;
             if max_body > 0 {
-              let remaining = max_body.saturating_sub(body_buf.len());
+              let remaining = max_body.saturating_sub(inbound_body_buf.len());
               if remaining > 0 {
-                body_buf.extend_from_slice(&bytes[..bytes.len().min(remaining)]);
+                inbound_body_buf.extend_from_slice(&bytes[..bytes.len().min(remaining)]);
               }
             }
           }
@@ -96,11 +105,12 @@ pub(super) async fn background_stream_recorder(
   }
 
   let request_error = had_error.then_some("stream terminated before completion");
-  let captured = Bytes::from(body_buf);
+  let inbound_captured = Bytes::from(inbound_body_buf);
+  let outbound_captured = Bytes::from(outbound_body_buf);
   let event = base_builder
     .with_request_error(request_error)
-    .with_response_body(captured.clone())
-    .with_outbound_response_body(Some(&captured))
+    .with_response_body(inbound_captured)
+    .with_outbound_response_body((!outbound_captured.is_empty()).then_some(&outbound_captured))
     .with_usage(usage)
     .build();
   events.emit(event);
@@ -116,4 +126,73 @@ pub(super) async fn background_stream_recorder(
     total_latency_ms: meta.started.elapsed().as_millis() as u64,
     error: had_error.then(|| "stream terminated before completion".to_string()),
   });
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::relay::recording::CompletedEventBuilder;
+  use bytes::Bytes;
+  use llm_core::event::{Event, EventBus, EventHandler};
+  use std::sync::{Arc, Mutex};
+  use std::time::Instant;
+
+  struct CollectingHandler(Arc<Mutex<Vec<(Bytes, Option<Bytes>)>>>);
+
+  impl EventHandler for CollectingHandler {
+    fn handle(&mut self, event: &Event) {
+      if let Event::RequestResult {
+        inbound_resp_body,
+        outbound_resp_body,
+        ..
+      } = event
+      {
+        self
+          .0
+          .lock()
+          .unwrap()
+          .push((inbound_resp_body.clone(), outbound_resp_body.clone()));
+      }
+    }
+  }
+
+  #[tokio::test]
+  async fn stream_recorder_keeps_upstream_and_downstream_bodies_separate() {
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    let (bus, receiver) = EventBus::new(16);
+    llm_core::event::spawn_event_loop(receiver, vec![Box::new(CollectingHandler(captured.clone()))]);
+    let events = Arc::new(bus);
+
+    let builder = CompletedEventBuilder::new(
+      1024,
+      "req_test".into(),
+      Default::default(),
+      Bytes::new(),
+      Instant::now(),
+      200,
+    );
+    let meta = StreamMeta {
+      request_id: "req_test".into(),
+      attempt: 0,
+      final_status: 200,
+      started: Instant::now(),
+      model: "model".into(),
+      endpoint: "chat_completions".into(),
+      events: events.clone(),
+    };
+    let (tx, rx) = llm_convert::sse::observer_channel();
+    let handle = tokio::spawn(background_stream_recorder(rx, builder, events.clone(), 1024, meta));
+
+    tx.send(ObserverMsg::From(Bytes::from_static(b"upstream"))).unwrap();
+    tx.send(ObserverMsg::To(Bytes::from_static(b"downstream"))).unwrap();
+    tx.send(ObserverMsg::Done).unwrap();
+    handle.await.unwrap();
+    events.shutdown().await;
+
+    let events = captured.lock().unwrap();
+    let result = events.first().expect("request result event");
+
+    assert_eq!(result.0.as_ref(), b"downstream");
+    assert_eq!(result.1.as_ref().unwrap().as_ref(), b"upstream");
+  }
 }
