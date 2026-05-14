@@ -31,6 +31,10 @@ impl EventTransformer for EndpointTranslator {
     let deltas = self.acc.push_value(value);
     Ok(self.emit.emit(&deltas))
   }
+
+  fn finish(&mut self) -> Result<Vec<SseEvent>> {
+    Ok(self.emit.finish())
+  }
 }
 
 struct EmitState {
@@ -145,5 +149,91 @@ impl EmitState {
         ),
       ],
     }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use serde_json::json;
+
+  #[test]
+  fn responses_to_chat_finishes_when_upstream_ends_without_done_sentinel() {
+    let mut t = EndpointTranslator::new(Endpoint::Responses, Endpoint::ChatCompletions);
+
+    let out = t
+      .transform(SseEvent::json(
+        Some("response.output_text.delta"),
+        json!({"type": "response.output_text.delta", "delta": "hi"}),
+      ))
+      .unwrap();
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].json.as_ref().unwrap()["choices"][0]["delta"]["content"], "hi");
+
+    let out = t
+      .transform(SseEvent::json(
+        Some("response.completed"),
+        json!({"type": "response.completed", "response": {"usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}}}),
+      ))
+      .unwrap();
+    assert_eq!(out.len(), 2);
+    assert_eq!(out[0].json.as_ref().unwrap()["usage"]["prompt_tokens"], 1);
+    assert_eq!(out[1].json.as_ref().unwrap()["choices"][0]["finish_reason"], "stop");
+
+    let out = t.finish().unwrap();
+    assert_eq!(out.len(), 1);
+    assert!(out[0].is_done());
+  }
+
+  #[test]
+  fn responses_to_chat_finish_is_idempotent() {
+    let mut t = EndpointTranslator::new(Endpoint::Responses, Endpoint::ChatCompletions);
+
+    assert_eq!(t.transform(SseEvent::done()).unwrap().len(), 1);
+    assert!(t.finish().unwrap().is_empty());
+  }
+
+  #[test]
+  fn responses_to_chat_translates_resp_md_style_reasoning_text_and_tool_arguments() {
+    let mut t = EndpointTranslator::new(Endpoint::Responses, Endpoint::ChatCompletions);
+
+    let reasoning = t
+      .transform(SseEvent::json(
+        Some("response.reasoning_text.delta"),
+        json!({"content_index":0,"delta":"Let","output_index":0,"response_id":"resp_converted","type":"response.reasoning_text.delta"}),
+      ))
+      .unwrap();
+    assert_eq!(reasoning[0].json.as_ref().unwrap()["choices"][0]["delta"]["reasoning_content"], "Let");
+
+    let text = t
+      .transform(SseEvent::json(
+        Some("response.output_text.delta"),
+        json!({"content_index":0,"delta":"I'll help","output_index":0,"response_id":"resp_converted","type":"response.output_text.delta"}),
+      ))
+      .unwrap();
+    assert_eq!(text[0].json.as_ref().unwrap()["choices"][0]["delta"]["content"], "I'll help");
+
+    let tool = t
+      .transform(SseEvent::json(
+        Some("response.function_call_arguments.delta"),
+        json!({"delta":"{\"cmd\": \"ls -la\"}","output_index":0,"response_id":"resp_converted","type":"response.function_call_arguments.delta"}),
+      ))
+      .unwrap();
+    let call = &tool[0].json.as_ref().unwrap()["choices"][0]["delta"]["tool_calls"][0];
+    assert_eq!(call["index"], 0);
+    assert_eq!(call["type"], "function");
+    assert_eq!(call["function"]["arguments"], "{\"cmd\": \"ls -la\"}");
+
+    let completed = t
+      .transform(SseEvent::json(
+        Some("response.completed"),
+        json!({"response":{"id":"resp_converted","model":"","object":"response","status":"completed"},"type":"response.completed"}),
+      ))
+      .unwrap();
+    assert_eq!(completed[0].json.as_ref().unwrap()["choices"][0]["finish_reason"], "stop");
+
+    let done = t.finish().unwrap();
+    assert_eq!(done.len(), 1);
+    assert!(done[0].is_done());
   }
 }
