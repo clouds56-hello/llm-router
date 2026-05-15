@@ -3,7 +3,7 @@ pub mod deepseek;
 
 pub use llm_catalogue as catalogue;
 pub use llm_core::provider::{
-  error, AuthKind, Endpoint, HeaderPatchCtx, Provider, ProviderInfo, RequestCtx, Result, ID_DEEPSEEK,
+  error, AuthKind, Endpoint, HeaderPatchCtx, TemplateVars, Provider, ProviderInfo, RequestCtx, Result, ID_DEEPSEEK,
 };
 pub use llm_core::{account as config, provider, util};
 

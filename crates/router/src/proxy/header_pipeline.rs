@@ -8,6 +8,7 @@ pub struct HeaderPipelineInput<'a> {
   pub provider_id: &'a str,
   pub inbound: &'a HeaderMap,
   pub provider_patch: Option<&'a HeaderMap>,
+  pub vars: &'a TemplateVars,
 }
 
 #[derive(Debug, Clone)]
@@ -20,10 +21,9 @@ pub struct HeaderPipelineOutput {
 pub fn build_headers(input: HeaderPipelineInput<'_>) -> Option<HeaderPipelineOutput> {
   let resolved = input.profiles.resolve(input.persona, input.provider_id)?;
   warn_if_unverified(input.persona, input.provider_id, &resolved);
-  let vars = parse_inbound_vars(input.inbound);
   let mut headers = HeaderMap::new();
 
-  for (name, value) in resolved.render_headers(&vars) {
+  for (name, value) in resolved.render_headers(input.vars) {
     insert_header(&mut headers, &name, &value);
   }
 
@@ -119,6 +119,7 @@ mod tests {
       provider_id: "github-copilot",
       inbound: &inbound,
       provider_patch: Some(&patch),
+      vars: &parse_inbound_vars(&inbound),
     })
     .unwrap();
 
@@ -153,6 +154,7 @@ mod tests {
       provider_id: "github-copilot",
       inbound: &HeaderMap::new(),
       provider_patch: None,
+      vars: &parse_inbound_vars(&HeaderMap::new()),
     })
     .unwrap();
     assert!(out.headers.get("x-session-affinity").is_none());

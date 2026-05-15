@@ -11,7 +11,7 @@ pub mod config;
 
 pub use llm_catalogue as catalogue;
 pub use llm_core::provider::{
-  error, AuthKind, Endpoint, EndpointRule, HeaderPatchCtx, Provider, ProviderInfo, RequestCtx, Result,
+  error, AuthKind, Endpoint, EndpointRule, HeaderPatchCtx, TemplateVars, Provider, ProviderInfo, RequestCtx, Result,
   ID_GITHUB_COPILOT,
 };
 pub use llm_core::{provider, util};

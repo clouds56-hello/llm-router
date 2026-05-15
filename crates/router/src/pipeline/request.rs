@@ -7,6 +7,7 @@ use crate::provider::{new_outbound_capture, Endpoint, RequestCtx};
 use bytes::Bytes;
 use llm_config::RouteMode;
 use llm_core::pipeline::{ParsedRequest, RequestMeta, RequestResolver, RequestSender};
+use llm_core::provider::TemplateVars;
 use serde_json::Value;
 use std::sync::Arc;
 use tracing::warn;
@@ -34,6 +35,7 @@ pub(super) struct PreparedRequest {
   pub(super) content_encoding: Option<crate::api::codec::ContentEncodingKind>,
   pub(super) provider_headers: reqwest::header::HeaderMap,
   pub(super) profile_headers: Option<reqwest::header::HeaderMap>,
+  pub(super) vars: TemplateVars,
   pub(super) account: Arc<AccountHandle>,
   pub(super) capture: crate::provider::OutboundCapture,
 }
@@ -160,7 +162,8 @@ pub(super) fn prepare_request(req: ResolvedRequest) -> crate::provider::Result<P
       .map_err(|message| crate::provider::error::Error::Profiles { message })?
   };
   let provider_headers = provider_headers(&req.meta.inbound_headers);
-  let profile_headers = build_profile_headers(&req, &req.meta.inbound_headers);
+  let vars = crate::proxy::header_pipeline::parse_inbound_vars(&req.meta.inbound_headers);
+  let profile_headers = build_profile_headers(&req, &req.meta.inbound_headers, &vars);
   Ok(PreparedRequest {
     meta: req.meta,
     inbound_body: req.body,
@@ -171,6 +174,7 @@ pub(super) fn prepare_request(req: ResolvedRequest) -> crate::provider::Result<P
     content_encoding: req.content_encoding,
     provider_headers,
     profile_headers,
+    vars,
     account: req.account,
     capture: new_outbound_capture(),
   })
@@ -189,6 +193,7 @@ async fn send_request(state: &AppState, req: &PreparedRequest) -> crate::provide
     behave_as: req.meta.behave_as.as_deref(),
     profile_headers: req.profile_headers.clone(),
     outbound: Some(req.capture.clone()),
+    vars: req.vars.clone(),
   };
   match req.meta.upstream_endpoint {
     Endpoint::ChatCompletions => req.account.provider.chat(ctx).await,
@@ -200,6 +205,7 @@ async fn send_request(state: &AppState, req: &PreparedRequest) -> crate::provide
 fn build_profile_headers(
   req: &ResolvedRequest,
   inbound: &reqwest::header::HeaderMap,
+  vars: &TemplateVars,
 ) -> Option<reqwest::header::HeaderMap> {
   let persona = selected_persona(req)?;
   crate::proxy::header_pipeline::build_headers(crate::proxy::header_pipeline::HeaderPipelineInput {
@@ -208,6 +214,7 @@ fn build_profile_headers(
     provider_id: req.account.provider.info().id.as_str(),
     inbound,
     provider_patch: Some(&account_extra_headers(&req.account.config.load().headers)),
+    vars,
   })
   .map(|out| out.headers)
 }
@@ -301,6 +308,7 @@ pub fn dry_run_request(
         stream: prepared.meta.stream,
         initiator: prepared.meta.initiator.as_str(),
         inbound_headers: &prepared.provider_headers,
+        vars: &prepared.vars,
       },
     )
     .ok();

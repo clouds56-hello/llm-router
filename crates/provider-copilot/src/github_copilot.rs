@@ -16,7 +16,7 @@ use std::sync::{Arc, OnceLock};
 use tokio::sync::Mutex as AsyncMutex;
 use tracing::{debug, instrument};
 
-use crate::{error, AuthKind, Endpoint, EndpointRule, HeaderPatchCtx, Provider, ProviderInfo, RequestCtx, Result, ID_GITHUB_COPILOT};
+use crate::{error, AuthKind, Endpoint, EndpointRule, HeaderPatchCtx, Provider, ProviderInfo, RequestCtx, Result, TemplateVars, ID_GITHUB_COPILOT};
 
 #[allow(dead_code)]
 pub const GITHUB_API: &str = "https://api.github.com";
@@ -313,6 +313,7 @@ impl CopilotProvider {
         stream: ctx.stream,
         initiator: &initiator,
         inbound_headers: ctx.inbound_headers,
+        vars: &ctx.vars,
       },
     )?;
     let url = format!("{COPILOT_API}{path}");
@@ -404,6 +405,7 @@ mod tests {
       stream,
       initiator,
       inbound_headers: Box::leak(Box::new(HeaderMap::new())),
+      vars: Box::leak(Box::new(TemplateVars::default())),
     }
   }
 
@@ -472,6 +474,7 @@ mod tests {
       stream: false,
       initiator: "user",
       inbound_headers: &HeaderMap::new(),
+      vars: &TemplateVars::default(),
     };
     let err = p.patch_headers(&mut h, &ctx).unwrap_err();
     assert!(err.to_string().contains("copilot bearer token"), "{err}");

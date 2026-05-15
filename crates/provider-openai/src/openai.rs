@@ -7,7 +7,7 @@ use serde_json::Value;
 use std::sync::Arc;
 use tracing::{debug, instrument, warn};
 
-use crate::{error, AuthKind, Endpoint, HeaderPatchCtx, Provider, ProviderInfo, RequestCtx, Result, ID_OPENAI};
+use crate::{error, AuthKind, Endpoint, HeaderPatchCtx, Provider, ProviderInfo, RequestCtx, Result, TemplateVars, ID_OPENAI};
 
 pub const OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 
@@ -58,6 +58,7 @@ impl OpenAiProvider {
         stream: ctx.stream,
         initiator: ctx.initiator,
         inbound_headers: ctx.inbound_headers,
+        vars: &ctx.vars,
       },
     )?;
     let body_bytes = ctx.request_body_bytes();
@@ -123,6 +124,7 @@ impl Provider for OpenAiProvider {
         stream: false,
         initiator: "user",
         inbound_headers: &HeaderMap::new(),
+        vars: &TemplateVars::default(),
       },
     )?;
     let resp = crate::util::http::send(
@@ -194,6 +196,7 @@ mod tests {
       stream: false,
       initiator: "user",
       inbound_headers: Box::leak(Box::new(HeaderMap::new())),
+      vars: Box::leak(Box::new(TemplateVars::default())),
     }
   }
 

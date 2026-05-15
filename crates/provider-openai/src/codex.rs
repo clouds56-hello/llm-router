@@ -8,7 +8,7 @@ use snafu::ResultExt;
 use std::sync::Arc;
 use tracing::{debug, instrument, warn};
 
-use crate::{error, AuthKind, Endpoint, HeaderPatchCtx, Provider, ProviderInfo, RequestCtx, Result, ID_CODEX};
+use crate::{error, AuthKind, Endpoint, HeaderPatchCtx, TemplateVars, Provider, ProviderInfo, RequestCtx, Result, ID_CODEX};
 
 pub const CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 pub const CODEX_CLIENT_VERSION: &str = "0.130.0";
@@ -68,6 +68,7 @@ impl CodexProvider {
         stream: ctx.stream,
         initiator: ctx.initiator,
         inbound_headers: ctx.inbound_headers,
+        vars: &ctx.vars,
       },
     )?;
     let body_bytes = ctx.request_body_bytes();
@@ -178,6 +179,7 @@ impl CodexProvider {
         stream: false,
         initiator: "user",
         inbound_headers: &HeaderMap::new(),
+        vars: &TemplateVars::default(),
       },
     )?;
     Ok(headers)
@@ -268,6 +270,7 @@ mod tests {
       stream: false,
       initiator: "user",
       inbound_headers: Box::leak(Box::new(HeaderMap::new())),
+      vars: Box::leak(Box::new(TemplateVars::default())),
     }
   }
 

@@ -26,7 +26,7 @@ use serde_json::Value;
 use snafu::ResultExt;
 use tracing::{debug, instrument, warn};
 
-use crate::{error, AuthKind, HeaderPatchCtx, ModelInfo, Provider, ProviderInfo, RequestCtx, Result, ZAI_PROVIDERS};
+use crate::{error, AuthKind, HeaderPatchCtx, ModelInfo, Provider, ProviderInfo, RequestCtx, Result, TemplateVars, ZAI_PROVIDERS};
 
 /// Default upstream for the coding plan. Override per-account via
 /// `[accounts.<id>.zai] base_url = "..."`.
@@ -243,6 +243,7 @@ impl Provider for ZaiProvider {
         stream: ctx.stream,
         initiator: ctx.initiator,
         inbound_headers: ctx.inbound_headers,
+        vars: &ctx.vars,
       },
     )?;
     let body_bytes = ctx.request_body_bytes();
@@ -438,6 +439,7 @@ mod tests {
       behave_as: None,
       profile_headers: None,
       outbound: Some(capture.clone()),
+      vars: TemplateVars::default(),
     };
     let resp = provider.chat(ctx).await.unwrap();
     assert_eq!(resp.status(), reqwest::StatusCode::OK);
@@ -465,6 +467,7 @@ mod tests {
       stream,
       initiator: "user",
       inbound_headers: Box::leak(Box::new(HeaderMap::new())),
+      vars: Box::leak(Box::new(TemplateVars::default())),
     }
   }
 

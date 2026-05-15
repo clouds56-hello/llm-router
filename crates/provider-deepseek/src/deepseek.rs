@@ -9,7 +9,7 @@ use snafu::ResultExt;
 use std::sync::Arc;
 use tracing::{debug, instrument, warn};
 
-use crate::{error, AuthKind, HeaderPatchCtx, Provider, ProviderInfo, RequestCtx, Result, ID_DEEPSEEK};
+use crate::{error, AuthKind, HeaderPatchCtx, TemplateVars, Provider, ProviderInfo, RequestCtx, Result, ID_DEEPSEEK};
 
 pub const DEFAULT_BASE_URL: &str = "https://api.deepseek.com";
 
@@ -87,6 +87,7 @@ impl DeepSeekProvider {
         stream: ctx.stream,
         initiator: ctx.initiator,
         inbound_headers: ctx.inbound_headers,
+        vars: &ctx.vars,
       },
     )?;
     let body_bytes = ctx.request_body_bytes();
@@ -162,6 +163,7 @@ impl Provider for DeepSeekProvider {
         stream: false,
         initiator: "user",
         inbound_headers: &HeaderMap::new(),
+        vars: &TemplateVars::default(),
       },
     )?;
     let resp = crate::util::http::send(
@@ -308,6 +310,7 @@ mod tests {
       stream,
       initiator: "user",
       inbound_headers: Box::leak(Box::new(HeaderMap::new())),
+      vars: Box::leak(Box::new(TemplateVars::default())),
     }
   }
 

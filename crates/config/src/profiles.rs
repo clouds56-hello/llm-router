@@ -48,14 +48,7 @@ pub struct Profiles {
   table: BTreeMap<String, PersonaProfile>,
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct TemplateVars {
-  pub session_id: Option<String>,
-  pub request_id: Option<String>,
-  pub project_cwd: Option<String>,
-  pub interaction_id: Option<String>,
-  pub account_id: Option<String>,
-}
+pub use llm_core::provider::TemplateVars;
 
 static GLOBAL: OnceLock<Profiles> = OnceLock::new();
 static WARNED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
