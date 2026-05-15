@@ -293,19 +293,14 @@ fn input_to_messages(input: &Value) -> Result<(Vec<String>, Vec<IrMessage>)> {
     .ok_or_else(|| ConvertError::bad_shape("input", "expected string or array"))?;
   let mut system_parts = Vec::new();
   let mut messages = Vec::new();
+  let mut pending_assistant: Option<IrMessage> = None;
   for item in arr {
     // Dispatch on `type` for special items first; everything else falls
     // through to role-based message handling.
     match item.get("type").and_then(Value::as_str) {
       Some("reasoning") => {
         if let Some(text) = reasoning_text_from_input_item(item) {
-          messages.push(IrMessage {
-            role: Role::Assistant,
-            content: vec![ContentPart::Reasoning { text }],
-            tool_call_id: None,
-            name: None,
-            raw: None,
-          });
+          push_assistant_part(&mut pending_assistant, ContentPart::Reasoning { text });
         }
         continue;
       }
@@ -317,22 +312,20 @@ fn input_to_messages(input: &Value) -> Result<(Vec<String>, Vec<IrMessage>)> {
           Value::String(s) => serde_json::from_str(s).unwrap_or_else(|_| Value::String(s.clone())),
           other => other.clone(),
         };
-        messages.push(IrMessage {
-          role: Role::Assistant,
-          content: vec![ContentPart::ToolCall {
+        push_assistant_part(
+          &mut pending_assistant,
+          ContentPart::ToolCall {
             call: ToolCall {
               id: call_id,
               name,
               arguments,
             },
-          }],
-          tool_call_id: None,
-          name: None,
-          raw: None,
-        });
+          },
+        );
         continue;
       }
       Some("function_call_output") => {
+        flush_pending_assistant(&mut messages, &mut pending_assistant);
         let call_id = item.get("call_id").and_then(Value::as_str).map(str::to_string);
         let output = item
           .get("output")
@@ -353,15 +346,41 @@ fn input_to_messages(input: &Value) -> Result<(Vec<String>, Vec<IrMessage>)> {
     let message = input_item_to_message(item)?;
     let role = item.get("role").and_then(Value::as_str).unwrap_or("user");
     if matches!(role, "system" | "developer") {
+      flush_pending_assistant(&mut messages, &mut pending_assistant);
       let text = text_from_parts(&message.content);
       if !text.is_empty() {
         system_parts.push(text);
       }
+    } else if role == "assistant" {
+      let pending = pending_assistant.get_or_insert_with(empty_assistant_message);
+      pending.content.extend(message.content);
     } else {
+      flush_pending_assistant(&mut messages, &mut pending_assistant);
       messages.push(message);
     }
   }
+  flush_pending_assistant(&mut messages, &mut pending_assistant);
   Ok((system_parts, messages))
+}
+
+fn empty_assistant_message() -> IrMessage {
+  IrMessage {
+    role: Role::Assistant,
+    content: Vec::new(),
+    tool_call_id: None,
+    name: None,
+    raw: None,
+  }
+}
+
+fn push_assistant_part(pending: &mut Option<IrMessage>, part: ContentPart) {
+  pending.get_or_insert_with(empty_assistant_message).content.push(part);
+}
+
+fn flush_pending_assistant(messages: &mut Vec<IrMessage>, pending: &mut Option<IrMessage>) {
+  if let Some(message) = pending.take() {
+    messages.push(message);
+  }
 }
 
 /// Pull text out of a Responses-API reasoning input item. Prefers
@@ -586,6 +605,55 @@ mod tests {
         "Chunk ID: f0d8f5\nWall time: 0.0000 seconds\nProcess exited with code 0\nOriginal token count: 0\nOutput:\n"
       )
     );
+  }
+
+  #[test]
+  fn responses_input_assistant_parts_render_as_one_chat_message() {
+    let body = json!({
+      "model": "deepseek-v4-flash",
+      "input": [
+        {
+          "type": "reasoning",
+          "content": [{ "type": "reasoning_text", "text": "think" }],
+          "summary": []
+        },
+        {
+          "role": "assistant",
+          "content": [{ "type": "output_text", "text": "answer" }]
+        },
+        {
+          "type": "function_call",
+          "call_id": "call_1",
+          "name": "lookup",
+          "arguments": "{\"q\":\"rust\"}"
+        },
+        {
+          "type": "function_call_output",
+          "call_id": "call_1",
+          "output": "result"
+        }
+      ]
+    });
+
+    let messages = render_chat_messages(&body);
+    assert_eq!(messages.len(), 2, "expected assistant plus tool messages, got {messages:?}");
+
+    let assistant = &messages[0];
+    assert_eq!(assistant.get("role").and_then(Value::as_str), Some("assistant"));
+    assert_eq!(assistant.get("content").and_then(Value::as_str), Some("answer"));
+    assert_eq!(assistant.get("reasoning_content").and_then(Value::as_str), Some("think"));
+    let tool_calls = assistant
+      .get("tool_calls")
+      .and_then(Value::as_array)
+      .expect("tool_calls present");
+    assert_eq!(tool_calls.len(), 1);
+    assert_eq!(tool_calls[0].get("id").and_then(Value::as_str), Some("call_1"));
+    assert_eq!(tool_calls[0].pointer("/function/name").and_then(Value::as_str), Some("lookup"));
+
+    let tool = &messages[1];
+    assert_eq!(tool.get("role").and_then(Value::as_str), Some("tool"));
+    assert_eq!(tool.get("tool_call_id").and_then(Value::as_str), Some("call_1"));
+    assert_eq!(tool.get("content").and_then(Value::as_str), Some("result"));
   }
 
   fn single_item_request(item: Value) -> Value {
