@@ -59,7 +59,7 @@ async fn handle(
     local_addr,
     mode,
     route_mode_hint: hx.route_mode_hint.clone(),
-    inbound_headers: inbound.clone(),
+    inbound_headers: (&inbound).into(),
   });
 
   let decoded = match super::codec::decode_json_request(&inbound, body) {

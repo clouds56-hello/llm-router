@@ -110,9 +110,9 @@ pub(crate) trait RequestParser: Send + Sync {
         project_id,
         initiator: body_meta.initiator,
         header_initiator: body_meta.header_initiator,
-        behave_as,
-        inbound_headers: headers,
-      },
+      behave_as,
+      inbound_headers: (&headers).into(),
+    },
       body,
     }
   }

@@ -33,7 +33,7 @@ impl OutputTransformer for EndpointOutputTransformer {
       upstream.started,
     );
     let mut ctx = ctx;
-    ctx.downstream_headers = upstream.meta.inbound_headers.clone();
+    ctx.downstream_headers = upstream.meta.inbound_headers.clone().into();
     buffered_response(state, upstream.resp, ctx, &upstream.inbound_body).await
   }
 
@@ -48,7 +48,7 @@ impl OutputTransformer for EndpointOutputTransformer {
       upstream.started,
     );
     let mut ctx = ctx;
-    ctx.downstream_headers = upstream.meta.inbound_headers.clone();
+    ctx.downstream_headers = upstream.meta.inbound_headers.clone().into();
     stream_response(state, upstream.resp, ctx, &upstream.inbound_body).await
   }
 }

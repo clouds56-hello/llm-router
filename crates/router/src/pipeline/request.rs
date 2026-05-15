@@ -102,8 +102,10 @@ fn resolve_request(state: &AppState, parsed: ParsedRequest, attempt: usize) -> R
       parsed
         .meta
         .inbound_headers
-        .get(crate::api::routing::RouteResolver::mode_header())
-        .and_then(|v| v.to_str().ok()),
+        .get(&llm_headers::HeaderName::new(
+          crate::api::routing::RouteResolver::mode_header(),
+        ))
+        .map(|v| v.as_str()),
     )
     .map_err(|e| ApiError::bad_request(e.to_string()))?;
   if route.mode == RouteMode::Passthrough {
@@ -161,9 +163,10 @@ pub(super) fn prepare_request(req: ResolvedRequest) -> crate::provider::Result<P
     crate::api::codec::encode_body_bytes(debug_outbound_body.as_ref(), req.content_encoding)
       .map_err(|message| crate::provider::error::Error::Profiles { message })?
   };
-  let provider_headers = provider_headers(&req.meta.inbound_headers);
-  let vars = crate::proxy::header_pipeline::parse_inbound_vars(&req.meta.inbound_headers);
-  let profile_headers = build_profile_headers(&req, &req.meta.inbound_headers, &vars);
+  let inbound_compat: reqwest::header::HeaderMap = req.meta.inbound_headers.clone().into();
+  let provider_headers = provider_headers(&inbound_compat);
+  let vars = crate::proxy::header_pipeline::parse_inbound_vars(&inbound_compat);
+  let profile_headers = build_profile_headers(&req, &inbound_compat, &vars);
   Ok(PreparedRequest {
     meta: req.meta,
     inbound_body: req.body,
@@ -181,6 +184,8 @@ pub(super) fn prepare_request(req: ResolvedRequest) -> crate::provider::Result<P
 }
 
 async fn send_request(state: &AppState, req: &PreparedRequest) -> crate::provider::Result<reqwest::Response> {
+  let inbound_lh: llm_headers::HeaderMap = (&req.provider_headers).into();
+  let profile_lh: Option<llm_headers::HeaderMap> = req.profile_headers.as_ref().map(|h| h.into());
   let ctx = RequestCtx {
     endpoint: req.meta.upstream_endpoint,
     http: &state.http,
@@ -189,9 +194,9 @@ async fn send_request(state: &AppState, req: &PreparedRequest) -> crate::provide
     content_encoding: req.content_encoding.map(|encoding| encoding.as_str()),
     stream: req.meta.stream,
     initiator: req.meta.initiator.as_str(),
-    inbound_headers: &req.provider_headers,
+    inbound_headers: &inbound_lh,
     behave_as: req.meta.behave_as.as_deref(),
-    profile_headers: req.profile_headers.clone(),
+    profile_headers: profile_lh,
     outbound: Some(req.capture.clone()),
     vars: req.vars.clone(),
   };
@@ -294,7 +299,12 @@ pub fn dry_run_request(
   resolved.decoded_body = decoded_body;
   resolved.content_encoding = content_encoding;
   let prepared = prepare_request(resolved).map_err(|e| ApiError::bad_gateway(e.to_string()))?;
-  let mut headers = prepared.profile_headers.clone().unwrap_or_default();
+  let mut headers: llm_headers::HeaderMap = prepared
+    .profile_headers
+    .as_ref()
+    .map(|h| h.into())
+    .unwrap_or_default();
+  let inbound_lh: llm_headers::HeaderMap = (&prepared.provider_headers).into();
   prepared
     .account
     .provider
@@ -307,11 +317,12 @@ pub fn dry_run_request(
         content_encoding: prepared.content_encoding.map(|encoding| encoding.as_str()),
         stream: prepared.meta.stream,
         initiator: prepared.meta.initiator.as_str(),
-        inbound_headers: &prepared.provider_headers,
+        inbound_headers: &inbound_lh,
         vars: &prepared.vars,
       },
     )
     .ok();
+  let headers: reqwest::header::HeaderMap = headers.into();
   Ok(DryRunOutput {
     account_id: prepared.account.id(),
     provider_id: prepared.account.provider.info().id.clone(),

@@ -59,7 +59,7 @@ pub(super) async fn proxy_passthrough(
     local_addr: Some(local_addr.to_string()),
     mode,
     route_mode_hint: hx.route_mode_hint.clone(),
-    inbound_headers: parts.headers.clone(),
+    inbound_headers: (&parts.headers).into(),
   });
 
   let request_body = axum::body::to_bytes(Body::new(body), usize::MAX)
@@ -153,10 +153,10 @@ pub(super) async fn proxy_passthrough(
     attempt: ctx.attempt,
     outbound_status: status.as_u16(),
     latency_ms: started.elapsed().as_millis() as u64,
-    outbound_resp_headers: response.headers().clone(),
+    outbound_resp_headers: response.headers().into(),
     outbound_req_method: Some(parts.method.to_string()),
     outbound_req_url: Some(url.clone()),
-    outbound_req_headers: Some(outbound_req_headers.clone()),
+    outbound_req_headers: Some((&outbound_req_headers).into()),
     outbound_req_body: Some(request_body.clone()),
   });
 

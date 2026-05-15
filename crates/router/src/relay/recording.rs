@@ -117,7 +117,7 @@ impl CompletedEventBuilder {
       inbound_status: self.status,
       usage: self.usage,
       request_error: self.request_error,
-      inbound_resp_headers: self.inbound_resp_headers,
+      inbound_resp_headers: (&self.inbound_resp_headers).into(),
       inbound_resp_body: clip_body(&self.inbound_resp_body, self.max),
       outbound_resp_body: self.outbound_resp_body.map(|b| clip_body(&b, self.max)),
       messages,
