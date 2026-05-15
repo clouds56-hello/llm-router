@@ -44,7 +44,10 @@ pub async fn run(cfg_path: Option<PathBuf>, args: ProviderArgs) -> Result<()> {
   Ok(())
 }
 
-fn endpoints_for_model(descriptor: &'static llm_auth::descriptor::ProviderDescriptor, model_id: &str) -> Vec<Endpoint> {
+pub(super) fn endpoints_for_model(
+  descriptor: &'static llm_auth::descriptor::ProviderDescriptor,
+  model_id: &str,
+) -> Vec<Endpoint> {
   let all: Vec<Endpoint> = descriptor.endpoints.iter().map(|e| e.endpoint).collect();
   let Some(rules) = descriptor.model_endpoint_rules else {
     return all;
