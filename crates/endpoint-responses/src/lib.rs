@@ -9,6 +9,9 @@ pub mod item;
 pub mod request;
 pub mod response;
 
+#[cfg(debug_assertions)]
+mod extra_keys_impls;
+
 pub use content::{InputContentPart, OutputContentPart, ReasoningPart};
 pub use event::{ResponsesEvent, ResponsesEventCommon};
 pub use item::{

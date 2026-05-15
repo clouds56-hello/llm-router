@@ -6,6 +6,9 @@ pub mod message;
 pub mod request;
 pub mod response;
 
+#[cfg(debug_assertions)]
+mod extra_keys_impls;
+
 pub use content::{ContentBlock, ContentBlockDelta};
 pub use event::MessagesEvent;
 pub use message::Message;

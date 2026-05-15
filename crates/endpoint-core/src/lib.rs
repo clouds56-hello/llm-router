@@ -13,8 +13,13 @@ pub mod tool;
 pub mod traits;
 pub mod usage;
 
+#[cfg(debug_assertions)]
+mod extra_keys_impls;
+
 pub use endpoint::Endpoint;
 pub use extras::Extras;
+#[cfg(debug_assertions)]
+pub use extras::{join_path, push_extras, ExtraKeys};
 pub use finish::FinishReason;
 pub use role::Role;
 pub use tool::{ToolCall, ToolDef};

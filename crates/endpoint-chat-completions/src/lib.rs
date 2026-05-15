@@ -10,6 +10,9 @@ pub mod message;
 pub mod request;
 pub mod response;
 
+#[cfg(debug_assertions)]
+mod extra_keys_impls;
+
 pub use content::{ChatContent, ContentPart};
 pub use event::{ChatChunk, ChatDelta, ChatEvent, ChunkChoice};
 pub use message::{ChatMessage, ChatToolCall, ChatToolFunction};
