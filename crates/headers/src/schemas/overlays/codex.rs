@@ -2,6 +2,11 @@
 //!
 //! Headers required when targeting the ChatGPT-account Codex backend on top
 //! of a base persona.
+//!
+//! SCOPE: this overlay models **outbound** headers the router injects /
+//! validates when forwarding to `chatgpt.com`. The codex-cli-native
+//! inbound headers (`originator`, `version`, `session_id`, `thread_id`,
+//! `x-codex-*`) are modelled directly on `CodexCliHeaders`.
 
 use crate::error::Error;
 use crate::keys;

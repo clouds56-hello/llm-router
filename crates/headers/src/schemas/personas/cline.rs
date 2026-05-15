@@ -1,4 +1,9 @@
 //! Headers emitted by the Cline CLI client.
+//!
+//! NOTE: not yet verified against real-world inbound captures — no `cline`
+//! traffic was observed in the mined request logs. Field set is a
+//! best-effort outbound model and may need refinement once captures
+//! become available.
 
 use crate::error::Error;
 use crate::keys;

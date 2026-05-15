@@ -2,6 +2,13 @@
 //!
 //! Headers required by the Copilot proxy regardless of which CLI persona
 //! originated the request.
+//!
+//! SCOPE: this overlay models **outbound** headers the router injects when
+//! forwarding to `api.githubcopilot.com`. The mined inbound matrix never
+//! shows `Editor-Version`, `Editor-Plugin-Version`, `Copilot-Integration-Id`,
+//! or `Copilot-Vision-Request` because those are added downstream of the
+//! gateway. Inbound-only Copilot signals (e.g. `X-Initiator`,
+//! `OpenAI-Intent`) are observed from CLI clients targeting the gateway.
 
 use crate::error::Error;
 use crate::keys;
