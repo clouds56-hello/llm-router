@@ -519,10 +519,10 @@ mod tests {
       attempt: 0,
       outbound_status: 200,
       latency_ms: 1,
-      outbound_resp_headers: HeaderMap::new(),
+      outbound_resp_headers: llm_headers::HeaderMap::new(),
       outbound_req_method: Some("POST".to_string()),
       outbound_req_url: Some("https://api.openai.com/v1/chat/completions".to_string()),
-      outbound_req_headers: Some(req_headers.clone()),
+      outbound_req_headers: Some((&req_headers).into()),
       outbound_req_body: Some(req_body.clone()),
     });
 

@@ -5,7 +5,7 @@ pub mod sessions;
 pub mod usage;
 
 use bytes::Bytes;
-use reqwest::header::HeaderMap;
+use llm_headers::HeaderMap;
 use snafu::Snafu;
 
 use llm_core::db::SessionSource;
@@ -18,7 +18,7 @@ pub use usage::UsageDb;
 /// is sensitive (`authorization`, `proxy-authorization`, `cookie`, anything
 /// containing `api-key`). Public so both inbound (server::forward) and
 /// outbound (db::requests) capture paths share the same redaction policy.
-pub fn headers_json(headers: &reqwest::header::HeaderMap) -> Bytes {
+pub fn headers_json(headers: &llm_headers::HeaderMap) -> Bytes {
   use serde_json::{Map, Value};
   let mut out = Map::new();
   for (name, value) in headers {
@@ -26,7 +26,7 @@ pub fn headers_json(headers: &reqwest::header::HeaderMap) -> Bytes {
     let value = if is_sensitive_header(&key) {
       "<redacted>".to_string()
     } else {
-      value.to_str().unwrap_or("<non-utf8>").to_string()
+      value.as_str().to_string()
     };
     out.insert(key, Value::String(value));
   }
@@ -592,7 +592,7 @@ impl EventHandler for DbEventHandler {
 mod tests {
   use super::*;
   use llm_core::event::{Event, EventHandler};
-  use reqwest::header::HeaderMap;
+  use llm_headers::HeaderMap;
   use rusqlite::{params, Connection};
 
   fn tempdir() -> std::path::PathBuf {
@@ -955,7 +955,7 @@ mod tests {
     let ts = 1_700_000_000;
     let mut event = headers(req, ts);
     if let Event::RequestHeaders { inbound_headers, .. } = &mut event {
-      inbound_headers.insert("x-test", "1".parse().unwrap());
+      inbound_headers.insert("x-test", "1");
     }
 
     h.handle(&started(req, ts));
@@ -1240,7 +1240,7 @@ mod tests {
 
     // --- 2. RequestHeaders ---------------------------------------------------
     let mut inbound_headers = HeaderMap::new();
-    inbound_headers.insert("x-request-id", "abc-123".parse().unwrap());
+    inbound_headers.insert("x-request-id", "abc-123");
     let headers_event = Event::RequestHeaders {
       request_id: req.into(),
       ts,
@@ -1313,9 +1313,9 @@ mod tests {
 
     // --- 4. RequestResponded -------------------------------------------------
     let mut outbound_resp_headers = HeaderMap::new();
-    outbound_resp_headers.insert("x-upstream", "yes".parse().unwrap());
+    outbound_resp_headers.insert("x-upstream", "yes");
     let mut outbound_req_headers = HeaderMap::new();
-    outbound_req_headers.insert("x-custom", "yes".parse().unwrap());
+    outbound_req_headers.insert("x-custom", "yes");
     let responded_event = Event::RequestResponded {
       request_id: req.into(),
       attempt: 0,
@@ -1348,7 +1348,7 @@ mod tests {
 
     // --- 5. RequestResult ----------------------------------------------------
     let mut inbound_resp_headers_map = HeaderMap::new();
-    inbound_resp_headers_map.insert("content-type", "application/json".parse().unwrap());
+    inbound_resp_headers_map.insert("content-type", "application/json");
     let usage = Usage {
       input_tokens: Some(11),
       output_tokens: Some(22),

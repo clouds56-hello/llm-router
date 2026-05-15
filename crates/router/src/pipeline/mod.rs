@@ -429,8 +429,8 @@ mod tests {
     assert_eq!(parsed.meta.initiator, "user");
     assert_eq!(parsed.body, body);
     assert_eq!(
-      parsed.meta.inbound_headers.get("x-session-id"),
-      headers.get("x-session-id")
+      parsed.meta.inbound_headers.get(&"x-session-id".into()).map(|v| v.as_str()),
+      headers.get("x-session-id").and_then(|v| v.to_str().ok())
     );
   }
 
@@ -532,7 +532,7 @@ mod tests {
         initiator: "user".into(),
         header_initiator: None,
         behave_as: None,
-        inbound_headers: HeaderMap::new(),
+        inbound_headers: llm_headers::HeaderMap::new(),
       },
       body: json!({
         "model": "glm-4.6",
@@ -590,7 +590,7 @@ mod tests {
         initiator: "agent".into(),
         header_initiator: Some("agent".into()),
         behave_as: Some("opencode".into()),
-        inbound_headers: headers,
+        inbound_headers: (&headers).into(),
       },
       body: json!({
         "model": "glm-4.6",
@@ -642,7 +642,7 @@ mod tests {
     assert_eq!(inbound_status, 400);
     assert!(request_error.as_deref().unwrap().contains("tools.0.function.name"));
     assert_eq!(
-      inbound_resp_headers.get(axum::http::header::CONTENT_TYPE).unwrap(),
+      inbound_resp_headers.get(&"content-type".into()).unwrap().as_str(),
       "application/json"
     );
     let envelope: serde_json::Value = serde_json::from_slice(&inbound_resp_body).unwrap();
@@ -722,7 +722,7 @@ mod tests {
       initiator: "user".into(),
       header_initiator: None,
       behave_as: None,
-      inbound_headers: HeaderMap::new(),
+      inbound_headers: llm_headers::HeaderMap::new(),
     };
 
     let transformed = transformer.transform_input(&meta, body.clone()).unwrap();

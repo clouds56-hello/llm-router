@@ -283,10 +283,10 @@ impl RequestsDb {
     attempt: u32,
     latency_header_ms: u64,
     status: u16,
-    outbound_resp_headers: &reqwest::header::HeaderMap,
+    outbound_resp_headers: &llm_headers::HeaderMap,
     outbound_req_method: Option<&str>,
     outbound_req_url: Option<&str>,
-    outbound_req_headers: Option<&reqwest::header::HeaderMap>,
+    outbound_req_headers: Option<&llm_headers::HeaderMap>,
     outbound_req_body: Option<&bytes::Bytes>,
   ) -> Result<()> {
     let request_id = composite_request_id(base_request_id, attempt);
@@ -648,8 +648,8 @@ mod tests {
     )
     .unwrap();
 
-    let mut headers = reqwest::header::HeaderMap::new();
-    headers.insert("x-test", "1".parse().unwrap());
+    let mut headers = llm_headers::HeaderMap::new();
+    headers.insert("x-test", "1");
     let with_headers = HttpSnapshot {
       method: Some("POST".into()),
       url: Some("https://example.test/original".into()),

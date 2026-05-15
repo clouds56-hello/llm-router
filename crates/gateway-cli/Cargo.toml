@@ -25,6 +25,7 @@ llm-provider-deepseek = { workspace = true }
 llm-provider-openai = { workspace = true }
 llm-provider-zai = { workspace = true }
 llm-auth = { workspace = true }
+llm-headers = { workspace = true }
 anyhow = { workspace = true }
 arc-swap = { workspace = true }
 async-trait = { workspace = true }

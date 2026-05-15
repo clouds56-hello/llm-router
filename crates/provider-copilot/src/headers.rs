@@ -64,7 +64,7 @@ pub fn copilot_request_headers(
 
   // Extra (free-form) headers — applied last, overriding earlier values.
   for (k, v) in &h.extra_headers {
-    m.insert(&HeaderName::new(k.clone()), HeaderValue::from_string(v.clone()));
+    m.replace(&HeaderName::new(k.clone()), HeaderValue::from_string(v.clone()));
   }
   Ok(m)
 }
