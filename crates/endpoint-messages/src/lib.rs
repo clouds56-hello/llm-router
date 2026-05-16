@@ -3,6 +3,7 @@
 pub mod content;
 pub mod event;
 pub mod message;
+pub mod parameters;
 pub mod request;
 pub mod response;
 pub mod usage;
@@ -13,6 +14,7 @@ mod extra_keys_impls;
 pub use content::{ContentBlock, ContentBlockDelta};
 pub use event::MessagesEvent;
 pub use message::Message;
+pub use parameters::{MessagesExtraParameters, MessagesRequestParameters};
 pub use request::{MessagesRequest, MessagesToolChoice, MessagesToolDef, SystemPrompt};
 pub use response::MessagesResponse;
 pub use usage::MessagesUsage;

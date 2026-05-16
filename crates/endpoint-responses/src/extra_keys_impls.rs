@@ -170,6 +170,7 @@ impl ExtraKeys for ResponsesResponse {
   fn extra_keys_into(&self, out: &mut Vec<String>, prefix: &str) {
     push_extras(&self.extras, prefix, out);
     self.output.extra_keys_into(out, &join_path(prefix, "output"));
+    self.tools.extra_keys_into(out, &join_path(prefix, "tools"));
     self.usage.extra_keys_into(out, &join_path(prefix, "usage"));
   }
 }

@@ -7,6 +7,7 @@
 pub mod content;
 pub mod event;
 pub mod message;
+pub mod parameters;
 pub mod request;
 pub mod response;
 pub mod usage;
@@ -17,6 +18,7 @@ mod extra_keys_impls;
 pub use content::{ChatContent, ContentPart};
 pub use event::{ChatChunk, ChatDelta, ChatEvent, ChunkChoice};
 pub use message::{ChatMessage, ChatToolCall, ChatToolFunction};
+pub use parameters::{ChatExtraParameters, ChatRequestParameters};
 pub use request::{ChatRequest, ChatToolChoice, ChatToolDef};
 pub use response::{ChatChoice, ChatResponse};
 pub use usage::ChatUsage;

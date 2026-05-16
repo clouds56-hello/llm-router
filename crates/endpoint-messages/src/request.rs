@@ -5,6 +5,7 @@ use llm_endpoint_core::Extras;
 
 use crate::content::ContentBlock;
 use crate::message::Message;
+use crate::parameters::{MessagesExtraParameters, MessagesRequestParameters};
 
 /// `system` accepts either a single string or an array of content
 /// blocks (typically `text` blocks).
@@ -16,6 +17,12 @@ pub enum SystemPrompt {
 }
 
 /// Request body for `POST /v1/messages`.
+///
+/// Behavior knobs (temperature, top_p, top_k, service_tier,
+/// tool_choice, thinking) live on the embedded
+/// [`MessagesRequestParameters`]; structured payloads, content,
+/// `max_tokens` (required) and streaming controls stay at the top
+/// level.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MessagesRequest {
   pub model: String,
@@ -23,24 +30,18 @@ pub struct MessagesRequest {
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub system: Option<SystemPrompt>,
   pub max_tokens: u64,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub stream: Option<bool>,
   #[serde(default, skip_serializing_if = "Vec::is_empty")]
   pub tools: Vec<MessagesToolDef>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub tool_choice: Option<MessagesToolChoice>,
-  #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub temperature: Option<f64>,
-  #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub top_p: Option<f64>,
-  #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub top_k: Option<u64>,
-  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub stop_sequences: Option<Value>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub stream: Option<bool>,
-  #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub thinking: Option<Value>,
-  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub metadata: Option<Value>,
+  #[serde(default, flatten)]
+  pub params: MessagesRequestParameters,
+  #[serde(default, flatten)]
+  pub extra_params: MessagesExtraParameters,
   #[serde(default, flatten)]
   pub extras: Extras,
 }

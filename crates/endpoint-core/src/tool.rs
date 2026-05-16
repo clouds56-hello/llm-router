@@ -30,3 +30,18 @@ pub struct ToolDef {
   #[serde(default, flatten)]
   pub extras: Extras,
 }
+
+/// Cross-dialect `tool_choice` request field.
+///
+/// Both OpenAI Chat Completions and OpenAI Responses accept either a
+/// string mode (`"auto"`, `"none"`, `"required"`) or a structured
+/// object selecting a specific tool by name. Anthropic Messages uses
+/// an object-only form and keeps its own type.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ToolChoice {
+  /// One of `none`, `auto`, `required`.
+  Mode(String),
+  /// Named tool selection or other structured form.
+  Named(Value),
+}

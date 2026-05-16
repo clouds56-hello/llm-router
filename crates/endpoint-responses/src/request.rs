@@ -2,8 +2,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use llm_endpoint_core::Extras;
+pub use llm_endpoint_core::ToolChoice as ResponsesToolChoice;
 
 use crate::item::InputItem;
+use crate::parameters::{ResponsesExtraParameters, ResponsesRequestParameters};
 
 /// `input` field accepts either a plain string or a list of items.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -20,48 +22,34 @@ impl Default for ResponsesInput {
 }
 
 /// Request body for `POST /v1/responses`.
+///
+/// Behavior knobs (temperature, top_p, max_*_tokens, tool_choice,
+/// reasoning, etc.) live on the embedded
+/// [`ResponsesRequestParameters`]; this struct keeps content,
+/// streaming controls and structured payloads at the top level.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ResponsesRequest {
   pub model: String,
   pub input: ResponsesInput,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub instructions: Option<String>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub stream: Option<bool>,
   #[serde(default, skip_serializing_if = "Vec::is_empty")]
   pub tools: Vec<ResponsesToolDef>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub tool_choice: Option<ResponsesToolChoice>,
-  #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub temperature: Option<f64>,
-  #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub top_p: Option<f64>,
-  #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub max_output_tokens: Option<u64>,
-  #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub max_tokens: Option<u64>,
-  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub stop: Option<Value>,
-  #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub reasoning: Option<Value>,
-  #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub stream: Option<bool>,
-  #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub store: Option<bool>,
-  #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub metadata: Option<Value>,
-  /// Whether the model may invoke multiple tools in parallel within a
-  /// single turn. Defaults to true server-side when omitted.
-  #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub parallel_tool_calls: Option<bool>,
   /// Optional list of additional fields to include in the response
   /// (e.g. `"reasoning.encrypted_content"`, `"file_search_call.results"`).
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub include: Option<Vec<String>>,
-  /// Caching hint forwarded to the upstream prompt cache layer.
-  #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub prompt_cache_key: Option<String>,
   /// Free-form per-request metadata echoed back by some providers.
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub client_metadata: Option<Value>,
+  #[serde(default, flatten)]
+  pub params: ResponsesRequestParameters,
+  #[serde(default, flatten)]
+  pub extra_params: ResponsesExtraParameters,
   #[serde(default, flatten)]
   pub extras: Extras,
 }
@@ -84,11 +72,4 @@ pub struct ResponsesToolDef {
   pub strict: Option<bool>,
   #[serde(default, flatten)]
   pub extras: Extras,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum ResponsesToolChoice {
-  Mode(String),
-  Named(Value),
 }

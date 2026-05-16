@@ -21,5 +21,5 @@ pub use extras::Extras;
 pub use extras::{join_path, push_extras, ExtraKeys};
 pub use finish::FinishReason;
 pub use role::Role;
-pub use tool::{ToolCall, ToolDef};
+pub use tool::{ToolCall, ToolChoice, ToolDef};
 pub use traits::{EndpointEvent, EndpointItem, EndpointRequest, EndpointResponse};

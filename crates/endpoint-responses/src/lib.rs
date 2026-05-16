@@ -6,6 +6,7 @@
 pub mod content;
 pub mod event;
 pub mod item;
+pub mod parameters;
 pub mod request;
 pub mod response;
 pub mod usage;
@@ -20,6 +21,7 @@ pub use item::{
   OutputItem, OutputMessage, ReasoningItem, TaggedFunctionCall, TaggedFunctionCallOutput,
   TaggedOutputMessage, TaggedReasoning,
 };
+pub use parameters::{ResponsesExtraParameters, ResponsesRequestParameters};
 pub use request::{ResponsesInput, ResponsesRequest, ResponsesToolChoice, ResponsesToolDef};
 pub use response::ResponsesResponse;
 pub use usage::ResponsesUsage;
