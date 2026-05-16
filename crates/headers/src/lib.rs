@@ -37,7 +37,7 @@ pub mod vars;
 pub use error::Error;
 pub use map::HeaderMap;
 pub use name::HeaderName;
-pub use persona::Persona;
+pub use persona::{detect_persona, Persona};
 pub use schema::HeaderSchema;
 pub use value::HeaderValue;
 pub use vars::TemplateVars;
