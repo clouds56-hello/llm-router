@@ -1,22 +1,23 @@
 [package]
-name = "llm-core"
+name = "llm-router2"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+llm-core = { workspace = true }
 llm-headers = { workspace = true }
+llm-config = { workspace = true }
+llm-convert = { workspace = true }
+arc-swap = { workspace = true }
 async-trait = { workspace = true }
-anyhow = { workspace = true }
 bytes = { workspace = true }
-directories = { workspace = true }
-reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 smol_str = { workspace = true }
-sha2 = { workspace = true }
 snafu = { workspace = true }
-time = { workspace = true }
-toml = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

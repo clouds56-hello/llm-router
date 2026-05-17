@@ -11,6 +11,7 @@ members = [
   "crates/endpoint-responses",
   "crates/endpoint-messages",
   "crates/router",
+  "crates/router2",
   "crates/gateway-cli",
   "crates/provider-copilot",
   "crates/provider-deepseek",
@@ -32,6 +33,7 @@ llm-endpoint-responses = { path = "crates/endpoint-responses" }
 llm-endpoint-messages = { path = "crates/endpoint-messages" }
 llm-headers = { path = "crates/headers" }
 llm-router = { path = "crates/router" }
+llm-router2 = { path = "crates/router2" }
 llm-provider-copilot = { path = "crates/provider-copilot" }
 llm-provider-deepseek = { path = "crates/provider-deepseek" }
 llm-provider-openai = { path = "crates/provider-openai" }
