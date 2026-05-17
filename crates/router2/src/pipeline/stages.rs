@@ -19,7 +19,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use llm_core::provider::Endpoint;
 use llm_core::ClientId;
-use llm_headers::HeaderMap;
+use llm_headers::{HeaderMap, TemplateVars};
 use serde_json::Value;
 use smol_str::SmolStr;
 
@@ -92,10 +92,14 @@ impl std::fmt::Debug for Resolved {
   }
 }
 
-/// Placeholder output of [`BuildHeadersStage`] (PR2 will flesh this out).
+/// Output of [`BuildHeadersStage`]: the composed outbound `HeaderMap` that
+/// the Send stage will use as the upstream request's headers, plus the
+/// [`TemplateVars`] derived from the inbound request (kept around so later
+/// stages can splice values without re-parsing inbound headers).
 #[derive(Debug, Clone, Default)]
 pub struct BuiltHeaders {
   pub headers: HeaderMap,
+  pub vars: TemplateVars,
 }
 
 /// Placeholder output of [`ConvertRequestStage`] (PR2).

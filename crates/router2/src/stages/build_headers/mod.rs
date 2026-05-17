@@ -1,12 +1,22 @@
-//! No-op BuildHeaders stage. Returns an empty header set. Used by
-//! [`Profile::partial_front_half`](crate::profile::Profile::partial_front_half)
-//! to keep the runner type-checking before PR2 lands the real impl.
+//! BuildHeaders stage impls.
+//!
+//! - [`NoopBuildHeaders`] returns an empty header set; useful for tests and
+//!   for the `without_send` profile when callers don't care about outbound
+//!   headers.
+//! - [`PersonaBuildHeaders`] composes the real outbound `HeaderMap` from the
+//!   inbound request via the [`llm_headers`] persona + overlay registry.
+
+pub mod persona;
 
 use crate::pipeline::ctx::PipelineCtx;
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::stages::{BuildHeadersStage, BuiltHeaders, Extracted, Resolved};
 use async_trait::async_trait;
 
+pub use persona::PersonaBuildHeaders;
+
+/// No-op BuildHeaders stage. Returns an empty header set. Available as a
+/// placeholder for tests and profiles that short-circuit before Send.
 pub struct NoopBuildHeaders;
 
 #[async_trait]

@@ -1,6 +1,6 @@
 //! No-op Send stage. Always returns a permanent [`PipelineError`] tagged
 //! `Stage::Send`. Used as a placeholder by
-//! [`Profile::partial_front_half`](crate::profile::Profile::partial_front_half),
+//! [`Profile::without_send`](crate::profile::Profile::without_send),
 //! which configures the runner to short-circuit before this stage runs. If
 //! the runner is mistakenly invoked against a full [`Profile`] using this
 //! stub (i.e. someone forgot to swap it for a real impl), it will deliberately
@@ -26,7 +26,7 @@ impl SendStage for NoopSend {
   ) -> Result<SentResponse, PipelineError> {
     Err(PipelineError::permanent(
       Stage::Send,
-      SmolStr::new("NoopSend invoked: real Send stage is not yet implemented (PR1)"),
+      SmolStr::new("NoopSend invoked: real Send stage is not yet implemented (PR3)"),
     ))
   }
 }

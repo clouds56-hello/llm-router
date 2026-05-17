@@ -1,14 +1,17 @@
-//! End-to-end smoke test for the front-half pipeline.
+//! End-to-end smoke test for the pre-Send pipeline.
 //!
-//! Assembles a [`Profile::partial_front_half`] with [`DefaultExtract`] and a
-//! fake [`AccountSelector`], runs it against a synthetic [`RawInbound`], and
-//! asserts the event sequence.
+//! Assembles a [`Profile::without_send`] with [`DefaultExtract`], a fake
+//! [`AccountSelector`], and the [`NoopBuildHeaders`]/[`NoopConvertRequest`]
+//! stages (real impls land in PR2 follow-ups). Runs against a synthetic
+//! [`RawInbound`] and asserts the event sequence.
 
 use bytes::Bytes;
 use llm_core::provider::Endpoint;
 use llm_headers::{HeaderMap, HeaderName, HeaderValue};
-use llm_router2::event::{EventPayload, StageEvent, Stage};
-use llm_router2::stages::{AccountSelector, DefaultExtract, PoolResolve, SelectorOutcome};
+use llm_router2::event::{EventPayload, Stage, StageEvent};
+use llm_router2::stages::{
+  AccountSelector, DefaultExtract, NoopBuildHeaders, NoopConvertRequest, PoolResolve, SelectorOutcome,
+};
 use llm_router2::{Event, EventBus, PipelineError, PipelineRunner, Profile, RawInbound};
 use smol_str::SmolStr;
 use std::sync::{Arc, Mutex};
@@ -89,12 +92,14 @@ fn known_kinds(events: &[Event]) -> Vec<&'static str> {
 }
 
 #[tokio::test]
-async fn front_half_happy_path_emits_expected_event_sequence() {
+async fn pre_send_happy_path_emits_expected_event_sequence() {
   let (bus, log) = capture_bus();
-  let profile = Arc::new(Profile::partial_front_half(
+  let profile = Arc::new(Profile::without_send(
     "smoke",
     Arc::new(DefaultExtract),
     Arc::new(PoolResolve::new(Arc::new(OkSelector))),
+    Arc::new(NoopBuildHeaders),
+    Arc::new(NoopConvertRequest),
   ));
   let runner = PipelineRunner::new(profile, bus);
 
@@ -104,7 +109,10 @@ async fn front_half_happy_path_emits_expected_event_sequence() {
 
   let events = log.lock().unwrap();
   let kinds = known_kinds(&events);
-  assert_eq!(kinds, ["started", "extract", "resolve", "completed"]);
+  assert_eq!(
+    kinds,
+    ["started", "extract", "resolve", "build_headers", "convert_request", "completed"]
+  );
 
   // Spot-check the Resolve event carries the upstream model and provider.
   let resolve = events.iter().find_map(|e| match &e.payload {
@@ -125,12 +133,14 @@ async fn front_half_happy_path_emits_expected_event_sequence() {
 }
 
 #[tokio::test]
-async fn front_half_no_account_emits_error_then_completed_failure() {
+async fn pre_send_no_account_emits_error_then_completed_failure() {
   let (bus, log) = capture_bus();
-  let profile = Arc::new(Profile::partial_front_half(
+  let profile = Arc::new(Profile::without_send(
     "smoke",
     Arc::new(DefaultExtract),
     Arc::new(PoolResolve::new(Arc::new(EmptySelector))),
+    Arc::new(NoopBuildHeaders),
+    Arc::new(NoopConvertRequest),
   ));
   let runner = PipelineRunner::new(profile, bus);
 

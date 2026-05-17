@@ -8,10 +8,10 @@
 //! * Run each stage; on success, emit the matching per-stage event; on
 //!   failure, emit [`StageEvent::Error`] (with the stage/recoverable flag
 //!   pulled verbatim from [`PipelineError`]) and short-circuit.
-//! * In PR1, the runner can be configured (via [`Profile::partial`]) to stop
-//!   after the Resolve stage and report success. This degenerate mode exists
-//!   only so the front-half slice is exercisable end-to-end before the
-//!   back-half stages are implemented; PR2 removes it.
+//! * In PR2, the runner can be configured (via [`Profile::stop_before_send`])
+//!   to stop after the ConvertRequest stage and report success. This mode
+//!   exists so the front five stages are exercisable end-to-end before the
+//!   real Send / ConvertResponse pair lands in PR3.
 //!
 //! Hooks are intentionally absent from PR1.
 //!
@@ -87,17 +87,6 @@ impl PipelineRunner {
       Err(err) => return self.fail(&ctx, err),
     };
 
-    // PR1 short-circuit: a `partial` profile signals that the back-half is
-    // intentionally stubbed and the run should report success after Resolve.
-    if self.profile.partial {
-      let _ = resolved; // back half will consume this in PR2.
-      ctx.emit_known(StageEvent::Completed {
-        success: true,
-        attempts: ctx.attempt + 1,
-      });
-      return PipelineOutcome::success(ctx.attempt + 1);
-    }
-
     // ---- BuildHeaders ----
     let headers = match self
       .profile
@@ -125,6 +114,18 @@ impl PipelineRunner {
       }
       Err(err) => return self.fail(&ctx, err),
     };
+
+    // PR2 short-circuit: a `stop_before_send` profile signals that the Send
+    // half is intentionally stubbed and the run should report success after
+    // ConvertRequest. Removed in PR3 once a real Send stage lands.
+    if self.profile.stop_before_send {
+      let _ = (&headers, &converted); // PR3 consumes these.
+      ctx.emit_known(StageEvent::Completed {
+        success: true,
+        attempts: ctx.attempt + 1,
+      });
+      return PipelineOutcome::success(ctx.attempt + 1);
+    }
 
     // ---- Send ----
     let sent = match self.profile.send.send(&ctx, &resolved, &headers, &converted).await {
