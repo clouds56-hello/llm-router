@@ -12,7 +12,7 @@
 
 pub mod stage;
 
-pub use stage::{Stage, StageEvent};
+pub use stage::{ConvertedResponseSummary, SentSummary, Stage, StageEvent};
 
 use parking_lot_helper::Mutex;
 use smol_str::SmolStr;

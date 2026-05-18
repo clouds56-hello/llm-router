@@ -119,10 +119,9 @@ pub struct BuiltHeaders {
 /// `Content-Encoding` value to put on the outbound request (when any).
 #[derive(Debug, Clone)]
 pub struct ConvertedRequest {
-  /// Upstream-shaped JSON body. Wrapped in `Arc` so observers and the
-  /// runner's per-stage [`OutcomeSnapshot`] can clone cheaply.
-  ///
-  /// [`OutcomeSnapshot`]: crate::pipeline::snapshot::OutcomeSnapshot
+  /// Upstream-shaped JSON body. Wrapped in `Arc` so observers receiving
+  /// [`StageEvent::ConvertRequest`](crate::event::StageEvent::ConvertRequest)
+  /// can clone the payload cheaply.
   pub upstream_body: Arc<Value>,
   pub upstream_wire_body: Bytes,
   /// Uncompressed serialized JSON, mirroring the legacy
@@ -170,8 +169,9 @@ pub enum ConvertedResponse {
   Buffered {
     status: u16,
     headers: HeaderMap,
-    /// Buffered upstream JSON. `Arc`-wrapped so snapshots/observers can
-    /// clone cheaply without re-serializing the body.
+    /// Buffered upstream JSON. `Arc`-wrapped so the matching
+    /// [`StageEvent::ConvertResponse`](crate::event::StageEvent::ConvertResponse)
+    /// payload can share the value without re-serializing the body.
     body_json: Arc<Value>,
     body_bytes: Bytes,
   },

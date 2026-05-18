@@ -150,12 +150,12 @@ fn known_kinds(events: &[Event]) -> Vec<&'static str> {
     .map(|e| match &e.payload {
       EventPayload::Known(k) => match k {
         StageEvent::Started { .. } => "started",
-        StageEvent::Extract { .. } => "extract",
-        StageEvent::Resolve { .. } => "resolve",
-        StageEvent::BuildHeaders { .. } => "build_headers",
-        StageEvent::ConvertRequest { .. } => "convert_request",
-        StageEvent::Send { .. } => "send",
-        StageEvent::ConvertResponse { .. } => "convert_response",
+        StageEvent::Extract(_) => "extract",
+        StageEvent::Resolve(_) => "resolve",
+        StageEvent::BuildHeaders(_) => "build_headers",
+        StageEvent::ConvertRequest(_) => "convert_request",
+        StageEvent::Send(_) => "send",
+        StageEvent::ConvertResponse(_) => "convert_response",
         StageEvent::Error { .. } => "error",
         StageEvent::Completed { .. } => "completed",
       },
@@ -196,17 +196,11 @@ async fn pre_send_happy_path_emits_expected_event_sequence() {
 
   // Spot-check the Resolve event carries the upstream model and provider.
   let resolve = events.iter().find_map(|e| match &e.payload {
-    EventPayload::Known(StageEvent::Resolve {
-      upstream_model,
-      provider_id,
-      account_id,
-      client_id,
-      ..
-    }) => Some((
-      upstream_model.clone(),
-      provider_id.clone(),
-      account_id.clone(),
-      client_id.clone(),
+    EventPayload::Known(StageEvent::Resolve(r)) => Some((
+      r.upstream_model.clone(),
+      r.provider_id.clone(),
+      r.account_id.clone(),
+      r.client_id.clone(),
     )),
     _ => None,
   });
@@ -426,8 +420,9 @@ async fn full_pipeline_buffered_happy_path() {
 /// Provider whose `chat` always returns an upstream 401. Used to assert
 /// that a Send-stage failure preserves the resolved account, built
 /// headers, and converted request body on the returned `PipelineOutcome`,
-/// and that the same partial snapshot is embedded in the Error +
-/// Completed events.
+/// and that the terminal Error + Completed events report the failing
+/// stage without re-embedding the partial state (callers read it from
+/// the returned outcome).
 struct FailingProvider {
   info: ProviderInfo,
 }
@@ -553,19 +548,18 @@ async fn pipeline_send_failure_preserves_partial_outcome() {
     ]
   );
 
-  // The Error event's snapshot must mirror the partial outcome: same
-  // resolved/built_headers/converted_request, success=false, no response.
-  let snap = events
-    .iter()
-    .find_map(|e| match &e.payload {
-      EventPayload::Known(StageEvent::Error { snapshot, .. }) => Some(snapshot.clone()),
-      _ => None,
-    })
-    .expect("Error event must be present");
-  assert!(!snap.success);
-  assert!(snap.resolved.is_some());
-  assert!(snap.built_headers.is_some());
-  assert!(snap.converted_request.is_some());
-  assert!(snap.converted_response.is_none());
-  assert!(snap.error.is_some());
+  // The terminal events mirror the failure: Error tags the originating
+  // stage; Completed reports success=false. Subscribers that need the
+  // partial state read it from the returned PipelineOutcome above (no
+  // snapshot is embedded in the events themselves).
+  let err_stage = events.iter().find_map(|e| match &e.payload {
+    EventPayload::Known(StageEvent::Error { stage, .. }) => Some(*stage),
+    _ => None,
+  });
+  assert_eq!(err_stage, Some(Stage::Send));
+  let completed_success = events.iter().find_map(|e| match &e.payload {
+    EventPayload::Known(StageEvent::Completed { success, .. }) => Some(*success),
+    _ => None,
+  });
+  assert_eq!(completed_success, Some(false));
 }

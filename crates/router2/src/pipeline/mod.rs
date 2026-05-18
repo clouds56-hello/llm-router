@@ -5,13 +5,19 @@
 //! * Build a fresh [`PipelineCtx`] from the inbound [`RawInbound`].
 //! * Emit [`StageEvent::Started`] before the first stage and
 //!   [`StageEvent::Completed`] after the last (always).
-//! * Run each stage; on success, emit the matching per-stage event; on
-//!   failure, emit [`StageEvent::Error`] (with the stage/recoverable flag
-//!   pulled verbatim from [`PipelineError`]) and short-circuit.
+//! * Run each stage; on success, emit the matching per-stage event carrying
+//!   the stage's own output (cloned where the type permits); on failure,
+//!   emit [`StageEvent::Error`] (with the stage/recoverable flag pulled
+//!   verbatim from [`PipelineError`]) followed by `Completed { success: false }`
+//!   and short-circuit.
 //! * The runner can be configured (via [`RunnerOptions::stop_after`]) to
 //!   short-circuit with success after a specific stage completes. This is
 //!   how dry-run / smoke flows skip the Send half without needing a
 //!   special-case profile constructor.
+//!
+//! The runner does not maintain a parallel "snapshot" — accumulated state
+//! is exposed only via the returned [`PipelineOutcome`]. Subscribers that
+//! need a running view fold the per-stage events themselves.
 //!
 //! Hooks are intentionally absent from PR1.
 //!
@@ -23,10 +29,9 @@
 pub mod ctx;
 pub mod error;
 pub mod outcome;
-pub mod snapshot;
 pub mod stages;
 
-use crate::event::{EventBus, Stage, StageEvent};
+use crate::event::{ConvertedResponseSummary, EventBus, SentSummary, Stage, StageEvent};
 use crate::profile::Profile;
 use ctx::PipelineCtx;
 use error::PipelineError;
@@ -87,23 +92,18 @@ impl PipelineRunner {
     let ctx = PipelineCtx::new(request_id, raw.endpoint, self.events.clone());
     ctx.emit_known(StageEvent::Started { endpoint: raw.endpoint });
 
-    // Build the outcome incrementally. Each stage's success mutates the
-    // accumulator before we snapshot+emit, so observers see a growing
-    // snapshot per event. On failure the same accumulator (with `error`
-    // populated) is returned to the caller — no partial state is lost.
+    // The outcome accumulator collects each stage's output so the caller
+    // can inspect partial state on failure and the final state on success.
     let mut outcome = PipelineOutcome::success(0);
 
     // ---- Extract ----
     let extracted = match self.profile.extract.extract(&ctx, raw).await {
       Ok(e) => {
-        let snapshot = Arc::new((&outcome).into());
-        ctx.emit_known(StageEvent::Extract {
-          client_id: e.client_id.clone(),
-          model: e.model.clone(),
-          stream: e.stream,
-          snapshot,
-        });
-        e
+        // Wrap once in an Arc so both the event and downstream stage
+        // calls share the same value without cloning the body.
+        let arc = Arc::new(e);
+        ctx.emit_known(StageEvent::Extract(arc.clone()));
+        arc
       }
       Err(err) => return self.fail(&ctx, &mut outcome, err),
     };
@@ -115,16 +115,7 @@ impl PipelineRunner {
     let resolved = match self.profile.resolve.resolve(&ctx, &extracted).await {
       Ok(r) => {
         outcome.resolved = Some(r.clone());
-        let snapshot = Arc::new((&outcome).into());
-        ctx.emit_known(StageEvent::Resolve {
-          client_id: r.client_id.clone(),
-          model: r.model.clone(),
-          upstream_model: r.upstream_model.clone(),
-          account_id: r.account_id.clone(),
-          provider_id: r.provider_id.clone(),
-          upstream_endpoint: r.upstream_endpoint,
-          snapshot,
-        });
+        ctx.emit_known(StageEvent::Resolve(r.clone()));
         r
       }
       Err(err) => return self.fail(&ctx, &mut outcome, err),
@@ -142,8 +133,7 @@ impl PipelineRunner {
     {
       Ok(h) => {
         outcome.built_headers = Some(h.clone());
-        let snapshot = Arc::new((&outcome).into());
-        ctx.emit_known(StageEvent::BuildHeaders { snapshot });
+        ctx.emit_known(StageEvent::BuildHeaders(h.clone()));
         h
       }
       Err(err) => return self.fail(&ctx, &mut outcome, err),
@@ -161,8 +151,7 @@ impl PipelineRunner {
     {
       Ok(c) => {
         outcome.converted_request = Some(c.clone());
-        let snapshot = Arc::new((&outcome).into());
-        ctx.emit_known(StageEvent::ConvertRequest { snapshot });
+        ctx.emit_known(StageEvent::ConvertRequest(c.clone()));
         c
       }
       Err(err) => return self.fail(&ctx, &mut outcome, err),
@@ -179,12 +168,15 @@ impl PipelineRunner {
       .await
     {
       Ok(s) => {
-        // SentResponse is not Clone (single-shot reqwest::Response), so
-        // the accumulator's `sent_response` is populated only if we
-        // short-circuit here; the snapshot meanwhile reflects whatever
-        // is already in `outcome` (resolved + headers + converted req).
-        let snapshot = Arc::new((&outcome).into());
-        ctx.emit_known(StageEvent::Send { snapshot });
+        // SentResponse owns a single-shot reqwest::Response; emit its
+        // cloneable subset for observers and pass the full struct on to
+        // ConvertResponse.
+        ctx.emit_known(StageEvent::Send(SentSummary {
+          status: s.status,
+          headers: s.headers.clone(),
+          upstream_endpoint: s.upstream_endpoint,
+          stream: s.stream,
+        }));
         s
       }
       Err(err) => return self.fail(&ctx, &mut outcome, err),
@@ -197,16 +189,18 @@ impl PipelineRunner {
     // ---- ConvertResponse ----
     let converted_response = match self.profile.convert_response.convert_response(&ctx, sent).await {
       Ok(c) => {
-        // Build the snapshot from a temporary view that includes the
-        // converted response (without moving it into `outcome` yet, so
-        // the snapshot's body_json Arc can be shared with the returned
-        // outcome). We populate `outcome.converted_response` first, then
-        // snapshot from `&outcome`.
-        outcome.converted_response = Some(c);
-        let snapshot = Arc::new((&outcome).into());
-        ctx.emit_known(StageEvent::ConvertResponse { snapshot });
-        // unwrap is safe: we just set it.
-        outcome.converted_response.take().expect("just populated")
+        // Build the summary before moving `c` into the outcome — body
+        // (when buffered) is shared via the same Arc<Value>.
+        let summary = ConvertedResponseSummary {
+          status: c.status(),
+          headers: c.headers().clone(),
+          body: match &c {
+            ConvertedResponse::Buffered { body_json, .. } => Some(body_json.clone()),
+            ConvertedResponse::Stream { .. } => None,
+          },
+        };
+        ctx.emit_known(StageEvent::ConvertResponse(summary));
+        c
       }
       Err(err) => return self.fail(&ctx, &mut outcome, err),
     };
@@ -222,33 +216,29 @@ impl PipelineRunner {
   fn complete(&self, ctx: &PipelineCtx, mut outcome: PipelineOutcome) -> PipelineOutcome {
     outcome.success = true;
     outcome.attempts = ctx.attempt + 1;
-    let snapshot = Arc::new((&outcome).into());
     ctx.emit_known(StageEvent::Completed {
       success: true,
       attempts: outcome.attempts,
-      snapshot,
     });
     outcome
   }
 
   /// Record the failure on `outcome`, emit [`StageEvent::Error`] +
-  /// [`StageEvent::Completed`] (sharing one snapshot `Arc`), and return the
-  /// partially-populated outcome to the caller.
+  /// [`StageEvent::Completed { success: false }`], and return the
+  /// partially-populated outcome to the caller. Subscribers that need
+  /// the accumulated partial state read it from the returned outcome.
   fn fail(&self, ctx: &PipelineCtx, outcome: &mut PipelineOutcome, err: PipelineError) -> PipelineOutcome {
     outcome.success = false;
     outcome.attempts = ctx.attempt + 1;
     outcome.error = Some(err.clone());
-    let snapshot: Arc<snapshot::OutcomeSnapshot> = Arc::new((&*outcome).into());
     ctx.emit_known(StageEvent::Error {
       stage: err.stage,
       message: err.message.clone(),
       recoverable: err.recoverable,
-      snapshot: snapshot.clone(),
     });
     ctx.emit_known(StageEvent::Completed {
       success: false,
       attempts: outcome.attempts,
-      snapshot,
     });
     // Move the populated outcome out by replacing it with a tombstone;
     // the caller's `&mut` reference is local to this method's parent

@@ -287,50 +287,40 @@ fn print_event(event: &Event) {
     EventPayload::Known(StageEvent::Started { endpoint }) => {
       println!("[started]          endpoint={endpoint}");
     }
-    EventPayload::Known(StageEvent::Extract {
-      client_id,
-      model,
-      stream,
-      ..
-    }) => {
-      let cid = client_id.as_ref().map(|c| c.as_str()).unwrap_or("(none)");
-      println!("[extract]          model={model} stream={stream} client_id={cid}");
-    }
-    EventPayload::Known(StageEvent::Resolve {
-      client_id,
-      model,
-      upstream_model,
-      account_id,
-      provider_id,
-      upstream_endpoint,
-      ..
-    }) => {
-      let cid = client_id.as_ref().map(|c| c.as_str()).unwrap_or("(none)");
+    EventPayload::Known(StageEvent::Extract(e)) => {
+      let cid = e.client_id.as_ref().map(|c| c.as_str()).unwrap_or("(none)");
       println!(
-        "[resolve]          model={model} -> {upstream_model} account={account_id} provider={provider_id} upstream_endpoint={upstream_endpoint} client_id={cid}"
+        "[extract]          model={} stream={} client_id={cid}",
+        e.model, e.stream
       );
     }
-    EventPayload::Known(StageEvent::BuildHeaders { .. }) => {
+    EventPayload::Known(StageEvent::Resolve(r)) => {
+      let cid = r.client_id.as_ref().map(|c| c.as_str()).unwrap_or("(none)");
+      println!(
+        "[resolve]          model={} -> {} account={} provider={} upstream_endpoint={} client_id={cid}",
+        r.model, r.upstream_model, r.account_id, r.provider_id, r.upstream_endpoint
+      );
+    }
+    EventPayload::Known(StageEvent::BuildHeaders(_)) => {
       println!("[build_headers]    ok");
     }
-    EventPayload::Known(StageEvent::ConvertRequest { .. }) => {
+    EventPayload::Known(StageEvent::ConvertRequest(_)) => {
       println!("[convert_request]  ok");
     }
-    EventPayload::Known(StageEvent::Send { .. }) => {
+    EventPayload::Known(StageEvent::Send(_)) => {
       println!("[send]             ok");
     }
-    EventPayload::Known(StageEvent::ConvertResponse { .. }) => {
+    EventPayload::Known(StageEvent::ConvertResponse(_)) => {
       println!("[convert_response] ok");
     }
     EventPayload::Known(StageEvent::Error {
       stage,
       message,
       recoverable,
-      ..
     }) => {
       println!("[error]            stage={stage} recoverable={recoverable} message={message}");
     }
-    EventPayload::Known(StageEvent::Completed { success, attempts, .. }) => {
+    EventPayload::Known(StageEvent::Completed { success, attempts }) => {
       println!("[completed]        success={success} attempts={attempts}");
     }
     EventPayload::Custom(c) => {
