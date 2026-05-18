@@ -80,7 +80,7 @@ fn write_record(usage: &mut usage::UsageDb, sessions: &mut Option<sessions::Sess
 
 // --- Event bus integration ---
 
-use llm_core::event::{Event, EventHandler, RequestEvent};
+use llm_core::event::{Event, EventHandler, LegacyRequestEvent};
 use std::collections::HashMap;
 
 /// Partial request data accumulated from lifecycle events before completion.
@@ -149,7 +149,7 @@ impl DbEventHandler {
 impl EventHandler for DbEventHandler {
   fn handle(&mut self, event: &Event) {
     match event {
-      Event::Request(RequestEvent::Started {
+      Event::LegacyRequest(LegacyRequestEvent::Started {
         request_id,
         ts,
         endpoint,
@@ -214,7 +214,7 @@ impl EventHandler for DbEventHandler {
           },
         );
       }
-      Event::Request(RequestEvent::Headers {
+      Event::LegacyRequest(LegacyRequestEvent::Headers {
         request_id,
         ts,
         endpoint_hint,
@@ -299,7 +299,7 @@ impl EventHandler for DbEventHandler {
         }
         pending.inbound_req_headers = inbound_headers.clone();
       }
-      Event::Request(RequestEvent::Parsed {
+      Event::LegacyRequest(LegacyRequestEvent::Parsed {
         request_id,
         attempt,
         account_id,
@@ -347,7 +347,7 @@ impl EventHandler for DbEventHandler {
           }
         }
       }
-      Event::Request(RequestEvent::Responded {
+      Event::LegacyRequest(LegacyRequestEvent::Responded {
         request_id,
         attempt,
         outbound_status,
@@ -391,7 +391,7 @@ impl EventHandler for DbEventHandler {
           }
         }
       }
-      Event::Request(RequestEvent::Result {
+      Event::LegacyRequest(LegacyRequestEvent::Result {
         request_id,
         attempt,
         session_source,
@@ -518,7 +518,7 @@ impl EventHandler for DbEventHandler {
         }
         write_record(&mut self.usage, &mut self.sessions, &record);
       }
-      Event::Request(RequestEvent::Completed {
+      Event::LegacyRequest(LegacyRequestEvent::Completed {
         request_id,
         success,
         final_status,
@@ -594,7 +594,7 @@ impl EventHandler for DbEventHandler {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use llm_core::event::{Event, EventHandler, RequestEvent};
+  use llm_core::event::{Event, EventHandler, LegacyRequestEvent};
   use llm_headers::HeaderMap;
   use rusqlite::{params, Connection};
 
@@ -617,7 +617,7 @@ mod tests {
   }
 
   fn started(req_id: &str, ts: i64) -> Event {
-    Event::Request(RequestEvent::Started {
+    Event::LegacyRequest(LegacyRequestEvent::Started {
       request_id: req_id.into(),
       ts,
       endpoint: "chat_completions".into(),
@@ -630,7 +630,7 @@ mod tests {
   }
 
   fn started_without_peer(req_id: &str, ts: i64) -> Event {
-    Event::Request(RequestEvent::Started {
+    Event::LegacyRequest(LegacyRequestEvent::Started {
       request_id: req_id.into(),
       ts,
       endpoint: "chat_completions".into(),
@@ -643,7 +643,7 @@ mod tests {
   }
 
   fn parsed(req_id: &str, attempt: u32) -> Event {
-    Event::Request(RequestEvent::Parsed {
+    Event::LegacyRequest(LegacyRequestEvent::Parsed {
       request_id: req_id.into(),
       attempt,
       account_id: "acct".into(),
@@ -657,7 +657,7 @@ mod tests {
   }
 
   fn headers(req_id: &str, ts: i64) -> Event {
-    Event::Request(RequestEvent::Headers {
+    Event::LegacyRequest(LegacyRequestEvent::Headers {
       request_id: req_id.into(),
       ts,
       endpoint_hint: Some("responses".into()),
@@ -673,7 +673,7 @@ mod tests {
   }
 
   fn result(req_id: &str, attempt: u32, status: u16, error: Option<&str>) -> Event {
-    Event::Request(RequestEvent::Result {
+    Event::LegacyRequest(LegacyRequestEvent::Result {
       request_id: req_id.into(),
       attempt,
       session_source: SessionSource::Header,
@@ -689,7 +689,7 @@ mod tests {
   }
 
   fn responded(req_id: &str, attempt: u32, latency_ms: u64) -> Event {
-    Event::Request(RequestEvent::Responded {
+    Event::LegacyRequest(LegacyRequestEvent::Responded {
       request_id: req_id.into(),
       attempt,
       outbound_status: 200,
@@ -709,7 +709,7 @@ mod tests {
     final_status: Option<u16>,
     error: Option<&str>,
   ) -> Event {
-    Event::Request(RequestEvent::Completed {
+    Event::LegacyRequest(LegacyRequestEvent::Completed {
       request_id: req_id.into(),
       success,
       total_attempts,
@@ -957,7 +957,7 @@ mod tests {
     let req = "req-headers";
     let ts = 1_700_000_000;
     let mut event = headers(req, ts);
-    if let Event::Request(RequestEvent::Headers { inbound_headers, .. }) = &mut event {
+    if let Event::LegacyRequest(LegacyRequestEvent::Headers { inbound_headers, .. }) = &mut event {
       inbound_headers.insert("x-test", "1");
     }
 
@@ -1076,7 +1076,7 @@ mod tests {
     h.handle(&started(req, ts));
     // Attempt 0: fails
     h.handle(&parsed(req, 0));
-    h.handle(&Event::Request(RequestEvent::Retry {
+    h.handle(&Event::LegacyRequest(LegacyRequestEvent::Retry {
       request_id: req.into(),
       attempt: 0,
       error: "upstream 500".into(),
@@ -1113,7 +1113,7 @@ mod tests {
     h.handle(&started(req, ts));
     for attempt in 0..3u32 {
       h.handle(&parsed(req, attempt));
-      h.handle(&Event::Request(RequestEvent::Retry {
+      h.handle(&Event::LegacyRequest(LegacyRequestEvent::Retry {
         request_id: req.into(),
         attempt,
         error: format!("err-{attempt}"),
@@ -1200,7 +1200,7 @@ mod tests {
     let ts: i64 = 1_700_000_000;
 
     // --- 1. RequestStarted ---------------------------------------------------
-    let started = Event::Request(RequestEvent::Started {
+    let started = Event::LegacyRequest(LegacyRequestEvent::Started {
       request_id: req.into(),
       ts,
       endpoint: "chat_completions".into(),
@@ -1244,7 +1244,7 @@ mod tests {
     // --- 2. RequestHeaders ---------------------------------------------------
     let mut inbound_headers = HeaderMap::new();
     inbound_headers.insert("x-request-id", "abc-123");
-    let headers_event = Event::Request(RequestEvent::Headers {
+    let headers_event = Event::LegacyRequest(LegacyRequestEvent::Headers {
       request_id: req.into(),
       ts,
       endpoint_hint: Some("responses".into()),
@@ -1283,7 +1283,7 @@ mod tests {
     }
 
     // --- 3. RequestParsed ----------------------------------------------------
-    let parsed_event = Event::Request(RequestEvent::Parsed {
+    let parsed_event = Event::LegacyRequest(LegacyRequestEvent::Parsed {
       request_id: req.into(),
       attempt: 0,
       account_id: "acct-full".into(),
@@ -1319,7 +1319,7 @@ mod tests {
     outbound_resp_headers.insert("x-upstream", "yes");
     let mut outbound_req_headers = HeaderMap::new();
     outbound_req_headers.insert("x-custom", "yes");
-    let responded_event = Event::Request(RequestEvent::Responded {
+    let responded_event = Event::LegacyRequest(LegacyRequestEvent::Responded {
       request_id: req.into(),
       attempt: 0,
       outbound_status: 201,
@@ -1360,7 +1360,7 @@ mod tests {
         reasoning: Some(4),
       },
     };
-    let result_event = Event::Request(RequestEvent::Result {
+    let result_event = Event::LegacyRequest(LegacyRequestEvent::Result {
       request_id: req.into(),
       attempt: 0,
       session_source: SessionSource::Header,
@@ -1405,7 +1405,7 @@ mod tests {
     }
 
     // --- 6. RequestCompleted (success) --------------------------------------
-    let completed_event = Event::Request(RequestEvent::Completed {
+    let completed_event = Event::LegacyRequest(LegacyRequestEvent::Completed {
       request_id: req.into(),
       success: true,
       total_attempts: 1,

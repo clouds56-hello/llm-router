@@ -12,7 +12,7 @@ use crate::db::archive::{ArchiveEvent, ArchiveEventHandler};
 use console::style;
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use llm_core::db::Usage;
-use llm_core::event::{Event, EventHandler, RequestEvent};
+use llm_core::event::{Event, EventHandler, LegacyRequestEvent};
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Write};
@@ -336,7 +336,7 @@ impl Default for ProgressEventHandler {
 impl EventHandler for ProgressEventHandler {
   fn handle(&mut self, event: &Event) {
     match event {
-      Event::Request(RequestEvent::Started {
+      Event::LegacyRequest(LegacyRequestEvent::Started {
         request_id, endpoint, ..
       }) => {
         // Insert above the footer.
@@ -352,7 +352,7 @@ impl EventHandler for ProgressEventHandler {
         self.refresh(request_id);
         self.refresh_footer();
       }
-      Event::Request(RequestEvent::Parsed {
+      Event::LegacyRequest(LegacyRequestEvent::Parsed {
         request_id,
         attempt,
         account_id,
@@ -370,7 +370,7 @@ impl EventHandler for ProgressEventHandler {
         }
         self.refresh(request_id);
       }
-      Event::Request(RequestEvent::Retry {
+      Event::LegacyRequest(LegacyRequestEvent::Retry {
         request_id, attempt, ..
       }) => {
         if let Some(state) = self.bars.get_mut(request_id) {
@@ -393,7 +393,7 @@ impl EventHandler for ProgressEventHandler {
         }
         self.refresh(request_id);
       }
-      Event::Request(RequestEvent::Result {
+      Event::LegacyRequest(LegacyRequestEvent::Result {
         request_id,
         inbound_resp_body,
         usage,
@@ -407,7 +407,7 @@ impl EventHandler for ProgressEventHandler {
           state.request.usage = usage.clone();
         }
       }
-      Event::Request(RequestEvent::Completed {
+      Event::LegacyRequest(LegacyRequestEvent::Completed {
         request_id,
         success,
         total_attempts,
@@ -692,7 +692,7 @@ impl ProgressLogEventHandler {
 impl EventHandler for ProgressLogEventHandler {
   fn handle(&mut self, event: &Event) {
     match event {
-      Event::Request(RequestEvent::Started {
+      Event::LegacyRequest(LegacyRequestEvent::Started {
         request_id, endpoint, ..
       }) => {
         self
@@ -700,7 +700,7 @@ impl EventHandler for ProgressLogEventHandler {
           .insert(request_id.clone(), RequestState::new(endpoint_label(endpoint, None)));
         self.in_flight = self.in_flight.saturating_add(1);
       }
-      Event::Request(RequestEvent::Parsed {
+      Event::LegacyRequest(LegacyRequestEvent::Parsed {
         request_id,
         attempt,
         account_id,
@@ -717,7 +717,7 @@ impl EventHandler for ProgressLogEventHandler {
           state.sent_bytes = inbound_body.len() as u64;
         }
       }
-      Event::Request(RequestEvent::Retry {
+      Event::LegacyRequest(LegacyRequestEvent::Retry {
         request_id, attempt, ..
       }) => {
         if let Some(state) = self.requests.get_mut(request_id) {
@@ -736,7 +736,7 @@ impl EventHandler for ProgressLogEventHandler {
           state.merge_usage(usage);
         }
       }
-      Event::Request(RequestEvent::Result {
+      Event::LegacyRequest(LegacyRequestEvent::Result {
         request_id,
         inbound_resp_body,
         usage,
@@ -750,7 +750,7 @@ impl EventHandler for ProgressLogEventHandler {
           state.usage = usage.clone();
         }
       }
-      Event::Request(RequestEvent::Completed {
+      Event::LegacyRequest(LegacyRequestEvent::Completed {
         request_id,
         success,
         total_attempts,

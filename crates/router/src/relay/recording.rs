@@ -1,7 +1,7 @@
 use crate::db::{MessageRecord, PartRecord, SessionSource, Usage};
 use crate::provider::Endpoint;
 use bytes::Bytes;
-use llm_core::event::{Event, RequestEvent};
+use llm_core::event::{Event, LegacyRequestEvent};
 use reqwest::header::HeaderMap;
 use serde_json::Value;
 use std::time::Instant;
@@ -109,7 +109,7 @@ impl CompletedEventBuilder {
       SessionSource::Auto
     };
 
-    Event::Request(RequestEvent::Result {
+    Event::LegacyRequest(LegacyRequestEvent::Result {
       request_id: self.request_id,
       attempt: self.attempt,
       session_source,

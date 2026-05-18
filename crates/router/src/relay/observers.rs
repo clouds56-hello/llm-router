@@ -118,14 +118,16 @@ pub(super) async fn background_stream_recorder(
   // Emit terminal RequestCompleted with success / total_attempts / final_status.
   // Streaming is only entered after a successful upstream response (no retries after stream begins),
   // so total_attempts == meta.attempt + 1 and final_status == meta.final_status.
-  events.emit(llm_core::event::Event::Request(llm_core::event::RequestEvent::Completed {
-    request_id: meta.request_id,
-    success: !had_error,
-    total_attempts: meta.attempt + 1,
-    final_status: Some(meta.final_status),
-    total_latency_ms: meta.started.elapsed().as_millis() as u64,
-    error: had_error.then(|| "stream terminated before completion".to_string()),
-  }));
+  events.emit(llm_core::event::Event::LegacyRequest(
+    llm_core::event::LegacyRequestEvent::Completed {
+      request_id: meta.request_id,
+      success: !had_error,
+      total_attempts: meta.attempt + 1,
+      final_status: Some(meta.final_status),
+      total_latency_ms: meta.started.elapsed().as_millis() as u64,
+      error: had_error.then(|| "stream terminated before completion".to_string()),
+    },
+  ));
 }
 
 #[cfg(test)]
@@ -133,7 +135,7 @@ mod tests {
   use super::*;
   use crate::relay::recording::CompletedEventBuilder;
   use bytes::Bytes;
-  use llm_core::event::{Event, EventBus, EventHandler, RequestEvent};
+  use llm_core::event::{Event, EventBus, EventHandler, LegacyRequestEvent};
   use std::sync::{Arc, Mutex};
   use std::time::Instant;
 
@@ -141,7 +143,7 @@ mod tests {
 
   impl EventHandler for CollectingHandler {
     fn handle(&mut self, event: &Event) {
-      if let Event::Request(RequestEvent::Result {
+      if let Event::LegacyRequest(LegacyRequestEvent::Result {
         inbound_resp_body,
         outbound_resp_body,
         ..

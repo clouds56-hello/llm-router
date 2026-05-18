@@ -16,7 +16,7 @@ use axum::http::StatusCode;
 use axum::response::Response;
 use bytes::Bytes;
 use llm_core::db::{SessionSource, Usage};
-use llm_core::event::{Event, RequestEvent};
+use llm_core::event::{Event, LegacyRequestEvent};
 use llm_core::pipeline::ParsedRequest;
 use llm_core::pipeline::{OutputTransformer, RequestResolver, RequestSender};
 use request::{prepare_request, PoolResolver, PreparedRequest, ProviderSender};
@@ -58,7 +58,7 @@ fn emit_request_responded(
   } else {
     captured_outbound.as_ref().map(|s| s.req_body.clone())
   };
-  state.events.emit(Event::Request(RequestEvent::Responded {
+  state.events.emit(Event::LegacyRequest(LegacyRequestEvent::Responded {
     request_id: request_id.to_string(),
     attempt,
     outbound_status: status.as_u16(),
@@ -99,7 +99,7 @@ pub(crate) fn build_failure_result_event_from_api_err(
   api_err: &ApiError,
   upstream_body: Option<Bytes>,
 ) -> Event {
-  Event::Request(RequestEvent::Result {
+  Event::LegacyRequest(LegacyRequestEvent::Result {
     request_id,
     attempt,
     session_source: SessionSource::Auto,
@@ -131,7 +131,7 @@ fn emit_early_failure(
   inbound_body: Bytes,
   api_err: &ApiError,
 ) {
-  state.events.emit(Event::Request(RequestEvent::Parsed {
+  state.events.emit(Event::LegacyRequest(LegacyRequestEvent::Parsed {
     request_id: request_id.to_string(),
     attempt,
     account_id: "none".to_string(),
@@ -230,17 +230,19 @@ pub(crate) async fn handle_endpoint(
       }
     };
 
-    state.events.emit(llm_core::event::Event::Request(llm_core::event::RequestEvent::Parsed {
-      request_id: request_id.clone(),
-      attempt: attempt_u32,
-      account_id: prepared.account.id(),
-      provider_id: prepared.account.provider.info().id.clone(),
-      model: prepared.meta.model.clone(),
-      stream: prepared.meta.stream,
-      initiator: prepared.meta.initiator.clone(),
-      behave_as: prepared.meta.behave_as.clone(),
-      inbound_body: prepared.inbound_body_bytes.clone(),
-    }));
+    state.events.emit(llm_core::event::Event::LegacyRequest(
+      llm_core::event::LegacyRequestEvent::Parsed {
+        request_id: request_id.clone(),
+        attempt: attempt_u32,
+        account_id: prepared.account.id(),
+        provider_id: prepared.account.provider.info().id.clone(),
+        model: prepared.meta.model.clone(),
+        stream: prepared.meta.stream,
+        initiator: prepared.meta.initiator.clone(),
+        behave_as: prepared.meta.behave_as.clone(),
+        inbound_body: prepared.inbound_body_bytes.clone(),
+      },
+    ));
 
     let send_result = async {
       debug!("sending upstream request");
@@ -254,11 +256,13 @@ pub(crate) async fn handle_endpoint(
       Err(e) => {
         warn!(parent: &attempt_span, error = %e, "provider request failed");
         prepared.account.mark_failure(state.pool.cooldown_base());
-        state.events.emit(llm_core::event::Event::Request(llm_core::event::RequestEvent::Retry {
-          request_id: request_id.clone(),
-          attempt: attempt_u32,
-          error: e.to_string(),
-        }));
+        state.events.emit(llm_core::event::Event::LegacyRequest(
+          llm_core::event::LegacyRequestEvent::Retry {
+            request_id: request_id.clone(),
+            attempt: attempt_u32,
+            error: e.to_string(),
+          },
+        ));
         last_err = Some((StatusCode::BAD_GATEWAY, e.to_string()));
         completion.failure(Some(StatusCode::BAD_GATEWAY.as_u16()), e.to_string());
         continue;
@@ -282,11 +286,13 @@ pub(crate) async fn handle_endpoint(
         started,
       );
       prepared.account.invalidate_credentials();
-      state.events.emit(llm_core::event::Event::Request(llm_core::event::RequestEvent::Retry {
-        request_id: request_id.clone(),
-        attempt: attempt_u32,
-        error: "unauthorized".into(),
-      }));
+      state.events.emit(llm_core::event::Event::LegacyRequest(
+        llm_core::event::LegacyRequestEvent::Retry {
+          request_id: request_id.clone(),
+          attempt: attempt_u32,
+          error: "unauthorized".into(),
+        },
+      ));
       let err_msg = if body_text.trim().is_empty() {
         "unauthorized".to_string()
       } else {
@@ -310,11 +316,13 @@ pub(crate) async fn handle_endpoint(
         started,
       );
       prepared.account.mark_failure(state.pool.cooldown_base());
-      state.events.emit(llm_core::event::Event::Request(llm_core::event::RequestEvent::Retry {
-        request_id: request_id.clone(),
-        attempt: attempt_u32,
-        error: body_text.clone(),
-      }));
+      state.events.emit(llm_core::event::Event::LegacyRequest(
+        llm_core::event::LegacyRequestEvent::Retry {
+          request_id: request_id.clone(),
+          attempt: attempt_u32,
+          error: body_text.clone(),
+        },
+      ));
       completion.failure(Some(status.as_u16()), body_text.clone());
       last_err = Some((status, body_text));
       continue;
@@ -393,14 +401,16 @@ pub(crate) async fn handle_endpoint(
     } else {
       let resp = transformer.transform_result(state.clone(), upstream).await;
       // Buffered: emit terminal RequestCompleted
-      state.events.emit(llm_core::event::Event::Request(llm_core::event::RequestEvent::Completed {
-        request_id: request_id.clone(),
-        success: true,
-        total_attempts: attempt_u32 + 1,
-        final_status: Some(status.as_u16()),
-        total_latency_ms: started.elapsed().as_millis() as u64,
-        error: None,
-      }));
+      state.events.emit(llm_core::event::Event::LegacyRequest(
+        llm_core::event::LegacyRequestEvent::Completed {
+          request_id: request_id.clone(),
+          success: true,
+          total_attempts: attempt_u32 + 1,
+          final_status: Some(status.as_u16()),
+          total_latency_ms: started.elapsed().as_millis() as u64,
+          error: None,
+        },
+      ));
       completion.disarm();
       resp
     };
@@ -418,14 +428,16 @@ pub(crate) async fn handle_endpoint(
     msg.clone(),
     None,
   ));
-  state.events.emit(llm_core::event::Event::Request(llm_core::event::RequestEvent::Completed {
-    request_id: request_id.clone(),
-    success: false,
-    total_attempts: (MAX_RETRIES as u32) + 1,
-    final_status: Some(status.as_u16()),
-    total_latency_ms: started.elapsed().as_millis() as u64,
-    error: Some(msg.clone()),
-  }));
+  state.events.emit(llm_core::event::Event::LegacyRequest(
+    llm_core::event::LegacyRequestEvent::Completed {
+      request_id: request_id.clone(),
+      success: false,
+      total_attempts: (MAX_RETRIES as u32) + 1,
+      final_status: Some(status.as_u16()),
+      total_latency_ms: started.elapsed().as_millis() as u64,
+      error: Some(msg.clone()),
+    },
+  ));
   completion.disarm();
   Err(ApiError::upstream(status, msg))
 }
@@ -697,7 +709,7 @@ mod tests {
       "tools.0.function.name empty".into(),
       Some(Bytes::from_static(b"{\"error\":\"upstream body\"}")),
     );
-    let Event::Request(RequestEvent::Result {
+    let Event::LegacyRequest(LegacyRequestEvent::Result {
       inbound_status,
       inbound_resp_body,
       outbound_resp_body,
@@ -734,7 +746,7 @@ mod tests {
       "token exchange: HTTP request failed".into(),
       None,
     );
-    let Event::Request(RequestEvent::Result {
+    let Event::LegacyRequest(LegacyRequestEvent::Result {
       inbound_status,
       outbound_resp_body,
       attempt,
@@ -752,7 +764,7 @@ mod tests {
   fn build_failure_result_event_from_api_err_preserves_not_implemented_envelope() {
     let api_err = ApiError::not_implemented("messages", "claude-sonnet-4-6");
     let event = build_failure_result_event_from_api_err("req-3".into(), 0, Instant::now(), &api_err, None);
-    let Event::Request(RequestEvent::Result {
+    let Event::LegacyRequest(LegacyRequestEvent::Result {
       inbound_status,
       inbound_resp_body,
       request_error,

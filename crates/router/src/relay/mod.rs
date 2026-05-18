@@ -33,7 +33,7 @@ mod tests {
   use axum::body::to_bytes;
   use axum::http::{HeaderMap, Method};
   use bytes::Bytes;
-  use llm_core::event::{Event, EventBus, EventHandler, RequestEvent};
+  use llm_core::event::{Event, EventBus, EventHandler, LegacyRequestEvent};
   use reqwest::ResponseBuilderExt;
   use serde_json::json;
   use std::sync::{Arc, Mutex};
@@ -61,7 +61,7 @@ mod tests {
   impl EventHandler for CollectingHandler {
     fn handle(&mut self, event: &Event) {
       match event {
-        Event::Request(RequestEvent::Started {
+        Event::LegacyRequest(LegacyRequestEvent::Started {
           request_id,
           ts,
           endpoint,
@@ -105,7 +105,7 @@ mod tests {
             },
           );
         }
-        Event::Request(RequestEvent::Parsed {
+        Event::LegacyRequest(LegacyRequestEvent::Parsed {
           request_id,
           attempt,
           account_id,
@@ -139,7 +139,7 @@ mod tests {
             }
           }
         }
-        Event::Request(RequestEvent::Result {
+        Event::LegacyRequest(LegacyRequestEvent::Result {
           request_id,
           attempt,
           session_source,
@@ -206,7 +206,7 @@ mod tests {
           r.messages = messages.clone();
           self.records.lock().unwrap().push(r);
         }
-        Event::Request(RequestEvent::Responded {
+        Event::LegacyRequest(LegacyRequestEvent::Responded {
           request_id,
           attempt,
           latency_ms,
@@ -390,7 +390,7 @@ mod tests {
     .with_request_body(&req_body, Some(Endpoint::ChatCompletions))
     .with_outbound_response_body(Some(&resp_body))
     .build();
-    if let llm_core::event::Event::Request(llm_core::event::RequestEvent::Result {
+    if let llm_core::event::Event::LegacyRequest(llm_core::event::LegacyRequestEvent::Result {
       session_source,
       messages,
       ..
@@ -422,7 +422,7 @@ mod tests {
     .with_request_body(&req_body, Some(Endpoint::ChatCompletions))
     .build();
 
-    if let llm_core::event::Event::Request(llm_core::event::RequestEvent::Result {
+    if let llm_core::event::Event::LegacyRequest(llm_core::event::LegacyRequestEvent::Result {
       session_source,
       request_id,
       request_error,
@@ -497,38 +497,44 @@ mod tests {
     assert_eq!(ctx.request_id, request_id);
 
     // Emit lifecycle events as caller would
-    state.events.emit(llm_core::event::Event::Request(llm_core::event::RequestEvent::Started {
-      request_id: ctx.request_id.clone(),
-      ts: 0,
-      endpoint: ctx.endpoint.map(|e| e.as_str()).unwrap_or("unknown").to_string(),
-      session_id: ctx.session_id.clone(),
-      peer_addr: Some("127.0.0.1:4142".into()),
-      local_addr: Some("127.0.0.1:4141".into()),
-      method: "POST".into(),
-      url: Some("https://api.openai.com/v1/chat/completions".into()),
-    }));
-    state.events.emit(llm_core::event::Event::Request(llm_core::event::RequestEvent::Parsed {
-      request_id: ctx.request_id.clone(),
-      attempt: 0,
-      account_id: "passthrough".to_string(),
-      provider_id: "api.openai.com".to_string(),
-      model: ctx.model.clone(),
-      stream: true,
-      initiator: "user".to_string(),
-      behave_as: None,
-      inbound_body: req_body.clone(),
-    }));
-    state.events.emit(llm_core::event::Event::Request(llm_core::event::RequestEvent::Responded {
-      request_id: ctx.request_id.clone(),
-      attempt: 0,
-      outbound_status: 200,
-      latency_ms: 1,
-      outbound_resp_headers: llm_headers::HeaderMap::new(),
-      outbound_req_method: Some("POST".to_string()),
-      outbound_req_url: Some("https://api.openai.com/v1/chat/completions".to_string()),
-      outbound_req_headers: Some((&req_headers).into()),
-      outbound_req_body: Some(req_body.clone()),
-    }));
+    state.events.emit(llm_core::event::Event::LegacyRequest(
+      llm_core::event::LegacyRequestEvent::Started {
+        request_id: ctx.request_id.clone(),
+        ts: 0,
+        endpoint: ctx.endpoint.map(|e| e.as_str()).unwrap_or("unknown").to_string(),
+        session_id: ctx.session_id.clone(),
+        peer_addr: Some("127.0.0.1:4142".into()),
+        local_addr: Some("127.0.0.1:4141".into()),
+        method: "POST".into(),
+        url: Some("https://api.openai.com/v1/chat/completions".into()),
+      },
+    ));
+    state.events.emit(llm_core::event::Event::LegacyRequest(
+      llm_core::event::LegacyRequestEvent::Parsed {
+        request_id: ctx.request_id.clone(),
+        attempt: 0,
+        account_id: "passthrough".to_string(),
+        provider_id: "api.openai.com".to_string(),
+        model: ctx.model.clone(),
+        stream: true,
+        initiator: "user".to_string(),
+        behave_as: None,
+        inbound_body: req_body.clone(),
+      },
+    ));
+    state.events.emit(llm_core::event::Event::LegacyRequest(
+      llm_core::event::LegacyRequestEvent::Responded {
+        request_id: ctx.request_id.clone(),
+        attempt: 0,
+        outbound_status: 200,
+        latency_ms: 1,
+        outbound_resp_headers: llm_headers::HeaderMap::new(),
+        outbound_req_method: Some("POST".to_string()),
+        outbound_req_url: Some("https://api.openai.com/v1/chat/completions".to_string()),
+        outbound_req_headers: Some((&req_headers).into()),
+        outbound_req_body: Some(req_body.clone()),
+      },
+    ));
 
     // Set up a mock upstream server
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

@@ -221,7 +221,10 @@ mod tests {
       "codex_exec/0.130.0 (Ubuntu 24.4.0; x86_64) unknown (codex_exec; 0.130.0)"
     );
     assert_eq!(h.authorization.as_str(), "<missing>");
-    assert!(h.host.is_none(), "no inbound Host => no persona-default Host (would leak to wire)");
+    assert!(
+      h.host.is_none(),
+      "no inbound Host => no persona-default Host (would leak to wire)"
+    );
     assert_eq!(h.accept.as_str(), "text/event-stream");
     assert_eq!(h.originator.as_str(), "codex_exec");
     assert_eq!(h.chatgpt_account_id.as_str(), "<missing>");

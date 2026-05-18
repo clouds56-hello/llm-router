@@ -38,29 +38,33 @@ pub(super) async fn proxy_passthrough(
     .ok()
     .map(llm_accounts::routing::route_mode_as_str)
     .map(str::to_string);
-  state.events.emit(llm_core::event::Event::Request(llm_core::event::RequestEvent::Started {
-    request_id: request_id.clone(),
-    ts,
-    endpoint: path.to_string(),
-    session_id: hx.session_id.clone(),
-    peer_addr: Some(peer_addr.to_string()),
-    local_addr: Some(local_addr.to_string()),
-    method: parts.method.to_string(),
-    url: Some(url.clone()),
-  }));
-  state.events.emit(llm_core::event::Event::Request(llm_core::event::RequestEvent::Headers {
-    request_id: request_id.clone(),
-    ts,
-    endpoint_hint: None,
-    path: Some(path.to_string()),
-    session_id: hx.session_id.clone(),
-    project_id: hx.project_id.clone(),
-    header_initiator: hx.header_initiator.clone(),
-    local_addr: Some(local_addr.to_string()),
-    mode,
-    route_mode_hint: hx.route_mode_hint.clone(),
-    inbound_headers: (&parts.headers).into(),
-  }));
+  state.events.emit(llm_core::event::Event::LegacyRequest(
+    llm_core::event::LegacyRequestEvent::Started {
+      request_id: request_id.clone(),
+      ts,
+      endpoint: path.to_string(),
+      session_id: hx.session_id.clone(),
+      peer_addr: Some(peer_addr.to_string()),
+      local_addr: Some(local_addr.to_string()),
+      method: parts.method.to_string(),
+      url: Some(url.clone()),
+    },
+  ));
+  state.events.emit(llm_core::event::Event::LegacyRequest(
+    llm_core::event::LegacyRequestEvent::Headers {
+      request_id: request_id.clone(),
+      ts,
+      endpoint_hint: None,
+      path: Some(path.to_string()),
+      session_id: hx.session_id.clone(),
+      project_id: hx.project_id.clone(),
+      header_initiator: hx.header_initiator.clone(),
+      local_addr: Some(local_addr.to_string()),
+      mode,
+      route_mode_hint: hx.route_mode_hint.clone(),
+      inbound_headers: (&parts.headers).into(),
+    },
+  ));
 
   let request_body = axum::body::to_bytes(Body::new(body), usize::MAX)
     .await
@@ -83,14 +87,16 @@ pub(super) async fn proxy_passthrough(
           msg.clone(),
           None,
         ));
-        state.events.emit(llm_core::event::Event::Request(llm_core::event::RequestEvent::Completed {
-          request_id: request_id.clone(),
-          success: false,
-          total_attempts: 1,
-          final_status: Some(status.as_u16()),
-          total_latency_ms: started.elapsed().as_millis() as u64,
-          error: Some(msg),
-        }));
+        state.events.emit(llm_core::event::Event::LegacyRequest(
+          llm_core::event::LegacyRequestEvent::Completed {
+            request_id: request_id.clone(),
+            success: false,
+            total_attempts: 1,
+            final_status: Some(status.as_u16()),
+            total_latency_ms: started.elapsed().as_millis() as u64,
+            error: Some(msg),
+          },
+        ));
         return Ok(err.into_response());
       }
     }
@@ -116,17 +122,19 @@ pub(super) async fn proxy_passthrough(
   let mut completion =
     crate::pipeline::completion::CompletionGuard::new(state.events.clone(), request_id.clone(), started);
   let stream = body_meta.stream;
-  state.events.emit(llm_core::event::Event::Request(llm_core::event::RequestEvent::Parsed {
-    request_id: request_id.clone(),
-    attempt: ctx.attempt,
-    account_id: identity.account_id.unwrap_or_else(|| "<unknown>".to_string()),
-    provider_id: identity.provider_id.unwrap_or_else(|| host.to_string()),
-    model: body_meta.model.clone(),
-    stream,
-    initiator: body_meta.initiator,
-    behave_as: None,
-    inbound_body: inbound_decoded_body.clone(),
-  }));
+  state.events.emit(llm_core::event::Event::LegacyRequest(
+    llm_core::event::LegacyRequestEvent::Parsed {
+      request_id: request_id.clone(),
+      attempt: ctx.attempt,
+      account_id: identity.account_id.unwrap_or_else(|| "<unknown>".to_string()),
+      provider_id: identity.provider_id.unwrap_or_else(|| host.to_string()),
+      model: body_meta.model.clone(),
+      stream,
+      initiator: body_meta.initiator,
+      behave_as: None,
+      inbound_body: inbound_decoded_body.clone(),
+    },
+  ));
 
   let response = match upstream.send().await {
     Ok(response) => response,
@@ -148,17 +156,19 @@ pub(super) async fn proxy_passthrough(
     }
   };
   let status = response.status();
-  state.events.emit(llm_core::event::Event::Request(llm_core::event::RequestEvent::Responded {
-    request_id: request_id.clone(),
-    attempt: ctx.attempt,
-    outbound_status: status.as_u16(),
-    latency_ms: started.elapsed().as_millis() as u64,
-    outbound_resp_headers: response.headers().into(),
-    outbound_req_method: Some(parts.method.to_string()),
-    outbound_req_url: Some(url.clone()),
-    outbound_req_headers: Some((&outbound_req_headers).into()),
-    outbound_req_body: Some(request_body.clone()),
-  }));
+  state.events.emit(llm_core::event::Event::LegacyRequest(
+    llm_core::event::LegacyRequestEvent::Responded {
+      request_id: request_id.clone(),
+      attempt: ctx.attempt,
+      outbound_status: status.as_u16(),
+      latency_ms: started.elapsed().as_millis() as u64,
+      outbound_resp_headers: response.headers().into(),
+      outbound_req_method: Some(parts.method.to_string()),
+      outbound_req_url: Some(url.clone()),
+      outbound_req_headers: Some((&outbound_req_headers).into()),
+      outbound_req_body: Some(request_body.clone()),
+    },
+  ));
 
   if is_sse_response(response.headers(), stream) {
     completion.disarm();

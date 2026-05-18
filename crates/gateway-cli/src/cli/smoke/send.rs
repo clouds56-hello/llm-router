@@ -25,6 +25,7 @@ use bytes::Bytes;
 use clap::Args;
 use futures_util::StreamExt;
 use llm_config::RouteMode;
+use llm_core::event::Event as CoreEvent;
 use llm_router::api::AppState;
 use llm_router2::event::{BuiltHeadersSummary, ConvertedRequestSummary, ResolvedSummary};
 use llm_router2::pipeline::stages::ConvertedResponse;
@@ -33,7 +34,6 @@ use llm_router2::stages::{
   PoolResolve,
 };
 use llm_router2::{Event, EventBus, EventPayload, PipelineError, PipelineRunner, Profile, RawInbound, StageEvent};
-use llm_core::event::Event as CoreEvent;
 use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -417,7 +417,12 @@ fn print_event(event: &Event) {
     EventPayload::Record(r) => {
       use llm_core::router2_event::RecordEvent;
       match r {
-        RecordEvent::UpstreamReq { method, url, headers, body } => {
+        RecordEvent::UpstreamReq {
+          method,
+          url,
+          headers,
+          body,
+        } => {
           println!(
             "[record:upstream_req] {method} {url} headers={} body_bytes={}",
             headers.len(),

@@ -135,7 +135,15 @@ impl Router2RequestsWriter {
          inbound_req_headers = ?6,
          inbound_req_body = ?7
        WHERE request_id = ?1",
-      params![id, model, stream as i64, session_id, initiator, hdr_json.as_ref(), inbound_req_body.as_ref()],
+      params![
+        id,
+        model,
+        stream as i64,
+        session_id,
+        initiator,
+        hdr_json.as_ref(),
+        inbound_req_body.as_ref()
+      ],
     )?;
     if updated == 0 {
       tracing::warn!(request_id = %id, "router2 Extract UPDATE matched no row");
@@ -192,12 +200,7 @@ impl Router2RequestsWriter {
     Ok(())
   }
 
-  pub fn on_convert_request(
-    &mut self,
-    request_id: &str,
-    attempt: u32,
-    outbound_req_body: &bytes::Bytes,
-  ) -> Result<()> {
+  pub fn on_convert_request(&mut self, request_id: &str, attempt: u32, outbound_req_body: &bytes::Bytes) -> Result<()> {
     let id = composite_request_id(request_id, attempt);
     let Some(conn) = self.conn_for_request(&id) else {
       tracing::warn!(request_id = %id, "router2 ConvertRequest without prior Started");
@@ -409,11 +412,9 @@ impl EventHandler for Router2EventHandler {
           s.upstream_endpoint.as_str(),
         ),
         StageEvent::BuildHeaders(s) => self.writer.on_build_headers(request_id, attempt, &s.headers),
-        StageEvent::ConvertRequest(s) => {
-          self
-            .writer
-            .on_convert_request(request_id, attempt, &s.upstream_wire_body)
-        }
+        StageEvent::ConvertRequest(s) => self
+          .writer
+          .on_convert_request(request_id, attempt, &s.upstream_wire_body),
         StageEvent::Send(s) => self
           .writer
           .on_send(request_id, attempt, now_unix(), s.status, &s.headers),
@@ -435,11 +436,14 @@ impl EventHandler for Router2EventHandler {
       // `reqwest::Response::headers()`) and so is intentionally a no-op
       // here — we keep the event for downstream consumers (debug printers,
       // observers) that want a single source of wire-truth events.
-      Router2EventPayload::Record(RecordEvent::UpstreamReq { method, url, headers, body }) => {
-        self
-          .writer
-          .on_upstream_req(request_id, attempt, method.as_str(), url.as_str(), headers, body)
-      }
+      Router2EventPayload::Record(RecordEvent::UpstreamReq {
+        method,
+        url,
+        headers,
+        body,
+      }) => self
+        .writer
+        .on_upstream_req(request_id, attempt, method.as_str(), url.as_str(), headers, body),
       Router2EventPayload::Record(RecordEvent::UpstreamResp { .. }) => Ok(()),
       Router2EventPayload::Record(RecordEvent::UpstreamBody { body }) => {
         self.writer.on_upstream_body(request_id, attempt, body)
@@ -483,13 +487,12 @@ pub fn read_request_row(
   Ok(None)
 }
 
-fn select_row(
-  conn: &Connection,
-  request_id: &str,
-) -> Result<Option<serde_json::Map<String, serde_json::Value>>> {
+fn select_row(conn: &Connection, request_id: &str) -> Result<Option<serde_json::Map<String, serde_json::Value>>> {
   let mut stmt = conn.prepare("SELECT * FROM requests WHERE request_id = ? LIMIT 1")?;
   let col_count = stmt.column_count();
-  let col_names: Vec<String> = (0..col_count).map(|i| stmt.column_name(i).unwrap_or("").to_string()).collect();
+  let col_names: Vec<String> = (0..col_count)
+    .map(|i| stmt.column_name(i).unwrap_or("").to_string())
+    .collect();
   let mut rows = stmt.query(params![request_id])?;
   let Some(row) = rows.next()? else {
     return Ok(None);

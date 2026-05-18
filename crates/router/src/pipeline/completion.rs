@@ -1,4 +1,4 @@
-use llm_core::event::{Event, EventBus, RequestEvent};
+use llm_core::event::{Event, EventBus, LegacyRequestEvent};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -44,7 +44,7 @@ impl Drop for CompletionGuard {
     if !self.armed {
       return;
     }
-    self.events.emit(Event::Request(RequestEvent::Completed {
+    self.events.emit(Event::LegacyRequest(LegacyRequestEvent::Completed {
       request_id: self.request_id.clone(),
       success: false,
       total_attempts: self.total_attempts,

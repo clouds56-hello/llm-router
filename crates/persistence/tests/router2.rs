@@ -173,7 +173,13 @@ fn happy_path_persists_all_stages() {
   let dir = tempdir();
   let mut h = Router2EventHandler::new(dir.clone()).unwrap();
   let req = "req-happy";
-  h.handle(&r2(req, 0, StageEvent::Started { endpoint: Endpoint::Responses }));
+  h.handle(&r2(
+    req,
+    0,
+    StageEvent::Started {
+      endpoint: Endpoint::Responses,
+    },
+  ));
   h.handle(&r2(
     req,
     0,
@@ -198,7 +204,9 @@ fn happy_path_persists_all_stages() {
   assert_eq!(as_text(&row["initiator"]).as_deref(), Some("user"));
   assert_eq!(as_text(&row["account_id"]).as_deref(), Some("acct-1"));
   assert_eq!(as_text(&row["provider_id"]).as_deref(), Some("prov-1"));
-  assert!(as_text(&row["inbound_req_headers"]).unwrap().contains("\"x-test\":\"1\""));
+  assert!(as_text(&row["inbound_req_headers"])
+    .unwrap()
+    .contains("\"x-test\":\"1\""));
   assert_eq!(as_text(&row["inbound_req_body"]).as_deref(), Some("{\"in\":1}"));
   assert!(as_text(&row["outbound_req_headers"])
     .unwrap()
@@ -221,7 +229,13 @@ fn error_before_send_leaves_status_null_and_records_error() {
   let dir = tempdir();
   let mut h = Router2EventHandler::new(dir.clone()).unwrap();
   let req = "req-err";
-  h.handle(&r2(req, 0, StageEvent::Started { endpoint: Endpoint::Messages }));
+  h.handle(&r2(
+    req,
+    0,
+    StageEvent::Started {
+      endpoint: Endpoint::Messages,
+    },
+  ));
   h.handle(&r2(req, 0, extracted("m", false, None, b"")));
   h.handle(&r2(req, 0, error(Stage::Resolve, "no account")));
   h.handle(&r2(req, 0, completed(false, 1)));
@@ -229,10 +243,7 @@ fn error_before_send_leaves_status_null_and_records_error() {
   let row = fetch_row(&dir, req);
   assert!(is_null(&row["status"]));
   assert!(is_null(&row["outbound_resp_status"]));
-  assert_eq!(
-    as_text(&row["request_error"]).as_deref(),
-    Some("resolve: no account")
-  );
+  assert_eq!(as_text(&row["request_error"]).as_deref(), Some("resolve: no account"));
   assert!(!is_null(&row["latency_ms"]));
 }
 
@@ -242,7 +253,13 @@ fn retry_produces_two_independent_rows() {
   let mut h = Router2EventHandler::new(dir.clone()).unwrap();
   let req = "req-retry";
   // attempt 0: fails at Send
-  h.handle(&r2(req, 0, StageEvent::Started { endpoint: Endpoint::Responses }));
+  h.handle(&r2(
+    req,
+    0,
+    StageEvent::Started {
+      endpoint: Endpoint::Responses,
+    },
+  ));
   h.handle(&r2(req, 0, extracted("m", false, None, b"a")));
   h.handle(&r2(req, 0, resolved("acct", "prov")));
   h.handle(&r2(req, 0, built_headers()));
@@ -250,7 +267,13 @@ fn retry_produces_two_independent_rows() {
   h.handle(&r2(req, 0, error(Stage::Send, "500")));
   h.handle(&r2(req, 0, completed(false, 1)));
   // attempt 1: succeeds
-  h.handle(&r2(req, 1, StageEvent::Started { endpoint: Endpoint::Responses }));
+  h.handle(&r2(
+    req,
+    1,
+    StageEvent::Started {
+      endpoint: Endpoint::Responses,
+    },
+  ));
   h.handle(&r2(req, 1, extracted("m", false, None, b"a")));
   h.handle(&r2(req, 1, resolved("acct", "prov")));
   h.handle(&r2(req, 1, built_headers()));

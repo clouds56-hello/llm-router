@@ -38,41 +38,47 @@ async fn handle(
     .map(route_mode_as_str)
     .map(str::to_string);
 
-  state.events.emit(llm_core::event::Event::Request(llm_core::event::RequestEvent::Started {
-    request_id: hx.request_id.clone(),
-    ts,
-    endpoint: endpoint_hint.clone(),
-    session_id: hx.session_id.clone(),
-    peer_addr: None,
-    local_addr: local_addr.clone(),
-    method: "POST".to_string(),
-    url: None,
-  }));
-  state.events.emit(llm_core::event::Event::Request(llm_core::event::RequestEvent::Headers {
-    request_id: hx.request_id.clone(),
-    ts,
-    endpoint_hint: Some(endpoint_hint),
-    path: None,
-    session_id: hx.session_id.clone(),
-    project_id: hx.project_id.clone(),
-    header_initiator: hx.header_initiator.clone(),
-    local_addr,
-    mode,
-    route_mode_hint: hx.route_mode_hint.clone(),
-    inbound_headers: (&inbound).into(),
-  }));
+  state.events.emit(llm_core::event::Event::LegacyRequest(
+    llm_core::event::LegacyRequestEvent::Started {
+      request_id: hx.request_id.clone(),
+      ts,
+      endpoint: endpoint_hint.clone(),
+      session_id: hx.session_id.clone(),
+      peer_addr: None,
+      local_addr: local_addr.clone(),
+      method: "POST".to_string(),
+      url: None,
+    },
+  ));
+  state.events.emit(llm_core::event::Event::LegacyRequest(
+    llm_core::event::LegacyRequestEvent::Headers {
+      request_id: hx.request_id.clone(),
+      ts,
+      endpoint_hint: Some(endpoint_hint),
+      path: None,
+      session_id: hx.session_id.clone(),
+      project_id: hx.project_id.clone(),
+      header_initiator: hx.header_initiator.clone(),
+      local_addr,
+      mode,
+      route_mode_hint: hx.route_mode_hint.clone(),
+      inbound_headers: (&inbound).into(),
+    },
+  ));
 
   let decoded = match super::codec::decode_json_request(&inbound, body) {
     Ok(decoded) => decoded,
     Err(err) => {
-      state.events.emit(llm_core::event::Event::Request(llm_core::event::RequestEvent::Completed {
-        request_id: hx.request_id.clone(),
-        success: false,
-        total_attempts: 1,
-        final_status: Some(err.status().as_u16()),
-        total_latency_ms: started.elapsed().as_millis() as u64,
-        error: Some(err.to_string()),
-      }));
+      state.events.emit(llm_core::event::Event::LegacyRequest(
+        llm_core::event::LegacyRequestEvent::Completed {
+          request_id: hx.request_id.clone(),
+          success: false,
+          total_attempts: 1,
+          final_status: Some(err.status().as_u16()),
+          total_latency_ms: started.elapsed().as_millis() as u64,
+          error: Some(err.to_string()),
+        },
+      ));
       return Err(err);
     }
   };

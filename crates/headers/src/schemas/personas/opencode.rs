@@ -177,7 +177,10 @@ mod tests {
       "opencode/1.14.28 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.13"
     );
     assert_eq!(h.authorization.as_str(), "<missing>");
-    assert!(h.host.is_none(), "no inbound Host => no persona-default Host (would leak to wire)");
+    assert!(
+      h.host.is_none(),
+      "no inbound Host => no persona-default Host (would leak to wire)"
+    );
     assert_eq!(h.accept.as_str(), "*/*");
     assert_eq!(h.accept_encoding.as_str(), "gzip, deflate, br, zstd");
     assert_eq!(h.connection.as_str(), "keep-alive");
