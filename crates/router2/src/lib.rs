@@ -31,6 +31,6 @@ pub use pipeline::{
   error::PipelineError,
   outcome::PipelineOutcome,
   stages as stage_traits,
-  Pipeline, PipelineRunner, RawInbound,
+  Pipeline, PipelineRunner, RawInbound, RunnerOptions,
 };
 pub use profile::Profile;

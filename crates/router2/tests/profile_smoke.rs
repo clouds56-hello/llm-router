@@ -15,7 +15,7 @@ use llm_router2::event::{EventPayload, Stage, StageEvent};
 use llm_router2::stages::{
   AccountSelector, DefaultExtract, NoopBuildHeaders, NoopConvertRequest, PoolResolve, SelectorOutcome,
 };
-use llm_router2::{Event, EventBus, PipelineError, PipelineRunner, Profile, RawInbound};
+use llm_router2::{Event, EventBus, PipelineError, PipelineRunner, Profile, RawInbound, RunnerOptions};
 use serde_json::Value;
 use smol_str::SmolStr;
 use std::sync::{Arc, Mutex};
@@ -164,7 +164,7 @@ async fn pre_send_happy_path_emits_expected_event_sequence() {
     Arc::new(NoopBuildHeaders),
     Arc::new(NoopConvertRequest),
   ));
-  let runner = PipelineRunner::new(profile, bus);
+  let runner = PipelineRunner::with_options(profile, bus, RunnerOptions::stop_after(Stage::ConvertRequest));
 
   let outcome = runner.run(raw_chat("input-model")).await;
   assert!(outcome.success, "outcome: {outcome:?}");

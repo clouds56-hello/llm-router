@@ -10,12 +10,12 @@
 //! Constructors:
 //!
 //! * [`Profile::full`] — all six slots provided. The intended production
-//!   shape, used once the Send / ConvertResponse half lands in PR3.
-//! * [`Profile::without_send`] — the first four stages are supplied; the
-//!   Send and ConvertResponse slots are filled with no-op stages and the
-//!   runner is instructed to stop after ConvertRequest and report success.
-//!   This is the PR2 testbed for exercising the front five stages end-to-end
-//!   before the real network call lands.
+//!   shape.
+//! * [`Profile::without_send`] — convenience for dry-run / smoke flows: the
+//!   Send and ConvertResponse slots are filled with no-ops. Combine with
+//!   [`RunnerOptions::stop_after`](crate::pipeline::RunnerOptions::stop_after)
+//!   pointing at [`Stage::ConvertRequest`](crate::event::Stage) to short-
+//!   circuit the runner once the outbound request is fully built.
 
 use crate::pipeline::stages::{
   BuildHeadersStage, ConvertRequestStage, ConvertResponseStage, ExtractStage, ResolveStage, SendStage,
@@ -32,12 +32,6 @@ pub struct Profile {
   pub convert_request: Arc<dyn ConvertRequestStage>,
   pub send: Arc<dyn SendStage>,
   pub convert_response: Arc<dyn ConvertResponseStage>,
-  /// When `true`, [`PipelineRunner`] stops after the ConvertRequest stage
-  /// and reports success without touching the Send or ConvertResponse
-  /// slots. Removed in PR3 once a real Send stage lands.
-  ///
-  /// [`PipelineRunner`]: crate::pipeline::PipelineRunner
-  pub(crate) stop_before_send: bool,
 }
 
 impl Profile {
@@ -58,13 +52,13 @@ impl Profile {
       convert_request,
       send,
       convert_response,
-      stop_before_send: false,
     }
   }
 
-  /// PR2 constructor. Runs Extract → Resolve → BuildHeaders → ConvertRequest
-  /// then short-circuits with success. The Send and ConvertResponse slots
-  /// are filled with no-ops and never invoked.
+  /// Convenience constructor for dry-run / smoke flows. Fills the Send and
+  /// ConvertResponse slots with no-op stages. Callers should pair this with
+  /// [`RunnerOptions::stop_after(Stage::ConvertRequest)`](crate::pipeline::RunnerOptions::stop_after)
+  /// so the runner short-circuits instead of invoking the no-ops.
   pub fn without_send(
     name: impl Into<SmolStr>,
     extract: Arc<dyn ExtractStage>,
@@ -80,7 +74,6 @@ impl Profile {
       convert_request,
       send: Arc::new(NoopSend),
       convert_response: Arc::new(NoopConvertResponse),
-      stop_before_send: true,
     }
   }
 }

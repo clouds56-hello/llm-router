@@ -16,5 +16,5 @@ pub use build_headers::{NoopBuildHeaders, PersonaBuildHeaders};
 pub use convert_request::{DefaultConvertRequest, NoopConvertRequest};
 pub use convert_response::NoopConvertResponse;
 pub use extract::DefaultExtract;
-pub use resolve::{AccountSelector, PoolResolve, SelectorOutcome};
+pub use resolve::{AccountSelector, PoolAccountSelector, PoolResolve, SelectorOutcome};
 pub use send::NoopSend;

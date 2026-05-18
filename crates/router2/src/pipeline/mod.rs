@@ -8,10 +8,10 @@
 //! * Run each stage; on success, emit the matching per-stage event; on
 //!   failure, emit [`StageEvent::Error`] (with the stage/recoverable flag
 //!   pulled verbatim from [`PipelineError`]) and short-circuit.
-//! * In PR2, the runner can be configured (via [`Profile::stop_before_send`])
-//!   to stop after the ConvertRequest stage and report success. This mode
-//!   exists so the front five stages are exercisable end-to-end before the
-//!   real Send / ConvertResponse pair lands in PR3.
+//! * The runner can be configured (via [`RunnerOptions::stop_after`]) to
+//!   short-circuit with success after a specific stage completes. This is
+//!   how dry-run / smoke flows skip the Send half without needing a
+//!   special-case profile constructor.
 //!
 //! Hooks are intentionally absent from PR1.
 //!
@@ -25,7 +25,7 @@ pub mod error;
 pub mod outcome;
 pub mod stages;
 
-use crate::event::{EventBus, StageEvent};
+use crate::event::{EventBus, Stage, StageEvent};
 use crate::profile::Profile;
 use ctx::PipelineCtx;
 use error::PipelineError;
@@ -40,14 +40,39 @@ use std::sync::Arc;
 /// Alias for clarity at call sites — the same type as [`PipelineRunner`].
 pub type Pipeline = PipelineRunner;
 
+/// Per-run configuration knobs for [`PipelineRunner`].
+///
+/// `stop_after` short-circuits the run with success once the named stage
+/// completes — used by dry-run / smoke flows that want the front-half output
+/// (BuildHeaders + ConvertRequest) without invoking Send.
+#[derive(Debug, Clone, Default)]
+pub struct RunnerOptions {
+  pub stop_after: Option<Stage>,
+}
+
+impl RunnerOptions {
+  pub fn stop_after(stage: Stage) -> Self {
+    Self { stop_after: Some(stage) }
+  }
+}
+
 pub struct PipelineRunner {
   pub profile: Arc<Profile>,
   pub events: Arc<EventBus>,
+  pub options: RunnerOptions,
 }
 
 impl PipelineRunner {
   pub fn new(profile: Arc<Profile>, events: Arc<EventBus>) -> Self {
-    Self { profile, events }
+    Self {
+      profile,
+      events,
+      options: RunnerOptions::default(),
+    }
+  }
+
+  pub fn with_options(profile: Arc<Profile>, events: Arc<EventBus>, options: RunnerOptions) -> Self {
+    Self { profile, events, options }
   }
 
   pub async fn run(&self, raw: RawInbound) -> PipelineOutcome {
@@ -70,6 +95,9 @@ impl PipelineRunner {
       }
       Err(err) => return self.fail(&ctx, err),
     };
+    if self.options.stop_after == Some(Stage::Extract) {
+      return self.short_circuit(&ctx, None, None, None);
+    }
 
     // ---- Resolve ----
     let resolved = match self.profile.resolve.resolve(&ctx, &extracted).await {
@@ -86,6 +114,9 @@ impl PipelineRunner {
       }
       Err(err) => return self.fail(&ctx, err),
     };
+    if self.options.stop_after == Some(Stage::Resolve) {
+      return self.short_circuit(&ctx, Some(resolved), None, None);
+    }
 
     // ---- BuildHeaders ----
     let headers = match self
@@ -100,6 +131,9 @@ impl PipelineRunner {
       }
       Err(err) => return self.fail(&ctx, err),
     };
+    if self.options.stop_after == Some(Stage::BuildHeaders) {
+      return self.short_circuit(&ctx, Some(resolved), Some(headers), None);
+    }
 
     // ---- ConvertRequest ----
     let converted = match self
@@ -114,17 +148,8 @@ impl PipelineRunner {
       }
       Err(err) => return self.fail(&ctx, err),
     };
-
-    // PR2 short-circuit: a `stop_before_send` profile signals that the Send
-    // half is intentionally stubbed and the run should report success after
-    // ConvertRequest. Removed in PR3 once a real Send stage lands.
-    if self.profile.stop_before_send {
-      let _ = (&headers, &converted); // PR3 consumes these.
-      ctx.emit_known(StageEvent::Completed {
-        success: true,
-        attempts: ctx.attempt + 1,
-      });
-      return PipelineOutcome::success(ctx.attempt + 1);
+    if self.options.stop_after == Some(Stage::ConvertRequest) {
+      return self.short_circuit(&ctx, Some(resolved), Some(headers), Some(converted));
     }
 
     // ---- Send ----
@@ -135,6 +160,10 @@ impl PipelineRunner {
       }
       Err(err) => return self.fail(&ctx, err),
     };
+    if self.options.stop_after == Some(Stage::Send) {
+      let _ = sent;
+      return self.short_circuit(&ctx, Some(resolved), Some(headers), Some(converted));
+    }
 
     // ---- ConvertResponse ----
     let _converted_response = match self.profile.convert_response.convert_response(&ctx, sent).await {
@@ -150,6 +179,33 @@ impl PipelineRunner {
       attempts: ctx.attempt + 1,
     });
     PipelineOutcome::success(ctx.attempt + 1)
+      .with_resolved(resolved)
+      .with_built_headers(headers)
+      .with_converted_request(converted)
+  }
+
+  fn short_circuit(
+    &self,
+    ctx: &PipelineCtx,
+    resolved: Option<Resolved>,
+    headers: Option<BuiltHeaders>,
+    converted: Option<ConvertedRequest>,
+  ) -> PipelineOutcome {
+    ctx.emit_known(StageEvent::Completed {
+      success: true,
+      attempts: ctx.attempt + 1,
+    });
+    let mut out = PipelineOutcome::success(ctx.attempt + 1);
+    if let Some(r) = resolved {
+      out = out.with_resolved(r);
+    }
+    if let Some(h) = headers {
+      out = out.with_built_headers(h);
+    }
+    if let Some(c) = converted {
+      out = out.with_converted_request(c);
+    }
+    out
   }
 
   fn fail(&self, ctx: &PipelineCtx, err: PipelineError) -> PipelineOutcome {
