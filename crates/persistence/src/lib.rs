@@ -167,7 +167,7 @@ impl EventHandler for DbEventHandler {
           resp_headers: HeaderMap::new(),
           resp_body: Bytes::new(),
         };
-        if let Err(e) = self.requests.started(
+        if let Err(e) = self.on_started(
           request_id,
           *ts,
           endpoint,
@@ -182,36 +182,6 @@ impl EventHandler for DbEventHandler {
         ) {
           tracing::warn!(error = %e, "failed to insert started requests db row");
         }
-        self.pending.insert(
-          (request_id.clone(), 0),
-          PendingRequest {
-            ts: *ts,
-            session_id: session_id.clone(),
-            project_id: None,
-            local_addr: local_addr.clone(),
-            mode: None,
-            behave_as: None,
-            peer_addr: peer_addr.clone(),
-            method: Some(method.clone()),
-            endpoint: endpoint.clone(),
-            model: String::new(),
-            initiator: String::new(),
-            stream: false,
-            account_id: String::new(),
-            provider_id: String::new(),
-            inbound_url: url.clone(),
-            inbound_req_headers: HeaderMap::new(),
-            inbound_req_body: Bytes::new(),
-            outbound_method: None,
-            outbound_url: None,
-            outbound_req_headers: HeaderMap::new(),
-            outbound_req_body: Bytes::new(),
-            outbound_resp_headers: HeaderMap::new(),
-            outbound_have: false,
-            latency_header_ms: None,
-            result_written: false,
-          },
-        );
       }
       Event::LegacyRequest(LegacyRequestEvent::Headers {
         request_id,
@@ -239,8 +209,10 @@ impl EventHandler for DbEventHandler {
           resp_headers: HeaderMap::new(),
           resp_body: Bytes::new(),
         };
-        if let Err(e) = self.requests.headers(
+        if let Err(e) = self.on_headers(
           request_id,
+          project_id.as_deref(),
+          header_initiator.as_deref(),
           requests::HeadersUpdate {
             ts: *ts,
             endpoint: &endpoint,
@@ -253,50 +225,6 @@ impl EventHandler for DbEventHandler {
         ) {
           tracing::warn!(error = %e, "failed to insert/update headers requests db row");
         }
-        let key = (request_id.clone(), 0);
-        let pending = self.pending.entry(key).or_insert_with(|| PendingRequest {
-          ts: *ts,
-          session_id: session_id.clone(),
-          project_id: project_id.clone(),
-          local_addr: local_addr.clone(),
-          mode: mode.clone(),
-          behave_as: None,
-          peer_addr: None,
-          method: method.map(str::to_string),
-          endpoint: endpoint.clone(),
-          model: String::new(),
-          initiator: header_initiator.clone().unwrap_or_default(),
-          stream: false,
-          account_id: String::new(),
-          provider_id: String::new(),
-          inbound_url: url.map(str::to_string),
-          inbound_req_headers: inbound_headers.clone(),
-          inbound_req_body: Bytes::new(),
-          outbound_method: None,
-          outbound_url: None,
-          outbound_req_headers: HeaderMap::new(),
-          outbound_req_body: Bytes::new(),
-          outbound_resp_headers: HeaderMap::new(),
-          outbound_have: false,
-          latency_header_ms: None,
-          result_written: false,
-        });
-        pending.ts = *ts;
-        pending.session_id = session_id.clone().or_else(|| pending.session_id.clone());
-        pending.project_id = project_id.clone().or_else(|| pending.project_id.clone());
-        pending.local_addr = local_addr.clone().or_else(|| pending.local_addr.clone());
-        pending.mode = mode.clone().or_else(|| pending.mode.clone());
-        pending.method = pending.method.clone().or_else(|| method.map(str::to_string));
-        if !endpoint.is_empty() {
-          pending.endpoint = endpoint;
-        }
-        if let Some(initiator) = header_initiator.clone() {
-          pending.initiator = initiator;
-        }
-        if pending.inbound_url.is_none() {
-          pending.inbound_url = url.map(str::to_string);
-        }
-        pending.inbound_req_headers = inbound_headers.clone();
       }
       Event::LegacyRequest(LegacyRequestEvent::Parsed {
         request_id,
@@ -309,30 +237,18 @@ impl EventHandler for DbEventHandler {
         behave_as,
         inbound_body,
       }) => {
-        // For retry attempts, clone from the base (attempt 0) entry
-        let key = (request_id.clone(), *attempt);
-        if *attempt > 0 && !self.pending.contains_key(&key) {
-          if let Some(base) = self.pending.get(&(request_id.clone(), 0)).cloned() {
-            let mut retry = base;
-            retry.latency_header_ms = None;
-            retry.result_written = false;
-            self.pending.insert(key.clone(), retry);
-          }
-        }
-        if let Some(p) = self.pending.get_mut(&key) {
-          p.account_id = account_id.clone();
-          p.provider_id = provider_id.clone();
-          p.model = model.clone();
-          p.stream = *stream;
-          p.initiator = initiator.clone();
-          p.behave_as = behave_as.clone().or_else(|| p.behave_as.clone());
-          p.inbound_req_body = inbound_body.clone();
-          if let Err(e) = self.requests.parsed(
+        let parsed_seed = self
+          .pending
+          .get(&(request_id.clone(), *attempt))
+          .or_else(|| self.pending.get(&(request_id.clone(), 0)))
+          .map(|p| (p.ts, p.endpoint.clone()));
+        if let Some((ts, endpoint)) = parsed_seed {
+          if let Err(e) = self.on_parsed(
             request_id,
             *attempt,
             requests::ParsedUpdate {
-              ts: p.ts,
-              endpoint: &p.endpoint,
+              ts,
+              endpoint: &endpoint,
               account_id,
               provider_id,
               model,
@@ -357,24 +273,8 @@ impl EventHandler for DbEventHandler {
         outbound_req_headers,
         outbound_req_body,
       }) => {
-        let key = (request_id.clone(), *attempt);
-        if let Some(p) = self.pending.get_mut(&key) {
-          p.latency_header_ms = Some(*latency_ms);
-          if outbound_req_method.is_some() {
-            p.outbound_method = outbound_req_method.clone();
-          }
-          if outbound_req_url.is_some() {
-            p.outbound_url = outbound_req_url.clone();
-          }
-          if let Some(h) = outbound_req_headers.as_ref() {
-            p.outbound_req_headers = h.clone();
-          }
-          if let Some(b) = outbound_req_body.as_ref() {
-            p.outbound_req_body = b.clone();
-          }
-          p.outbound_resp_headers = outbound_resp_headers.clone();
-          p.outbound_have = true;
-          if let Err(e) = self.requests.responded(
+        if let Some(p) = self.pending.get(&(request_id.clone(), *attempt)) {
+          if let Err(e) = self.on_responded(
             p.ts,
             request_id,
             *attempt,
@@ -403,119 +303,21 @@ impl EventHandler for DbEventHandler {
         outbound_resp_body,
         messages,
       }) => {
-        let key = (request_id.clone(), *attempt);
-        let composite_id = if *attempt == 0 {
-          request_id.clone()
-        } else {
-          format!("{request_id}:{attempt}")
-        };
-        let pending = if *attempt == 0 {
-          self.pending.get_mut(&key).map(|p| {
-            p.result_written = true;
-            p.clone()
-          })
-        } else {
-          self.pending.remove(&key)
-        };
-        let record = if let Some(p) = pending {
-          let outbound = if p.outbound_have || outbound_resp_body.is_some() {
-            Some(HttpSnapshot {
-              method: p.outbound_method.clone(),
-              url: p.outbound_url.clone(),
-              status: Some(*inbound_status),
-              req_headers: p.outbound_req_headers.clone(),
-              req_body: p.outbound_req_body.clone(),
-              resp_headers: p.outbound_resp_headers.clone(),
-              resp_body: outbound_resp_body.clone().unwrap_or_default(),
-            })
-          } else {
-            None
-          };
-          let inbound = HttpSnapshot {
-            method: p.method.clone(),
-            url: p.inbound_url.clone(),
-            status: Some(*inbound_status),
-            req_headers: p.inbound_req_headers.clone(),
-            req_body: p.inbound_req_body.clone(),
-            resp_headers: inbound_resp_headers.clone(),
-            resp_body: inbound_resp_body.clone(),
-          };
-          CallRecord {
-            ts: p.ts,
-            session_id: p.session_id.unwrap_or_default(),
-            session_source: *session_source,
-            user: None,
-            local_addr: p.local_addr,
-            mode: p.mode,
-            behave_as: p.behave_as,
-            peer_addr: p.peer_addr,
-            method: p.method,
-            request_id: composite_id,
-            request_error: request_error.clone(),
-            project_id: p.project_id,
-            endpoint: p.endpoint,
-            account_id: p.account_id,
-            provider_id: p.provider_id,
-            model: p.model,
-            initiator: p.initiator,
-            status: *inbound_status,
-            stream: p.stream,
-            latency_ms: Some(*latency_ms),
-            latency_header_ms: p.latency_header_ms,
-            usage: usage.clone(),
-            inbound,
-            outbound,
-            messages: messages.clone(),
-          }
-        } else {
-          let fallback_ts = Self::fallback_ts();
-          tracing::warn!(
-            request_id = %request_id,
-            attempt = *attempt,
-            fallback_ts,
-            "RequestResult without prior RequestParsed; persisting with current timestamp"
-          );
-          CallRecord {
-            ts: fallback_ts,
-            session_id: String::new(),
-            session_source: *session_source,
-            user: None,
-            local_addr: None,
-            mode: None,
-            behave_as: None,
-            peer_addr: None,
-            method: None,
-            request_id: composite_id,
-            request_error: request_error.clone(),
-            project_id: None,
-            endpoint: String::new(),
-            account_id: String::new(),
-            provider_id: String::new(),
-            model: String::new(),
-            initiator: String::new(),
-            status: *inbound_status,
-            stream: false,
-            latency_ms: Some(*latency_ms),
-            latency_header_ms: None,
-            usage: usage.clone(),
-            inbound: HttpSnapshot {
-              status: Some(*inbound_status),
-              resp_headers: inbound_resp_headers.clone(),
-              resp_body: inbound_resp_body.clone(),
-              ..Default::default()
-            },
-            outbound: outbound_resp_body.as_ref().map(|b| HttpSnapshot {
-              status: Some(*inbound_status),
-              resp_body: b.clone(),
-              ..Default::default()
-            }),
-            messages: messages.clone(),
-          }
-        };
-        if let Err(e) = self.requests.result(&record) {
+        if let Err(e) = self.on_result(
+          request_id,
+          *attempt,
+          *session_source,
+          *latency_ms,
+          *inbound_status,
+          usage,
+          request_error.as_deref(),
+          inbound_resp_headers,
+          inbound_resp_body,
+          outbound_resp_body.as_ref(),
+          messages,
+        ) {
           tracing::warn!(error = %e, "failed to update result requests db row");
         }
-        write_record(&mut self.usage, &mut self.sessions, &record);
       }
       Event::LegacyRequest(LegacyRequestEvent::Completed {
         request_id,
@@ -524,66 +326,9 @@ impl EventHandler for DbEventHandler {
         error,
         ..
       }) => {
-        if !success {
-          let key = (request_id.clone(), 0);
-          if let Some(p) = self.pending.get(&key).cloned().filter(|p| !p.result_written) {
-            let inbound = HttpSnapshot {
-              method: p.method.clone(),
-              url: p.inbound_url.clone(),
-              status: *final_status,
-              req_headers: p.inbound_req_headers.clone(),
-              req_body: p.inbound_req_body.clone(),
-              resp_headers: HeaderMap::new(),
-              resp_body: Bytes::new(),
-            };
-            let outbound = if p.outbound_have {
-              Some(HttpSnapshot {
-                method: p.outbound_method.clone(),
-                url: p.outbound_url.clone(),
-                status: *final_status,
-                req_headers: p.outbound_req_headers.clone(),
-                req_body: p.outbound_req_body.clone(),
-                resp_headers: p.outbound_resp_headers.clone(),
-                resp_body: Bytes::new(),
-              })
-            } else {
-              None
-            };
-            let record = CallRecord {
-              ts: p.ts,
-              session_id: p.session_id.unwrap_or_default(),
-              session_source: SessionSource::Header,
-              user: None,
-              local_addr: p.local_addr,
-              mode: p.mode,
-              behave_as: p.behave_as,
-              peer_addr: p.peer_addr,
-              method: p.method,
-              request_id: request_id.clone(),
-              request_error: error.clone(),
-              project_id: p.project_id,
-              endpoint: p.endpoint,
-              account_id: p.account_id,
-              provider_id: p.provider_id,
-              model: p.model,
-              initiator: p.initiator,
-              status: final_status.unwrap_or(0),
-              stream: p.stream,
-              latency_ms: None,
-              latency_header_ms: p.latency_header_ms,
-              usage: Usage::default(),
-              inbound,
-              outbound,
-              messages: Vec::new(),
-            };
-            if let Err(e) = self.requests.result(&record) {
-              tracing::warn!(error = %e, "failed to persist completed failure row");
-            }
-            write_record(&mut self.usage, &mut self.sessions, &record);
-          }
+        if let Err(e) = self.on_completed(request_id, *success, *final_status, error.as_deref()) {
+          tracing::warn!(error = %e, "failed to persist completed failure row");
         }
-        // Clean up any remaining pending state for the base request (all attempts).
-        self.pending.retain(|(id, _), _| id != request_id);
       }
       _ => {}
     }

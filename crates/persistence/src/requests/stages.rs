@@ -4,12 +4,11 @@
 //! and writes one row per `(request_id, attempt)` into the per-day
 //! `requests/<YYYY-MM-DD>.db` files. Mirrors the incremental pattern of
 //! the legacy lifecycle writer ([`super::legacy`]): a single INSERT in
-//! [`RequestsDb::on_started`] and one UPDATE per subsequent stage.
+//! [`RequestEventHandler::on_started`] and one UPDATE per subsequent stage.
 //!
-//! `RequestEventHandler` is a thin `EventHandler` wrapper around a
-//! `RequestsDb`; the day-rotated connection cache and `request_id → day`
-//! map live on [`RequestsDb`] itself so they can be shared with the
-//! legacy writer if needed.
+//! `RequestEventHandler` owns the stage-event persistence semantics while
+//! [`RequestsDb`] stays the low-level day-rotated connection cache and
+//! `request_id → day` index used to route updates to the correct file.
 
 use super::{composite_request_id, now_unix, RequestsDb};
 use crate::{headers_json, Result};
@@ -18,19 +17,97 @@ use llm_core::request_event::{RecordEvent, RequestEventPayload, Stage, StageEven
 use rusqlite::params;
 use std::path::PathBuf;
 
-impl RequestsDb {
+/// `EventHandler` that persists requests stage events into the requests DB.
+/// Construct once and register alongside the legacy `DbEventHandler` —
+/// both run in the same `spawn_event_loop` and each maintains its own
+/// per-day connection cache.
+pub struct RequestEventHandler {
+  db: RequestsDb,
+}
+
+impl RequestEventHandler {
+  pub fn new(requests_dir: PathBuf) -> Result<Self> {
+    Ok(Self {
+      db: RequestsDb::new(requests_dir)?,
+    })
+  }
+}
+
+impl EventHandler for RequestEventHandler {
+  fn handle(&mut self, event: &Event) {
+    let Event::Requests(r2) = event else {
+      return;
+    };
+    let request_id = r2.request_id.as_str();
+    let attempt = r2.attempt;
+    let result = match &r2.payload {
+      RequestEventPayload::Custom(_) => return,
+      RequestEventPayload::Stage(stage) => match stage {
+        StageEvent::Started { endpoint } => self.on_started(request_id, attempt, now_unix(), endpoint.as_str()),
+        StageEvent::Extract(s) => self.on_extract(
+          request_id,
+          attempt,
+          s.model.as_str(),
+          s.stream,
+          s.session_id.as_deref(),
+          s.initiator.as_str(),
+          &s.headers,
+          &s.raw_body,
+        ),
+        StageEvent::Resolve(s) => self.on_resolve(
+          request_id,
+          attempt,
+          s.account_id.as_str(),
+          s.provider_id.as_str(),
+          s.upstream_endpoint.as_str(),
+        ),
+        StageEvent::BuildHeaders(s) => self.on_build_headers(request_id, attempt, &s.headers),
+        StageEvent::ConvertRequest(s) => self.on_convert_request(request_id, attempt, &s.upstream_wire_body),
+        StageEvent::Send(s) => self.on_send(request_id, attempt, now_unix(), s.status, &s.headers),
+        StageEvent::ConvertResponse(s) => {
+          let body_bytes = s
+            .body
+            .as_ref()
+            .map(|v| bytes::Bytes::from(serde_json::to_vec(v.as_ref()).unwrap_or_default()))
+            .unwrap_or_default();
+          self.on_convert_response(request_id, attempt, s.status, &s.headers, &body_bytes)
+        }
+        StageEvent::Error { stage, message, .. } => self.on_error(request_id, attempt, *stage, message.as_str()),
+        StageEvent::Completed { .. } => self.on_completed(request_id, attempt, now_unix()),
+      },
+      // Wire-truth records emitted by Send / ConvertResponse. `UpstreamResp`
+      // duplicates `StageEvent::Send` (status + headers come from the same
+      // `reqwest::Response::headers()`) and so is intentionally a no-op
+      // here — we keep the event for downstream consumers (debug printers,
+      // observers) that want a single source of wire-truth events.
+      RequestEventPayload::Record(RecordEvent::UpstreamReq {
+        method,
+        url,
+        headers,
+        body,
+      }) => self.on_upstream_req(request_id, attempt, method.as_str(), url.as_str(), headers, body),
+      RequestEventPayload::Record(RecordEvent::UpstreamResp { .. }) => Ok(()),
+      RequestEventPayload::Record(RecordEvent::UpstreamBody { body }) => self.on_upstream_body(request_id, attempt, body),
+    };
+    if let Err(e) = result {
+      tracing::warn!(error = %e, request_id, attempt, "requests persistence write failed");
+    }
+  }
+}
+
+impl RequestEventHandler {
   /// Single INSERT for a fresh request. All subsequent stage handlers are
   /// UPDATEs that assume this row exists.
   pub fn on_started(&mut self, request_id: &str, attempt: u32, ts: i64, endpoint: &str) -> Result<()> {
     let id = composite_request_id(request_id, attempt);
-    let conn = self.conn_for_ts(ts)?;
+    let conn = self.db.conn_for_ts(ts)?;
     conn.execute(
       "INSERT INTO requests (request_id, ts, endpoint, account_id, provider_id, model, initiator)
        VALUES (?1, ?2, ?3, '', '', '', '')
        ON CONFLICT(request_id) DO NOTHING",
       params![id, ts, endpoint],
     )?;
-    self.pin_request_day(&id, ts);
+    self.db.pin_request_day(&id, ts);
     Ok(())
   }
 
@@ -48,7 +125,7 @@ impl RequestsDb {
   ) -> Result<()> {
     let id = composite_request_id(request_id, attempt);
     let hdr_json = headers_json(inbound_req_headers);
-    let Some(conn) = self.conn_for_request(&id) else {
+    let Some(conn) = self.db.conn_for_request(&id) else {
       tracing::warn!(request_id = %id, "requests Extract without prior Started");
       return Ok(());
     };
@@ -86,7 +163,7 @@ impl RequestsDb {
     upstream_endpoint: &str,
   ) -> Result<()> {
     let id = composite_request_id(request_id, attempt);
-    let Some(conn) = self.conn_for_request(&id) else {
+    let Some(conn) = self.db.conn_for_request(&id) else {
       tracing::warn!(request_id = %id, "requests Resolve without prior Started");
       return Ok(());
     };
@@ -112,7 +189,7 @@ impl RequestsDb {
   ) -> Result<()> {
     let id = composite_request_id(request_id, attempt);
     let hdr_json = headers_json(outbound_req_headers);
-    let Some(conn) = self.conn_for_request(&id) else {
+    let Some(conn) = self.db.conn_for_request(&id) else {
       tracing::warn!(request_id = %id, "requests BuildHeaders without prior Started");
       return Ok(());
     };
@@ -128,7 +205,7 @@ impl RequestsDb {
 
   pub fn on_convert_request(&mut self, request_id: &str, attempt: u32, outbound_req_body: &bytes::Bytes) -> Result<()> {
     let id = composite_request_id(request_id, attempt);
-    let Some(conn) = self.conn_for_request(&id) else {
+    let Some(conn) = self.db.conn_for_request(&id) else {
       tracing::warn!(request_id = %id, "requests ConvertRequest without prior Started");
       return Ok(());
     };
@@ -152,7 +229,7 @@ impl RequestsDb {
   ) -> Result<()> {
     let id = composite_request_id(request_id, attempt);
     let hdr_json = headers_json(outbound_resp_headers);
-    let Some(conn) = self.conn_for_request(&id) else {
+    let Some(conn) = self.db.conn_for_request(&id) else {
       tracing::warn!(request_id = %id, "requests Send without prior Started");
       return Ok(());
     };
@@ -181,7 +258,7 @@ impl RequestsDb {
   ) -> Result<()> {
     let id = composite_request_id(request_id, attempt);
     let hdr_json = headers_json(inbound_resp_headers);
-    let Some(conn) = self.conn_for_request(&id) else {
+    let Some(conn) = self.db.conn_for_request(&id) else {
       tracing::warn!(request_id = %id, "requests ConvertResponse without prior Started");
       return Ok(());
     };
@@ -202,7 +279,7 @@ impl RequestsDb {
   pub fn on_error(&mut self, request_id: &str, attempt: u32, stage: Stage, message: &str) -> Result<()> {
     let id = composite_request_id(request_id, attempt);
     let formatted = format!("{}: {message}", stage.as_str());
-    let Some(conn) = self.conn_for_request(&id) else {
+    let Some(conn) = self.db.conn_for_request(&id) else {
       tracing::warn!(request_id = %id, "requests Error without prior Started");
       return Ok(());
     };
@@ -218,7 +295,7 @@ impl RequestsDb {
 
   pub fn on_completed(&mut self, request_id: &str, attempt: u32, ts_now: i64) -> Result<()> {
     let id = composite_request_id(request_id, attempt);
-    let Some(conn) = self.conn_for_request(&id) else {
+    let Some(conn) = self.db.conn_for_request(&id) else {
       tracing::warn!(request_id = %id, "requests Completed without prior Started");
       return Ok(());
     };
@@ -250,7 +327,7 @@ impl RequestsDb {
   ) -> Result<()> {
     let id = composite_request_id(request_id, attempt);
     let hdr_json = headers_json(headers);
-    let Some(conn) = self.conn_for_request(&id) else {
+    let Some(conn) = self.db.conn_for_request(&id) else {
       tracing::warn!(request_id = %id, "requests UpstreamReq without prior Started");
       return Ok(());
     };
@@ -276,7 +353,7 @@ impl RequestsDb {
   /// headers, so this update touches only the body column.
   pub fn on_upstream_body(&mut self, request_id: &str, attempt: u32, body: &bytes::Bytes) -> Result<()> {
     let id = composite_request_id(request_id, attempt);
-    let Some(conn) = self.conn_for_request(&id) else {
+    let Some(conn) = self.db.conn_for_request(&id) else {
       tracing::warn!(request_id = %id, "requests UpstreamBody without prior Started");
       return Ok(());
     };
@@ -288,91 +365,5 @@ impl RequestsDb {
       tracing::warn!(request_id = %id, "requests UpstreamBody UPDATE matched no row");
     }
     Ok(())
-  }
-}
-
-/// `EventHandler` that persists requests stage events into the requests DB.
-/// Construct once and register alongside the legacy `DbEventHandler` —
-/// both run in the same `spawn_event_loop` and each maintains its own
-/// per-day connection cache.
-pub struct RequestEventHandler {
-  db: RequestsDb,
-}
-
-impl RequestEventHandler {
-  pub fn new(requests_dir: PathBuf) -> Result<Self> {
-    Ok(Self {
-      db: RequestsDb::new(requests_dir)?,
-    })
-  }
-}
-
-impl EventHandler for RequestEventHandler {
-  fn handle(&mut self, event: &Event) {
-    let Event::Requests(r2) = event else {
-      return;
-    };
-    let request_id = r2.request_id.as_str();
-    let attempt = r2.attempt;
-    let result = match &r2.payload {
-      RequestEventPayload::Custom(_) => return,
-      RequestEventPayload::Stage(stage) => match stage {
-        StageEvent::Started { endpoint } => self.db.on_started(request_id, attempt, now_unix(), endpoint.as_str()),
-        StageEvent::Extract(s) => self.db.on_extract(
-          request_id,
-          attempt,
-          s.model.as_str(),
-          s.stream,
-          s.session_id.as_deref(),
-          s.initiator.as_str(),
-          &s.headers,
-          &s.raw_body,
-        ),
-        StageEvent::Resolve(s) => self.db.on_resolve(
-          request_id,
-          attempt,
-          s.account_id.as_str(),
-          s.provider_id.as_str(),
-          s.upstream_endpoint.as_str(),
-        ),
-        StageEvent::BuildHeaders(s) => self.db.on_build_headers(request_id, attempt, &s.headers),
-        StageEvent::ConvertRequest(s) => self
-          .db
-          .on_convert_request(request_id, attempt, &s.upstream_wire_body),
-        StageEvent::Send(s) => self.db.on_send(request_id, attempt, now_unix(), s.status, &s.headers),
-        StageEvent::ConvertResponse(s) => {
-          let body_bytes = s
-            .body
-            .as_ref()
-            .map(|v| bytes::Bytes::from(serde_json::to_vec(v.as_ref()).unwrap_or_default()))
-            .unwrap_or_default();
-          self
-            .db
-            .on_convert_response(request_id, attempt, s.status, &s.headers, &body_bytes)
-        }
-        StageEvent::Error { stage, message, .. } => self.db.on_error(request_id, attempt, *stage, message.as_str()),
-        StageEvent::Completed { .. } => self.db.on_completed(request_id, attempt, now_unix()),
-      },
-      // Wire-truth records emitted by Send / ConvertResponse. `UpstreamResp`
-      // duplicates `StageEvent::Send` (status + headers come from the same
-      // `reqwest::Response::headers()`) and so is intentionally a no-op
-      // here — we keep the event for downstream consumers (debug printers,
-      // observers) that want a single source of wire-truth events.
-      RequestEventPayload::Record(RecordEvent::UpstreamReq {
-        method,
-        url,
-        headers,
-        body,
-      }) => self
-        .db
-        .on_upstream_req(request_id, attempt, method.as_str(), url.as_str(), headers, body),
-      RequestEventPayload::Record(RecordEvent::UpstreamResp { .. }) => Ok(()),
-      RequestEventPayload::Record(RecordEvent::UpstreamBody { body }) => {
-        self.db.on_upstream_body(request_id, attempt, body)
-      }
-    };
-    if let Err(e) = result {
-      tracing::warn!(error = %e, request_id, attempt, "requests persistence write failed");
-    }
   }
 }
