@@ -1,111 +1,36 @@
 //! Requests stage-event persistence.
 //!
 //! Subscribes to `Event::Requests(RequestEvent { request_id, attempt, payload })`
-//! and writes one row per `(request_id, attempt)` into the same per-day
-//! `requests/<YYYY-MM-DD>.db` files used by the legacy lifecycle writer.
+//! and writes one row per `(request_id, attempt)` into the per-day
+//! `requests/<YYYY-MM-DD>.db` files. Mirrors the incremental pattern of
+//! the legacy lifecycle writer ([`super::legacy`]): a single INSERT in
+//! [`RequestsDb::on_started`] and one UPDATE per subsequent stage.
 //!
-//! Unlike the legacy `DbEventHandler`, this handler **does not buffer** a
-//! full record in memory and flush at the end. Instead it follows the
-//! incremental pattern from `RequestsDb::started`/`headers`/`parsed`/...:
-//! `on_started` performs the only `INSERT`, and every subsequent stage
-//! handler runs an `UPDATE … WHERE request_id = ?`. If the row is missing
-//! (e.g. `Started` was lost) the update simply warns and drops the event.
-//!
-//! All SQL lives in this file — we do **not** call into the legacy
-//! `RequestsDb` lifecycle methods. The only shared bits are pure helpers:
-//! `open_day_db` (opens + migrates a day file) and `headers_json`
-//! (serialises a `HeaderMap` to JSON with redaction).
+//! `RequestEventHandler` is a thin `EventHandler` wrapper around a
+//! `RequestsDb`; the day-rotated connection cache and `request_id → day`
+//! map live on [`RequestsDb`] itself so they can be shared with the
+//! legacy writer if needed.
 
-use crate::requests::open_day_db;
+use super::{composite_request_id, now_unix, RequestsDb};
 use crate::{headers_json, Result};
 use llm_core::event::{Event, EventHandler};
 use llm_core::request_event::{RecordEvent, RequestEventPayload, Stage, StageEvent};
-use rusqlite::{params, Connection};
-use std::collections::{HashMap, VecDeque};
+use rusqlite::params;
 use std::path::PathBuf;
-use time::macros::format_description;
 
-const CACHE_CAP: usize = 3;
-
-/// Compose a row-level `request_id` from the base id and attempt number.
-/// Mirrors the legacy convention: attempt 0 keeps the bare id; retries
-/// append `:N`.
-fn composite_request_id(request_id: &str, attempt: u32) -> String {
-  if attempt == 0 {
-    request_id.to_string()
-  } else {
-    format!("{request_id}:{attempt}")
-  }
-}
-
-fn day_key(ts: i64) -> String {
-  let dt = time::OffsetDateTime::from_unix_timestamp(ts).unwrap_or_else(|_| time::OffsetDateTime::now_utc());
-  dt.date()
-    .format(format_description!("[year]-[month]-[day]"))
-    .unwrap_or_else(|_| "1970-01-01".to_string())
-}
-
-fn now_unix() -> i64 {
-  time::OffsetDateTime::now_utc().unix_timestamp()
-}
-
-/// Per-day connection cache (LRU, cap 3) used by [`RequestEventHandler`].
-/// Independent from the legacy `RequestsDb` cache so the two handlers do
-/// not contend on a shared `Mutex`.
-pub struct RequestEventsWriter {
-  dir: PathBuf,
-  conns: HashMap<String, Connection>,
-  order: VecDeque<String>,
-  /// Tracks which day a given composite `request_id` was inserted under, so
-  /// subsequent UPDATEs route to the same day file even if events span a
-  /// midnight boundary.
-  request_day: HashMap<String, String>,
-}
-
-impl RequestEventsWriter {
-  pub fn new(dir: PathBuf) -> Result<Self> {
-    std::fs::create_dir_all(&dir)?;
-    Ok(Self {
-      dir,
-      conns: HashMap::new(),
-      order: VecDeque::new(),
-      request_day: HashMap::new(),
-    })
-  }
-
-  fn conn_for_day(&mut self, key: &str) -> Result<&mut Connection> {
-    if !self.conns.contains_key(key) {
-      if self.order.len() >= CACHE_CAP {
-        if let Some(old) = self.order.pop_front() {
-          self.conns.remove(&old);
-        }
-      }
-      let conn = open_day_db(&self.dir.join(format!("{key}.db")))?;
-      self.conns.insert(key.to_string(), conn);
-    }
-    self.order.retain(|k| k != key);
-    self.order.push_back(key.to_string());
-    Ok(self.conns.get_mut(key).expect("opened requests requests db"))
-  }
-
-  fn conn_for_request(&mut self, request_id: &str) -> Option<&mut Connection> {
-    let key = self.request_day.get(request_id).cloned()?;
-    self.conn_for_day(&key).ok()
-  }
-
+impl RequestsDb {
   /// Single INSERT for a fresh request. All subsequent stage handlers are
   /// UPDATEs that assume this row exists.
   pub fn on_started(&mut self, request_id: &str, attempt: u32, ts: i64, endpoint: &str) -> Result<()> {
     let id = composite_request_id(request_id, attempt);
-    let key = day_key(ts);
-    let conn = self.conn_for_day(&key)?;
+    let conn = self.conn_for_ts(ts)?;
     conn.execute(
       "INSERT INTO requests (request_id, ts, endpoint, account_id, provider_id, model, initiator)
        VALUES (?1, ?2, ?3, '', '', '', '')
        ON CONFLICT(request_id) DO NOTHING",
       params![id, ts, endpoint],
     )?;
-    self.request_day.insert(id, key);
+    self.pin_request_day(&id, ts);
     Ok(())
   }
 
@@ -371,13 +296,13 @@ impl RequestEventsWriter {
 /// both run in the same `spawn_event_loop` and each maintains its own
 /// per-day connection cache.
 pub struct RequestEventHandler {
-  writer: RequestEventsWriter,
+  db: RequestsDb,
 }
 
 impl RequestEventHandler {
   pub fn new(requests_dir: PathBuf) -> Result<Self> {
     Ok(Self {
-      writer: RequestEventsWriter::new(requests_dir)?,
+      db: RequestsDb::new(requests_dir)?,
     })
   }
 }
@@ -392,10 +317,8 @@ impl EventHandler for RequestEventHandler {
     let result = match &r2.payload {
       RequestEventPayload::Custom(_) => return,
       RequestEventPayload::Stage(stage) => match stage {
-        StageEvent::Started { endpoint } => self
-          .writer
-          .on_started(request_id, attempt, now_unix(), endpoint.as_str()),
-        StageEvent::Extract(s) => self.writer.on_extract(
+        StageEvent::Started { endpoint } => self.db.on_started(request_id, attempt, now_unix(), endpoint.as_str()),
+        StageEvent::Extract(s) => self.db.on_extract(
           request_id,
           attempt,
           s.model.as_str(),
@@ -405,20 +328,18 @@ impl EventHandler for RequestEventHandler {
           &s.headers,
           &s.raw_body,
         ),
-        StageEvent::Resolve(s) => self.writer.on_resolve(
+        StageEvent::Resolve(s) => self.db.on_resolve(
           request_id,
           attempt,
           s.account_id.as_str(),
           s.provider_id.as_str(),
           s.upstream_endpoint.as_str(),
         ),
-        StageEvent::BuildHeaders(s) => self.writer.on_build_headers(request_id, attempt, &s.headers),
+        StageEvent::BuildHeaders(s) => self.db.on_build_headers(request_id, attempt, &s.headers),
         StageEvent::ConvertRequest(s) => self
-          .writer
+          .db
           .on_convert_request(request_id, attempt, &s.upstream_wire_body),
-        StageEvent::Send(s) => self
-          .writer
-          .on_send(request_id, attempt, now_unix(), s.status, &s.headers),
+        StageEvent::Send(s) => self.db.on_send(request_id, attempt, now_unix(), s.status, &s.headers),
         StageEvent::ConvertResponse(s) => {
           let body_bytes = s
             .body
@@ -426,11 +347,11 @@ impl EventHandler for RequestEventHandler {
             .map(|v| bytes::Bytes::from(serde_json::to_vec(v.as_ref()).unwrap_or_default()))
             .unwrap_or_default();
           self
-            .writer
+            .db
             .on_convert_response(request_id, attempt, s.status, &s.headers, &body_bytes)
         }
-        StageEvent::Error { stage, message, .. } => self.writer.on_error(request_id, attempt, *stage, message.as_str()),
-        StageEvent::Completed { .. } => self.writer.on_completed(request_id, attempt, now_unix()),
+        StageEvent::Error { stage, message, .. } => self.db.on_error(request_id, attempt, *stage, message.as_str()),
+        StageEvent::Completed { .. } => self.db.on_completed(request_id, attempt, now_unix()),
       },
       // Wire-truth records emitted by Send / ConvertResponse. `UpstreamResp`
       // duplicates `StageEvent::Send` (status + headers come from the same
@@ -443,86 +364,15 @@ impl EventHandler for RequestEventHandler {
         headers,
         body,
       }) => self
-        .writer
+        .db
         .on_upstream_req(request_id, attempt, method.as_str(), url.as_str(), headers, body),
       RequestEventPayload::Record(RecordEvent::UpstreamResp { .. }) => Ok(()),
       RequestEventPayload::Record(RecordEvent::UpstreamBody { body }) => {
-        self.writer.on_upstream_body(request_id, attempt, body)
+        self.db.on_upstream_body(request_id, attempt, body)
       }
     };
     if let Err(e) = result {
       tracing::warn!(error = %e, request_id, attempt, "requests persistence write failed");
     }
   }
-}
-
-// ---------------------------------------------------------------------------
-// Readback helper
-// ---------------------------------------------------------------------------
-
-/// Read a single persisted request row by `request_id` from the per-day
-/// `requests/<YYYY-MM-DD>.db` files. Searches today first (UTC), then
-/// yesterday to cover day-boundary races where the row was written just
-/// before midnight and the read happened just after.
-///
-/// Returns `Ok(None)` if no row matches. BLOB columns are decoded to a
-/// UTF-8 string when valid; otherwise they are emitted as a JSON array of
-/// bytes (`[u8, u8, ...]`). Headers/body BLOBs written by the requests
-/// writer are always JSON, so the string branch is the common path.
-pub fn read_request_row(
-  requests_dir: &std::path::Path,
-  request_id: &str,
-) -> Result<Option<serde_json::Map<String, serde_json::Value>>> {
-  let today = day_key(now_unix());
-  let yesterday = day_key(now_unix() - 86_400);
-  for day in [today, yesterday] {
-    let path = requests_dir.join(format!("{day}.db"));
-    if !path.exists() {
-      continue;
-    }
-    let conn = open_day_db(&path)?;
-    if let Some(row) = select_row(&conn, request_id)? {
-      return Ok(Some(row));
-    }
-  }
-  Ok(None)
-}
-
-fn select_row(conn: &Connection, request_id: &str) -> Result<Option<serde_json::Map<String, serde_json::Value>>> {
-  let mut stmt = conn.prepare("SELECT * FROM requests WHERE request_id = ? LIMIT 1")?;
-  let col_count = stmt.column_count();
-  let col_names: Vec<String> = (0..col_count)
-    .map(|i| stmt.column_name(i).unwrap_or("").to_string())
-    .collect();
-  let mut rows = stmt.query(params![request_id])?;
-  let Some(row) = rows.next()? else {
-    return Ok(None);
-  };
-  let mut out = serde_json::Map::with_capacity(col_count);
-  for (i, name) in col_names.iter().enumerate() {
-    let val = row.get_ref(i)?;
-    let json = match val {
-      rusqlite::types::ValueRef::Null => serde_json::Value::Null,
-      rusqlite::types::ValueRef::Integer(n) => serde_json::Value::Number(n.into()),
-      rusqlite::types::ValueRef::Real(f) => serde_json::Number::from_f64(f)
-        .map(serde_json::Value::Number)
-        .unwrap_or(serde_json::Value::Null),
-      rusqlite::types::ValueRef::Text(t) => match std::str::from_utf8(t) {
-        Ok(s) => serde_json::Value::String(s.to_string()),
-        Err(_) => serde_json::Value::Array(t.iter().map(|b| serde_json::Value::from(*b)).collect()),
-      },
-      rusqlite::types::ValueRef::Blob(b) => match std::str::from_utf8(b) {
-        // Try to re-parse JSON-shaped BLOBs into their native JSON form so
-        // headers / body columns display structurally instead of as a quoted
-        // string. Falls back to a string if parsing fails.
-        Ok(s) => match serde_json::from_str::<serde_json::Value>(s) {
-          Ok(v) => v,
-          Err(_) => serde_json::Value::String(s.to_string()),
-        },
-        Err(_) => serde_json::Value::Array(b.iter().map(|b| serde_json::Value::from(*b)).collect()),
-      },
-    };
-    out.insert(name.clone(), json);
-  }
-  Ok(Some(out))
 }

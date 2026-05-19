@@ -1,54 +1,16 @@
-use super::{headers_json, migrate, CallRecord, HttpSnapshot, Result};
-use rusqlite::{params, Connection};
-use std::collections::{HashMap, VecDeque};
-use std::path::{Path, PathBuf};
-use time::macros::format_description;
+//! Legacy per-request lifecycle writer.
+//!
+//! Extends [`RequestsDb`] with the lifecycle methods (`started`,
+//! `headers`, `parsed`, `responded`, `result`, plus the `#[cfg(test)]`
+//! `record`) that are driven by `LegacyRequestEvent::*` from
+//! `DbEventHandler`. All SQL lives here; helpers (`composite_request_id`,
+//! `day_key`) come from the parent module.
 
-const CACHE_CAP: usize = 3;
-const BOOTSTRAP: &str = include_str!("../migrations/requests/000_bootstrap.sql");
-const MIGRATIONS: &[migrate::Migration] = &[
-  migrate::Migration {
-    version: 1,
-    name: "initial",
-    sql: include_str!("../migrations/requests/001_initial.sql"),
-  },
-  migrate::Migration {
-    version: 2,
-    name: "add_correlation_and_error",
-    sql: include_str!("../migrations/requests/002_add_correlation_and_error.sql"),
-  },
-  migrate::Migration {
-    version: 3,
-    name: "add_usage_breakdown",
-    sql: include_str!("../migrations/requests/003_add_usage_breakdown.sql"),
-  },
-  migrate::Migration {
-    version: 4,
-    name: "add_response_header_latency",
-    sql: include_str!("../migrations/requests/004_add_response_header_latency.sql"),
-  },
-  migrate::Migration {
-    version: 5,
-    name: "add_source_and_method",
-    sql: include_str!("../migrations/requests/005_add_source_and_method.sql"),
-  },
-  migrate::Migration {
-    version: 6,
-    name: "add_context_and_metrics",
-    sql: include_str!("../migrations/requests/006_add_context_and_metrics.sql"),
-  },
-];
+use super::{composite_request_id, RequestsDb};
+use crate::{headers_json, CallRecord, HttpSnapshot, Result};
+use rusqlite::params;
 
-pub fn latest_version() -> u32 {
-  migrate::latest_version(MIGRATIONS)
-}
-
-pub struct RequestsDb {
-  dir: PathBuf,
-  conns: HashMap<String, Connection>,
-  order: VecDeque<String>,
-}
-
+/// Header-time update payload used by [`RequestsDb::headers`].
 pub struct HeadersUpdate<'a> {
   pub ts: i64,
   pub endpoint: &'a str,
@@ -59,6 +21,7 @@ pub struct HeadersUpdate<'a> {
   pub inbound_req: &'a HttpSnapshot,
 }
 
+/// Optional contextual fields written alongside [`RequestsDb::started`].
 #[derive(Default)]
 pub struct RequestContext<'a> {
   pub user: Option<&'a str>,
@@ -67,32 +30,27 @@ pub struct RequestContext<'a> {
   pub behave_as: Option<&'a str>,
 }
 
+/// Parse-time update payload used by [`RequestsDb::parsed`].
+pub struct ParsedUpdate<'a> {
+  pub ts: i64,
+  pub endpoint: &'a str,
+  pub account_id: &'a str,
+  pub provider_id: &'a str,
+  pub model: &'a str,
+  pub initiator: &'a str,
+  pub stream: bool,
+  pub behave_as: Option<&'a str>,
+  pub inbound_body: bytes::Bytes,
+}
+
+fn opt_str<'a, F>(snap: Option<&'a HttpSnapshot>, f: F) -> Option<&'a str>
+where
+  F: FnOnce(&'a HttpSnapshot) -> Option<&'a str>,
+{
+  snap.and_then(f)
+}
+
 impl RequestsDb {
-  pub fn new(dir: PathBuf) -> Result<Self> {
-    std::fs::create_dir_all(&dir)?;
-    Ok(Self {
-      dir,
-      conns: HashMap::new(),
-      order: VecDeque::new(),
-    })
-  }
-
-  /// Iterate every existing day file under `dir` (without opening them).
-  pub fn day_files(dir: &Path) -> Result<Vec<PathBuf>> {
-    let mut out = Vec::new();
-    if !dir.exists() {
-      return Ok(out);
-    }
-    for entry in std::fs::read_dir(dir)? {
-      let entry = entry?;
-      let path = entry.path();
-      if path.extension().and_then(|s| s.to_str()) == Some("db") {
-        out.push(path);
-      }
-    }
-    Ok(out)
-  }
-
   #[cfg(test)]
   pub fn record(&mut self, r: &CallRecord) -> Result<()> {
     let conn = self.conn_for_ts(r.ts)?;
@@ -412,153 +370,14 @@ impl RequestsDb {
     )?;
     Ok(())
   }
-
-  fn conn_for_ts(&mut self, ts: i64) -> Result<&mut Connection> {
-    let key = day_key(ts);
-    if !self.conns.contains_key(&key) {
-      if self.order.len() >= CACHE_CAP {
-        if let Some(old) = self.order.pop_front() {
-          self.conns.remove(&old);
-        }
-      }
-      let conn = open_day_db(&self.dir.join(format!("{key}.db")))?;
-      self.conns.insert(key.clone(), conn);
-    }
-    self.order.retain(|k| k != &key);
-    self.order.push_back(key.clone());
-    Ok(self.conns.get_mut(&key).expect("opened requests db"))
-  }
-}
-
-pub struct ParsedUpdate<'a> {
-  pub ts: i64,
-  pub endpoint: &'a str,
-  pub account_id: &'a str,
-  pub provider_id: &'a str,
-  pub model: &'a str,
-  pub initiator: &'a str,
-  pub stream: bool,
-  pub behave_as: Option<&'a str>,
-  pub inbound_body: bytes::Bytes,
-}
-
-pub fn open_day_db(path: &Path) -> Result<Connection> {
-  if let Some(parent) = path.parent() {
-    std::fs::create_dir_all(parent)?;
-  }
-  let mut conn = Connection::open(path)?;
-  migrate::apply(
-    &mut conn,
-    path,
-    "requests",
-    migrate::Bootstrap { sql: BOOTSTRAP },
-    MIGRATIONS,
-  )?;
-  Ok(conn)
-}
-
-fn opt_str<'a, F>(snap: Option<&'a HttpSnapshot>, f: F) -> Option<&'a str>
-where
-  F: FnOnce(&'a HttpSnapshot) -> Option<&'a str>,
-{
-  snap.and_then(f)
-}
-
-fn day_key(ts: i64) -> String {
-  let dt = time::OffsetDateTime::from_unix_timestamp(ts).unwrap_or_else(|_| time::OffsetDateTime::now_utc());
-  dt.date()
-    .format(format_description!("[year]-[month]-[day]"))
-    .unwrap_or_else(|_| "1970-01-01".to_string())
-}
-
-fn composite_request_id(request_id: &str, attempt: u32) -> String {
-  if attempt == 0 {
-    request_id.to_string()
-  } else {
-    format!("{request_id}:{attempt}")
-  }
 }
 
 #[cfg(test)]
 mod tests {
+  use super::super::{day_key, open_day_db};
   use super::*;
   use crate::{CallRecord, HttpSnapshot, SessionSource, Usage};
-
-  #[test]
-  fn fresh_day_file_has_canonical_columns() {
-    let dir = std::env::temp_dir().join(format!("llm-router-req-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("2099-01-01.db");
-    let conn = open_day_db(&path).unwrap();
-    for col in [
-      "request_id",
-      "request_error",
-      "user",
-      "local_addr",
-      "mode",
-      "behave_as",
-      "input_tok",
-      "output_tok",
-      "cached_tok",
-      "reasoning_tok",
-      "latency_header_ms",
-      "peer_addr",
-      "method",
-      "inbound_req_headers",
-      "inbound_req_body",
-      "outbound_req_headers",
-      "outbound_req_body",
-      "outbound_resp_headers",
-      "outbound_resp_body",
-      "inbound_resp_headers",
-      "inbound_resp_body",
-    ] {
-      let exists: bool = conn
-        .prepare("SELECT 1 FROM pragma_table_info('requests') WHERE name = ?1")
-        .unwrap()
-        .exists(params![col])
-        .unwrap();
-      assert!(exists, "missing column {col}");
-    }
-    let metrics_exists: bool = conn
-      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'metrics'")
-      .unwrap()
-      .exists([])
-      .unwrap();
-    assert!(metrics_exists, "missing metrics table");
-    for col in [
-      "request_id",
-      "user",
-      "local_addr",
-      "mode",
-      "behave_as",
-      "peer_addr",
-      "method",
-      "path",
-      "url",
-      "status",
-      "request_error",
-      "account_id",
-      "provider_id",
-      "latency_ms",
-      "inbound_req_headers",
-      "inbound_resp_headers",
-      "inbound_resp_body",
-    ] {
-      let exists: bool = conn
-        .prepare("SELECT 1 FROM pragma_table_info('metrics') WHERE name = ?1")
-        .unwrap()
-        .exists(params![col])
-        .unwrap();
-      assert!(exists, "missing metrics column {col}");
-    }
-    let v: i64 = conn
-      .prepare("SELECT MAX(version) FROM schema_migrations")
-      .unwrap()
-      .query_row([], |r| r.get(0))
-      .unwrap();
-    assert_eq!(v, 6);
-  }
+  use rusqlite::Connection;
 
   #[test]
   fn migrates_v1_day_file_and_records_request_error() {
@@ -575,7 +394,7 @@ mod tests {
         )
         .unwrap();
       conn
-        .execute_batch(include_str!("../migrations/requests/001_initial.sql"))
+        .execute_batch(include_str!("../../migrations/requests/001_initial.sql"))
         .unwrap();
       conn
         .execute(

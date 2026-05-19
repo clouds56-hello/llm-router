@@ -1,11 +1,10 @@
 pub mod archive;
 pub mod migrate;
-pub mod request_events;
 pub mod requests;
 pub mod sessions;
 pub mod usage;
 
-pub use request_events::{read_request_row, RequestEventHandler};
+pub use requests::{read_request_row, RequestEventHandler};
 
 use bytes::Bytes;
 use llm_headers::HeaderMap;

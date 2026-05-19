@@ -1,0 +1,326 @@
+//! Requests database — per-day SQLite files, single connection cache.
+//!
+//! This module is the **sole owner** of the day-rotated `Connection`
+//! cache and the `request_id → day` map. Both writer flavours (legacy
+//! lifecycle in [`legacy`] and stage-event in [`stages`]) operate on
+//! `&mut RequestsDb` and use the helpers exposed here.
+//!
+//! Shared helpers (`composite_request_id`, `day_key`, `now_unix`,
+//! `open_day_db`, migration constants) live here so neither sibling
+//! re-implements them.
+
+use crate::migrate;
+use rusqlite::{params, Connection};
+use std::collections::{HashMap, VecDeque};
+use std::path::{Path, PathBuf};
+use time::macros::format_description;
+
+use crate::Result;
+
+pub mod legacy;
+pub mod stages;
+
+pub use legacy::{HeadersUpdate, ParsedUpdate, RequestContext};
+pub use stages::RequestEventHandler;
+
+const CACHE_CAP: usize = 3;
+pub(crate) const BOOTSTRAP: &str = include_str!("../../migrations/requests/000_bootstrap.sql");
+pub(crate) const MIGRATIONS: &[migrate::Migration] = &[
+  migrate::Migration {
+    version: 1,
+    name: "initial",
+    sql: include_str!("../../migrations/requests/001_initial.sql"),
+  },
+  migrate::Migration {
+    version: 2,
+    name: "add_correlation_and_error",
+    sql: include_str!("../../migrations/requests/002_add_correlation_and_error.sql"),
+  },
+  migrate::Migration {
+    version: 3,
+    name: "add_usage_breakdown",
+    sql: include_str!("../../migrations/requests/003_add_usage_breakdown.sql"),
+  },
+  migrate::Migration {
+    version: 4,
+    name: "add_response_header_latency",
+    sql: include_str!("../../migrations/requests/004_add_response_header_latency.sql"),
+  },
+  migrate::Migration {
+    version: 5,
+    name: "add_source_and_method",
+    sql: include_str!("../../migrations/requests/005_add_source_and_method.sql"),
+  },
+  migrate::Migration {
+    version: 6,
+    name: "add_context_and_metrics",
+    sql: include_str!("../../migrations/requests/006_add_context_and_metrics.sql"),
+  },
+];
+
+pub fn latest_version() -> u32 {
+  migrate::latest_version(MIGRATIONS)
+}
+
+/// Day-rotated SQLite connection pool plus a `request_id → day` map.
+///
+/// Each instance keeps up to [`CACHE_CAP`] day connections open (LRU).
+/// The `request_day` map lets stage-event UPDATEs route to the day
+/// where the row was originally INSERTed, even if subsequent events
+/// arrive on the next calendar day.
+pub struct RequestsDb {
+  dir: PathBuf,
+  conns: HashMap<String, Connection>,
+  order: VecDeque<String>,
+  request_day: HashMap<String, String>,
+}
+
+impl RequestsDb {
+  pub fn new(dir: PathBuf) -> Result<Self> {
+    std::fs::create_dir_all(&dir)?;
+    Ok(Self {
+      dir,
+      conns: HashMap::new(),
+      order: VecDeque::new(),
+      request_day: HashMap::new(),
+    })
+  }
+
+  /// Iterate every existing day file under `dir` (without opening them).
+  pub fn day_files(dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut out = Vec::new();
+    if !dir.exists() {
+      return Ok(out);
+    }
+    for entry in std::fs::read_dir(dir)? {
+      let entry = entry?;
+      let path = entry.path();
+      if path.extension().and_then(|s| s.to_str()) == Some("db") {
+        out.push(path);
+      }
+    }
+    Ok(out)
+  }
+
+  /// Borrow (or open) the day connection keyed by `ts`. Refreshes LRU.
+  pub(crate) fn conn_for_ts(&mut self, ts: i64) -> Result<&mut Connection> {
+    let key = day_key(ts);
+    self.conn_for_day(&key)
+  }
+
+  /// Borrow (or open) the day connection keyed by `day` (e.g. `"2026-05-19"`).
+  pub(crate) fn conn_for_day(&mut self, key: &str) -> Result<&mut Connection> {
+    if !self.conns.contains_key(key) {
+      if self.order.len() >= CACHE_CAP {
+        if let Some(old) = self.order.pop_front() {
+          self.conns.remove(&old);
+        }
+      }
+      let conn = open_day_db(&self.dir.join(format!("{key}.db")))?;
+      self.conns.insert(key.to_string(), conn);
+    }
+    self.order.retain(|k| k != key);
+    self.order.push_back(key.to_string());
+    Ok(self.conns.get_mut(key).expect("opened requests db"))
+  }
+
+  /// Look up the connection a previously-pinned `request_id` was written to.
+  /// Returns `None` if no INSERT has pinned this id yet.
+  pub(crate) fn conn_for_request(&mut self, request_id: &str) -> Option<&mut Connection> {
+    let key = self.request_day.get(request_id).cloned()?;
+    self.conn_for_day(&key).ok()
+  }
+
+  /// Pin a `request_id` to a specific day. Called by INSERT-style methods
+  /// so subsequent UPDATEs route to the same day file.
+  pub(crate) fn pin_request_day(&mut self, request_id: &str, ts: i64) {
+    let key = day_key(ts);
+    self.request_day.insert(request_id.to_string(), key);
+  }
+}
+
+/// Open a single day file (creating + migrating as needed).
+pub fn open_day_db(path: &Path) -> Result<Connection> {
+  if let Some(parent) = path.parent() {
+    std::fs::create_dir_all(parent)?;
+  }
+  let mut conn = Connection::open(path)?;
+  migrate::apply(
+    &mut conn,
+    path,
+    "requests",
+    migrate::Bootstrap { sql: BOOTSTRAP },
+    MIGRATIONS,
+  )?;
+  Ok(conn)
+}
+
+/// Compose a row-level `request_id` from the base id and attempt number.
+/// Attempt 0 keeps the bare id; retries append `:N`.
+pub(crate) fn composite_request_id(request_id: &str, attempt: u32) -> String {
+  if attempt == 0 {
+    request_id.to_string()
+  } else {
+    format!("{request_id}:{attempt}")
+  }
+}
+
+pub(crate) fn day_key(ts: i64) -> String {
+  let dt = time::OffsetDateTime::from_unix_timestamp(ts).unwrap_or_else(|_| time::OffsetDateTime::now_utc());
+  dt.date()
+    .format(format_description!("[year]-[month]-[day]"))
+    .unwrap_or_else(|_| "1970-01-01".to_string())
+}
+
+pub(crate) fn now_unix() -> i64 {
+  time::OffsetDateTime::now_utc().unix_timestamp()
+}
+
+// ---------------------------------------------------------------------------
+// Readback helper
+// ---------------------------------------------------------------------------
+
+/// Read a single persisted request row by `request_id` from the per-day
+/// `requests/<YYYY-MM-DD>.db` files. Searches today first (UTC), then
+/// yesterday to cover day-boundary races where the row was written just
+/// before midnight and the read happened just after.
+///
+/// Returns `Ok(None)` if no row matches. BLOB columns are decoded to a
+/// UTF-8 string when valid; otherwise they are emitted as a JSON array of
+/// bytes (`[u8, u8, ...]`). Headers/body BLOBs written by the requests
+/// writer are always JSON, so the string branch is the common path.
+pub fn read_request_row(
+  requests_dir: &Path,
+  request_id: &str,
+) -> Result<Option<serde_json::Map<String, serde_json::Value>>> {
+  let today = day_key(now_unix());
+  let yesterday = day_key(now_unix() - 86_400);
+  for day in [today, yesterday] {
+    let path = requests_dir.join(format!("{day}.db"));
+    if !path.exists() {
+      continue;
+    }
+    let conn = open_day_db(&path)?;
+    if let Some(row) = select_row(&conn, request_id)? {
+      return Ok(Some(row));
+    }
+  }
+  Ok(None)
+}
+
+fn select_row(conn: &Connection, request_id: &str) -> Result<Option<serde_json::Map<String, serde_json::Value>>> {
+  let mut stmt = conn.prepare("SELECT * FROM requests WHERE request_id = ? LIMIT 1")?;
+  let col_count = stmt.column_count();
+  let col_names: Vec<String> = (0..col_count)
+    .map(|i| stmt.column_name(i).unwrap_or("").to_string())
+    .collect();
+  let mut rows = stmt.query(params![request_id])?;
+  let Some(row) = rows.next()? else {
+    return Ok(None);
+  };
+  let mut out = serde_json::Map::with_capacity(col_count);
+  for (i, name) in col_names.iter().enumerate() {
+    let val = row.get_ref(i)?;
+    let json = match val {
+      rusqlite::types::ValueRef::Null => serde_json::Value::Null,
+      rusqlite::types::ValueRef::Integer(n) => serde_json::Value::Number(n.into()),
+      rusqlite::types::ValueRef::Real(f) => serde_json::Number::from_f64(f)
+        .map(serde_json::Value::Number)
+        .unwrap_or(serde_json::Value::Null),
+      rusqlite::types::ValueRef::Text(t) => match std::str::from_utf8(t) {
+        Ok(s) => serde_json::Value::String(s.to_string()),
+        Err(_) => serde_json::Value::Array(t.iter().map(|b| serde_json::Value::from(*b)).collect()),
+      },
+      rusqlite::types::ValueRef::Blob(b) => match std::str::from_utf8(b) {
+        Ok(s) => match serde_json::from_str::<serde_json::Value>(s) {
+          Ok(v) => v,
+          Err(_) => serde_json::Value::String(s.to_string()),
+        },
+        Err(_) => serde_json::Value::Array(b.iter().map(|b| serde_json::Value::from(*b)).collect()),
+      },
+    };
+    out.insert(name.clone(), json);
+  }
+  Ok(Some(out))
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn fresh_day_file_has_canonical_columns() {
+    let dir = std::env::temp_dir().join(format!("llm-router-req-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("2099-01-01.db");
+    let conn = open_day_db(&path).unwrap();
+    for col in [
+      "request_id",
+      "request_error",
+      "user",
+      "local_addr",
+      "mode",
+      "behave_as",
+      "input_tok",
+      "output_tok",
+      "cached_tok",
+      "reasoning_tok",
+      "latency_header_ms",
+      "peer_addr",
+      "method",
+      "inbound_req_headers",
+      "inbound_req_body",
+      "outbound_req_headers",
+      "outbound_req_body",
+      "outbound_resp_headers",
+      "outbound_resp_body",
+      "inbound_resp_headers",
+      "inbound_resp_body",
+    ] {
+      let exists: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('requests') WHERE name = ?1")
+        .unwrap()
+        .exists(params![col])
+        .unwrap();
+      assert!(exists, "missing column {col}");
+    }
+    let metrics_exists: bool = conn
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'metrics'")
+      .unwrap()
+      .exists([])
+      .unwrap();
+    assert!(metrics_exists, "missing metrics table");
+    for col in [
+      "request_id",
+      "user",
+      "local_addr",
+      "mode",
+      "behave_as",
+      "peer_addr",
+      "method",
+      "path",
+      "url",
+      "status",
+      "request_error",
+      "account_id",
+      "provider_id",
+      "latency_ms",
+      "inbound_req_headers",
+      "inbound_resp_headers",
+      "inbound_resp_body",
+    ] {
+      let exists: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('metrics') WHERE name = ?1")
+        .unwrap()
+        .exists(params![col])
+        .unwrap();
+      assert!(exists, "missing metrics column {col}");
+    }
+    let v: i64 = conn
+      .prepare("SELECT MAX(version) FROM schema_migrations")
+      .unwrap()
+      .query_row([], |r| r.get(0))
+      .unwrap();
+    assert_eq!(v, 6);
+  }
+}
