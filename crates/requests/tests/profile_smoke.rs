@@ -20,7 +20,7 @@ use llm_core::provider::{
 };
 use llm_headers::{HeaderMap, HeaderValue};
 use llm_requests::event::{EventPayload, Stage, StageEvent};
-use llm_requests::pipeline::stages::ConvertedResponse;
+use llm_requests::pipeline::stages::ConvertedBody;
 use llm_requests::stages::{
   AccountSelector, DefaultConvertRequest, DefaultConvertResponse, DefaultExtract, DefaultSend, NoopBuildHeaders,
   NoopConvertRequest, PersonaBuildHeaders, PoolResolve, SelectorOutcome,
@@ -478,9 +478,9 @@ async fn full_pipeline_buffered_happy_path() {
   assert_eq!(attempts, 1);
 
   // The converted response must round-trip the canned upstream payload.
-  match converted {
-    ConvertedResponse::Buffered { status, body_json, .. } => {
-      assert_eq!(status, 200);
+  assert_eq!(converted.status, 200);
+  match converted.body {
+    ConvertedBody::Buffered { body_json, .. } => {
       assert_eq!(body_json["id"], "resp-1");
       assert_eq!(body_json["choices"][0]["message"]["content"], "hi");
     }

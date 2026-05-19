@@ -28,7 +28,7 @@ use llm_config::RouteMode;
 use llm_core::event::Event as CoreEvent;
 use llm_core::request_event::{RecordEvent, RequestEvent, RequestEventPayload};
 use llm_requests::event::{BuiltHeadersSummary, ConvertedRequestSummary, ResolvedSummary};
-use llm_requests::pipeline::stages::ConvertedResponse;
+use llm_requests::pipeline::stages::{ConvertedBody, ConvertedResponse};
 use llm_requests::stages::{
   DefaultConvertRequest, DefaultConvertResponse, DefaultExtract, DefaultSend, PersonaBuildHeaders, PoolAccountSelector,
   PoolResolve,
@@ -277,34 +277,35 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
     request_id: Some(request_id.into()),
   };
 
-  let result = runner.run(raw).await;
+  let result = match runner.run(raw).await {
+    Ok(converted) if matches!(&converted.body, ConvertedBody::Stream { .. }) => {
+      let snapshot = captured.snapshot();
+      print_live_outcome(converted, &snapshot, None, args.format, !args.no_redact).await?;
 
-  if let Ok(converted @ ConvertedResponse::Stream { .. }) = result {
-    let snapshot = captured.snapshot();
-    print_live_outcome(converted, &snapshot, None, args.format, !args.no_redact).await?;
+      // Streaming final records are emitted by the stream finalizer, so we must
+      // drain the stream before shutting down the event bus.
+      events.shutdown().await;
+      if let Some(archive_runtime) = archive_runtime {
+        archive_runtime.shutdown().await;
+      }
 
-    // Streaming final records are emitted by the stream finalizer, so we must
-    // drain the stream before shutting down the event bus.
-    events.shutdown().await;
-    if let Some(archive_runtime) = archive_runtime {
-      archive_runtime.shutdown().await;
+      let persisted = match (requests_dir.as_deref(), snapshot.request_id.as_ref()) {
+        (Some(dir), Some(id)) => match llm_persistence::read_request_row(dir, id.as_str()) {
+          Ok(row) => row,
+          Err(e) => {
+            eprintln!("warning: failed to read persisted request row: {e}");
+            None
+          }
+        },
+        _ => None,
+      };
+      if matches!(args.format, OutputFormat::Text) {
+        print_persisted_text(persisted.as_ref());
+      }
+      return Ok(());
     }
-
-    let persisted = match (requests_dir.as_deref(), snapshot.request_id.as_ref()) {
-      (Some(dir), Some(id)) => match llm_persistence::read_request_row(dir, id.as_str()) {
-        Ok(row) => row,
-        Err(e) => {
-          eprintln!("warning: failed to read persisted request row: {e}");
-          None
-        }
-      },
-      _ => None,
-    };
-    if matches!(args.format, OutputFormat::Text) {
-      print_persisted_text(persisted.as_ref());
-    }
-    return Ok(());
-  }
+    other => other,
+  };
 
   // Shut down the legacy event plumbing — requests events are independent.
   events.shutdown().await;
@@ -600,13 +601,9 @@ async fn print_live_outcome(
   let resolved = snap.resolved.as_ref();
   let attempts = snap.attempts.unwrap_or(1);
 
-  match converted {
-    ConvertedResponse::Buffered {
-      status,
-      headers,
-      body_json,
-      ..
-    } => match format {
+  let ConvertedResponse { status, headers, body } = converted;
+  match body {
+    ConvertedBody::Buffered { body_json, .. } => match format {
       OutputFormat::Json => {
         let report = serde_json::json!({
           "dry_run": false,
@@ -649,12 +646,7 @@ async fn print_live_outcome(
         print_persisted_text(persisted);
       }
     },
-    ConvertedResponse::Stream {
-      status,
-      headers,
-      mut body,
-      ..
-    } => {
+    ConvertedBody::Stream { mut body } => {
       // For text format, print a short header banner first so the user sees
       // metadata before the stream body. For json format we still stream
       // the raw SSE bytes (already endpoint-translated, if applicable) —

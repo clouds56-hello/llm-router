@@ -16,7 +16,7 @@
 
 use crate::pipeline::ctx::PipelineCtx;
 use crate::pipeline::error::PipelineError;
-use crate::pipeline::stages::{ConvertResponseStage, ConvertedResponse};
+use crate::pipeline::stages::{ConvertResponseStage, ConvertedBody, ConvertedResponse};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::stream::BoxStream;
@@ -61,11 +61,13 @@ impl ConvertResponseStage for DefaultConvertResponse {
     let inbound_endpoint = ctx.endpoint;
 
     if body.is_empty() {
-      return Ok(ConvertedResponse::Buffered {
+      return Ok(ConvertedResponse {
         status,
         headers,
-        body_json: Arc::new(Value::Null),
-        body_bytes: Some(Bytes::new()),
+        body: ConvertedBody::Buffered {
+          body_json: Arc::new(Value::Null),
+          body_bytes: Some(Bytes::new()),
+        },
       });
     }
 
@@ -95,11 +97,13 @@ impl ConvertResponseStage for DefaultConvertResponse {
       (translated, bytes)
     };
 
-    Ok(ConvertedResponse::Buffered {
+    Ok(ConvertedResponse {
       status,
       headers,
-      body_json: Arc::new(body_json),
-      body_bytes: Some(body_bytes),
+      body: ConvertedBody::Buffered {
+        body_json: Arc::new(body_json),
+        body_bytes: Some(body_bytes),
+      },
     })
   }
 
@@ -122,10 +126,10 @@ impl ConvertResponseStage for DefaultConvertResponse {
     if upstream_endpoint != inbound_endpoint {
       pipeline = pipeline.with_transformer(EndpointTranslator::new(upstream_endpoint, inbound_endpoint));
     }
-    Ok(ConvertedResponse::Stream {
+    Ok(ConvertedResponse {
       status,
       headers,
-      body: pipeline.run(),
+      body: ConvertedBody::Stream { body: pipeline.run() },
     })
   }
 }
@@ -134,7 +138,7 @@ impl ConvertResponseStage for DefaultConvertResponse {
 mod tests {
   use super::*;
   use crate::event::{EventBus, EventPayload};
-  use crate::pipeline::stages::{ConvertedResponse, SentResponse};
+  use crate::pipeline::stages::SentResponse;
   use llm_core::request_event::RecordEvent;
   use futures_util::StreamExt;
   use llm_core::provider::Endpoint;
@@ -167,14 +171,9 @@ mod tests {
       )
       .await
       .unwrap();
-    match out {
-      ConvertedResponse::Buffered {
-        status,
-        body_json,
-        body_bytes,
-        ..
-      } => {
-        assert_eq!(status, 200);
+    assert_eq!(out.status, 200);
+    match out.body {
+      ConvertedBody::Buffered { body_json, body_bytes } => {
         assert_eq!(body_json["id"], "x");
         assert_eq!(body_bytes.unwrap().as_ref(), br#"{"id":"x","choices":[]}"#);
       }
@@ -195,14 +194,9 @@ mod tests {
       )
       .await
       .unwrap();
-    match out {
-      ConvertedResponse::Buffered {
-        status,
-        body_json,
-        body_bytes,
-        ..
-      } => {
-        assert_eq!(status, 502);
+    assert_eq!(out.status, 502);
+    match out.body {
+      ConvertedBody::Buffered { body_json, body_bytes } => {
         assert!(body_json.is_null());
         assert!(body_bytes.unwrap().is_empty());
       }
@@ -242,13 +236,9 @@ mod tests {
       )
       .await
       .unwrap();
-    match out {
-      ConvertedResponse::Stream {
-        status,
-        mut body,
-        ..
-      } => {
-        assert_eq!(status, 200);
+    assert_eq!(out.status, 200);
+    match out.body {
+      ConvertedBody::Stream { mut body } => {
         let chunk = body.next().await.expect("at least one chunk").expect("ok chunk");
         assert!(!chunk.is_empty());
       }
@@ -270,9 +260,9 @@ mod tests {
       response: response(200, r#"{"ok":true}"#, "application/json"),
     };
     let out = stage.convert_response(&ctx, sent).await.unwrap();
-    match out {
-      ConvertedResponse::Buffered { status, body_bytes, .. } => {
-        assert_eq!(status, 200);
+    assert_eq!(out.status, 200);
+    match out.body {
+      ConvertedBody::Buffered { body_bytes, .. } => {
         assert_eq!(body_bytes.unwrap().as_ref(), br#"{"ok":true}"#);
       }
       _ => panic!("expected buffered"),
@@ -307,7 +297,7 @@ mod tests {
       response: response(200, "data: {}\n\ndata: [DONE]\n\n", "text/event-stream"),
     };
     let out = stage.convert_response(&ctx, sent).await.unwrap();
-    let ConvertedResponse::Stream { mut body, .. } = out else {
+    let ConvertedBody::Stream { mut body } = out.body else {
       panic!("expected stream");
     };
     while let Some(chunk) = body.next().await {

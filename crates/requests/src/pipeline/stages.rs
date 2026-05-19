@@ -259,13 +259,16 @@ impl std::fmt::Debug for SentResponse {
   }
 }
 
-/// Output of [`ConvertResponseStage`]: either a fully-buffered response
-/// ready for one-shot delivery, or a streaming SSE byte source that should
-/// be forwarded to the client as it arrives.
-pub enum ConvertedResponse {
+/// Output of [`ConvertResponseStage`]: a status/header envelope plus either a
+/// fully-buffered body or a live SSE byte stream.
+pub struct ConvertedResponse {
+  pub status: u16,
+  pub headers: HeaderMap,
+  pub body: ConvertedBody,
+}
+
+pub enum ConvertedBody {
   Buffered {
-    status: u16,
-    headers: HeaderMap,
     /// Buffered upstream JSON. `Arc`-wrapped so the matching
     /// [`StageEvent::ConvertResponse`](crate::event::StageEvent::ConvertResponse)
     /// payload can share the value without re-serializing the body.
@@ -273,53 +276,66 @@ pub enum ConvertedResponse {
     body_bytes: Option<Bytes>,
   },
   Stream {
-    status: u16,
-    headers: HeaderMap,
     /// SSE byte stream ready to forward to the client. When upstream and
     /// inbound endpoints differ, frames are already endpoint-translated.
     body: futures_util::stream::BoxStream<'static, std::io::Result<Bytes>>,
   },
 }
 
+impl std::fmt::Debug for ConvertedBody {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      Self::Buffered { body_bytes, .. } => f
+        .debug_struct("ConvertedBody::Buffered")
+        .field("body_bytes_len", &body_bytes.as_ref().map(|b| b.len()))
+        .finish(),
+      Self::Stream { .. } => f
+        .debug_struct("ConvertedBody::Stream")
+        .field("body", &"<sse stream>")
+        .finish(),
+    }
+  }
+}
+
 impl ConvertedResponse {
   pub fn status(&self) -> u16 {
-    match self {
-      Self::Buffered { status, .. } | Self::Stream { status, .. } => *status,
-    }
+    self.status
   }
 
   pub fn headers(&self) -> &HeaderMap {
+    &self.headers
+  }
+}
+
+impl ConvertedBody {
+  pub async fn bytes(self) -> std::io::Result<Bytes> {
     match self {
-      Self::Buffered { headers, .. } | Self::Stream { headers, .. } => headers,
+      Self::Buffered { body_bytes, .. } => Ok(body_bytes.unwrap_or_default()),
+      Self::Stream { body } => body
+        .try_fold(bytes::BytesMut::new(), |mut out, chunk| async move {
+          out.extend_from_slice(&chunk);
+          Ok(out)
+        })
+        .await
+        .map(|buf| buf.freeze()),
     }
   }
 }
 
 impl std::fmt::Debug for ConvertedResponse {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    match self {
-      Self::Buffered {
-        status,
-        headers,
-        body_bytes,
-        ..
-      } => f
-        .debug_struct("ConvertedResponse::Buffered")
-        .field("status", status)
-        .field("headers", headers)
-        .field("body_bytes_len", &body_bytes.as_ref().map(|b| b.len()))
-        .finish(),
-      Self::Stream {
-        status,
-        headers,
-        ..
-      } => f
-        .debug_struct("ConvertedResponse::Stream")
-        .field("status", status)
-        .field("headers", headers)
-        .field("body", &"<sse stream>")
-        .finish(),
+    let mut dbg = f.debug_struct("ConvertedResponse");
+    dbg.field("status", &self.status).field("headers", &self.headers);
+    match &self.body {
+      ConvertedBody::Buffered { body_bytes, .. } => {
+        dbg.field("kind", &"buffered")
+          .field("body_bytes_len", &body_bytes.as_ref().map(|b| b.len()));
+      }
+      ConvertedBody::Stream { .. } => {
+        dbg.field("kind", &"stream").field("body", &"<sse stream>");
+      }
     }
+    dbg.finish()
   }
 }
 
@@ -408,15 +424,11 @@ pub trait ConvertResponseStage: Send + Sync {
       let converted = self
         .convert_stream(ctx, status, headers, upstream_endpoint, body)
         .await?;
-      return Ok(match converted {
-        ConvertedResponse::Stream {
-          status,
-          headers,
-          body,
-        } => {
-          ConvertedResponse::Stream {
-            status,
-            headers,
+      if let ConvertedBody::Stream { body } = converted.body {
+        return Ok(ConvertedResponse {
+          status: converted.status,
+          headers: converted.headers,
+          body: ConvertedBody::Stream {
             body: stream::unfold((body, accum), |(mut body, accum)| async move {
               match body.next().await {
                 Some(item) => {
@@ -430,10 +442,10 @@ pub trait ConvertResponseStage: Send + Sync {
               }
             })
             .boxed(),
-          }
-        }
-        other => other,
-      });
+          },
+        });
+      }
+      return Ok(converted);
     }
     let raw = response.bytes().await.map_err(|e| {
       PipelineError::recoverable(

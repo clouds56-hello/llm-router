@@ -14,7 +14,7 @@
 use axum::body::Body;
 use axum::http::{header, HeaderMap, HeaderValue, Response, StatusCode};
 use axum::response::IntoResponse;
-use llm_requests::pipeline::stages::ConvertedResponse;
+use llm_requests::pipeline::stages::{ConvertedBody, ConvertedResponse};
 
 /// Convert a [`ConvertedResponse`] into an axum response.
 ///
@@ -22,14 +22,13 @@ use llm_requests::pipeline::stages::ConvertedResponse;
 /// scratch (see module-level docs for rationale). Body comes through
 /// either as a single `Bytes` (Buffered) or a `BoxStream` (Stream).
 pub(crate) fn converted_to_axum(c: ConvertedResponse) -> Response<Body> {
-  match c {
-    ConvertedResponse::Buffered { status, body_bytes, .. } => {
-      let status = to_status(status);
+  let status = to_status(c.status);
+  match c.body {
+    ConvertedBody::Buffered { body_bytes, .. } => {
       let headers = buffered_headers();
       (status, headers, Body::from(body_bytes.unwrap_or_default())).into_response()
     }
-    ConvertedResponse::Stream { status, body, .. } => {
-      let status = to_status(status);
+    ConvertedBody::Stream { body } => {
       let headers = sse_headers();
       (status, headers, Body::from_stream(body)).into_response()
     }

@@ -5,7 +5,7 @@
 
 use crate::pipeline::ctx::PipelineCtx;
 use crate::pipeline::error::PipelineError;
-use crate::pipeline::stages::{ConvertResponseStage, ConvertedResponse};
+use crate::pipeline::stages::{ConvertResponseStage, ConvertedBody, ConvertedResponse};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::stream::BoxStream;
@@ -18,11 +18,13 @@ pub mod default;
 pub use default::DefaultConvertResponse;
 
 fn noop_buffered() -> ConvertedResponse {
-  ConvertedResponse::Buffered {
+  ConvertedResponse {
     status: 0,
     headers: HeaderMap::new(),
-    body_json: Arc::new(Value::Null),
-    body_bytes: Some(Bytes::new()),
+    body: ConvertedBody::Buffered {
+      body_json: Arc::new(Value::Null),
+      body_bytes: Some(Bytes::new()),
+    },
   }
 }
 
