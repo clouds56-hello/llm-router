@@ -6,7 +6,7 @@ description = "Shared endpoint primitives and traits used by tokn endpoint crate
 documentation.workspace = true
 homepage.workspace = true
 repository.workspace = true
-license = "MIT OR Apache-2.0"
+license.workspace = true
 
 [dependencies]
 serde = { workspace = true }

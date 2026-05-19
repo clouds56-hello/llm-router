@@ -6,7 +6,7 @@ description = "Typed schemas for OpenAI-compatible messages endpoints"
 documentation.workspace = true
 homepage.workspace = true
 repository.workspace = true
-license = "MIT OR Apache-2.0"
+license.workspace = true
 
 [dependencies]
 tokn-endpoint-core = { workspace = true }

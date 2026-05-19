@@ -6,6 +6,7 @@ description = "Header schema, parsing, and persona utilities shared across tokn 
 documentation.workspace = true
 homepage.workspace = true
 repository.workspace = true
+license.workspace = true
 
 [dependencies]
 http = { workspace = true }

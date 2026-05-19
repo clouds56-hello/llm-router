@@ -6,7 +6,7 @@ description = "Authentication provider interfaces and credential storage for tok
 documentation.workspace = true
 homepage.workspace = true
 repository.workspace = true
-license = "MIT OR Apache-2.0"
+license.workspace = true
 
 [dependencies]
 tokn-core = { workspace = true }
