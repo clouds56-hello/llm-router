@@ -42,27 +42,56 @@ enum AccumMsg {
 }
 
 impl AccumHelper {
-  fn spawn(ctx: &PipelineCtx) -> Self {
+  fn spawn(ctx: &PipelineCtx, model: SmolStr) -> Self {
     let request_id = ctx.request_id.clone();
     let attempt = ctx.attempt;
     let attempts = attempt + 1;
+    let endpoint_label = ctx.endpoint.as_str().to_string();
     let events = ctx.events.clone();
     let guard = ctx.events.begin_finalizer();
     let (tx, mut rx) = mpsc::unbounded_channel::<AccumMsg>();
     tokio::spawn(async move {
+      use tokio::time::{interval, Duration, MissedTickBehavior};
+
       let mut upstream = Vec::new();
       let mut converted = Vec::new();
       let mut upstream_error = None;
       let mut converted_error = None;
-      while let Some(msg) = rx.recv().await {
-        match msg {
-          AccumMsg::Upstream(bytes) => upstream.extend_from_slice(&bytes),
-          AccumMsg::Converted(bytes) => converted.extend_from_slice(&bytes),
-          AccumMsg::UpstreamError(err) => upstream_error = Some(err),
-          AccumMsg::ConvertedError(err) => converted_error = Some(err),
-          AccumMsg::Finish => break,
+      let mut bytes_streamed: u64 = 0;
+      let mut chunks: u64 = 0;
+
+      let mut tick = interval(Duration::from_millis(500));
+      tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+      tick.tick().await;
+
+      loop {
+        tokio::select! {
+          msg = rx.recv() => {
+            match msg {
+              Some(AccumMsg::Upstream(bytes)) => upstream.extend_from_slice(&bytes),
+              Some(AccumMsg::Converted(bytes)) => {
+                bytes_streamed += bytes.len() as u64;
+                chunks += 1;
+                converted.extend_from_slice(&bytes);
+              }
+              Some(AccumMsg::UpstreamError(err)) => upstream_error = Some(err),
+              Some(AccumMsg::ConvertedError(err)) => converted_error = Some(err),
+              Some(AccumMsg::Finish) | None => break,
+            }
+          }
+          _ = tick.tick() => {
+            events.emit(llm_core::event::Event::StreamProgress {
+              request_id: request_id.to_string(),
+              model: model.to_string(),
+              endpoint: endpoint_label.clone(),
+              usage: llm_core::db::Usage::default(),
+              bytes_streamed,
+              chunks,
+            });
+          }
         }
       }
+
       events.emit(llm_core::event::Event::Requests(llm_core::request_event::RequestEvent {
         request_id: request_id.clone(),
         attempt,
@@ -428,7 +457,7 @@ pub trait ConvertResponseStage: Send + Sync {
       response,
     } = sent;
     if stream {
-      let accum = AccumHelper::spawn(ctx);
+      let accum = AccumHelper::spawn(ctx, SmolStr::default());
       let accum_upstream = accum.clone();
       let body = response
         .bytes_stream()

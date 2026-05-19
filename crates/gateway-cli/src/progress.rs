@@ -13,6 +13,7 @@ use console::style;
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use llm_core::db::Usage;
 use llm_core::event::{Event, EventHandler, LegacyRequestEvent};
+use llm_core::request_event::{RequestEvent, RequestEventPayload, StageEvent};
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Write};
@@ -333,12 +334,12 @@ impl Default for ProgressEventHandler {
   }
 }
 
-impl EventHandler for ProgressEventHandler {
-  fn handle(&mut self, event: &Event) {
+impl ProgressEventHandler {
+  fn handle_legacy(&mut self, event: &LegacyRequestEvent) {
     match event {
-      Event::LegacyRequest(LegacyRequestEvent::Started {
+      LegacyRequestEvent::Started {
         request_id, endpoint, ..
-      }) => {
+      } => {
         // Insert above the footer.
         let bar = self.multi.insert_before(&self.footer, ProgressBar::new_spinner());
         bar.set_style(self.style.clone());
@@ -352,7 +353,7 @@ impl EventHandler for ProgressEventHandler {
         self.refresh(request_id);
         self.refresh_footer();
       }
-      Event::LegacyRequest(LegacyRequestEvent::Parsed {
+      LegacyRequestEvent::Parsed {
         request_id,
         attempt,
         account_id,
@@ -360,7 +361,7 @@ impl EventHandler for ProgressEventHandler {
         model,
         inbound_body,
         ..
-      }) => {
+      } => {
         if let Some(state) = self.bars.get_mut(request_id) {
           state.request.provider = provider_id.clone();
           state.request.model = model.clone();
@@ -370,9 +371,9 @@ impl EventHandler for ProgressEventHandler {
         }
         self.refresh(request_id);
       }
-      Event::LegacyRequest(LegacyRequestEvent::Retry {
+      LegacyRequestEvent::Retry {
         request_id, attempt, ..
-      }) => {
+      } => {
         if let Some(state) = self.bars.get_mut(request_id) {
           // attempt N just failed; next try will be attempt+1.
           state.request.attempt = attempt + 1;
@@ -380,25 +381,12 @@ impl EventHandler for ProgressEventHandler {
         }
         self.refresh(request_id);
       }
-      Event::StreamProgress {
-        request_id,
-        bytes_streamed,
-        usage,
-        ..
-      } => {
-        if let Some(state) = self.bars.get_mut(request_id) {
-          state.request.recv_bytes = *bytes_streamed;
-          // Merge any non-None usage fields seen so far.
-          state.request.merge_usage(usage);
-        }
-        self.refresh(request_id);
-      }
-      Event::LegacyRequest(LegacyRequestEvent::Result {
+      LegacyRequestEvent::Result {
         request_id,
         inbound_resp_body,
         usage,
         ..
-      }) => {
+      } => {
         if let Some(state) = self.bars.get_mut(request_id) {
           let body_len = inbound_resp_body.len() as u64;
           if body_len > state.request.recv_bytes {
@@ -407,14 +395,14 @@ impl EventHandler for ProgressEventHandler {
           state.request.usage = usage.clone();
         }
       }
-      Event::LegacyRequest(LegacyRequestEvent::Completed {
+      LegacyRequestEvent::Completed {
         request_id,
         success,
         total_attempts,
         final_status,
         total_latency_ms,
         error,
-      }) => {
+      } => {
         if let Some(state) = self.bars.remove(request_id) {
           let final_msg = state.request.render_completed(
             request_id,
@@ -435,6 +423,89 @@ impl EventHandler for ProgressEventHandler {
           self.errors = self.errors.saturating_add(1);
         }
         self.refresh_footer();
+      }
+      _ => {}
+    }
+  }
+
+  fn handle_request(&mut self, event: &RequestEvent) {
+    let request_id = event.request_id.as_str();
+    let composite_id = if event.attempt == 0 {
+      request_id.to_string()
+    } else {
+      format!("{}:{}", request_id, event.attempt)
+    };
+    match &event.payload {
+      RequestEventPayload::Stage(StageEvent::Started { endpoint }) => {
+        let bar = self.multi.insert_before(&self.footer, ProgressBar::new_spinner());
+        bar.set_style(self.style.clone());
+        bar.enable_steady_tick(std::time::Duration::from_millis(120));
+        let state = BarState {
+          bar,
+          request: RequestState::new(endpoint.as_str().to_string()),
+        };
+        self.bars.insert(composite_id.clone(), state);
+        self.in_flight = self.in_flight.saturating_add(1);
+        self.refresh(&composite_id);
+        self.refresh_footer();
+      }
+      RequestEventPayload::Stage(StageEvent::Extract(s)) => {
+        if let Some(state) = self.bars.get_mut(&composite_id) {
+          state.request.model = s.model.to_string();
+        }
+        self.refresh(&composite_id);
+      }
+      RequestEventPayload::Stage(StageEvent::Resolve(s)) => {
+        if let Some(state) = self.bars.get_mut(&composite_id) {
+          state.request.provider = s.provider_id.to_string();
+          state.request.account = s.account_id.to_string();
+        }
+        self.refresh(&composite_id);
+      }
+      RequestEventPayload::Stage(StageEvent::Completed { success, attempts }) => {
+        if let Some(state) = self.bars.remove(&composite_id) {
+          let latency_ms = state.request.started.elapsed().as_millis() as u64;
+          let final_msg = state.request.render_completed(
+            &composite_id,
+            *success,
+            *attempts,
+            None,
+            latency_ms,
+            None,
+          );
+          state.bar.disable_steady_tick();
+          let _ = self.multi.println(final_msg);
+          state.bar.finish_and_clear();
+        }
+        self.in_flight = self.in_flight.saturating_sub(1);
+        self.completed = self.completed.saturating_add(1);
+        if !success {
+          self.errors = self.errors.saturating_add(1);
+        }
+        self.refresh_footer();
+      }
+      _ => {}
+    }
+  }
+}
+
+impl EventHandler for ProgressEventHandler {
+  fn handle(&mut self, event: &Event) {
+    match event {
+      Event::LegacyRequest(e) => self.handle_legacy(e),
+      Event::Requests(e) => self.handle_request(e),
+      Event::StreamProgress {
+        request_id,
+        bytes_streamed,
+        usage,
+        ..
+      } => {
+        if let Some(state) = self.bars.get_mut(request_id) {
+          state.request.recv_bytes = *bytes_streamed;
+          // Merge any non-None usage fields seen so far.
+          state.request.merge_usage(usage);
+        }
+        self.refresh(request_id);
       }
       _ => {}
     }
@@ -689,18 +760,18 @@ impl ProgressLogEventHandler {
   }
 }
 
-impl EventHandler for ProgressLogEventHandler {
-  fn handle(&mut self, event: &Event) {
+impl ProgressLogEventHandler {
+  pub fn handle_legacy(&mut self, event: &LegacyRequestEvent) {
     match event {
-      Event::LegacyRequest(LegacyRequestEvent::Started {
+      LegacyRequestEvent::Started {
         request_id, endpoint, ..
-      }) => {
+      } => {
         self
           .requests
           .insert(request_id.clone(), RequestState::new(endpoint_label(endpoint, None)));
         self.in_flight = self.in_flight.saturating_add(1);
       }
-      Event::LegacyRequest(LegacyRequestEvent::Parsed {
+      LegacyRequestEvent::Parsed {
         request_id,
         attempt,
         account_id,
@@ -708,7 +779,7 @@ impl EventHandler for ProgressLogEventHandler {
         model,
         inbound_body,
         ..
-      }) => {
+      } => {
         if let Some(state) = self.requests.get_mut(request_id) {
           state.provider = provider_id.clone();
           state.model = model.clone();
@@ -717,31 +788,20 @@ impl EventHandler for ProgressLogEventHandler {
           state.sent_bytes = inbound_body.len() as u64;
         }
       }
-      Event::LegacyRequest(LegacyRequestEvent::Retry {
+      LegacyRequestEvent::Retry {
         request_id, attempt, ..
-      }) => {
+      } => {
         if let Some(state) = self.requests.get_mut(request_id) {
           state.attempt = attempt + 1;
           state.recv_bytes = 0;
         }
       }
-      Event::StreamProgress {
-        request_id,
-        bytes_streamed,
-        usage,
-        ..
-      } => {
-        if let Some(state) = self.requests.get_mut(request_id) {
-          state.recv_bytes = *bytes_streamed;
-          state.merge_usage(usage);
-        }
-      }
-      Event::LegacyRequest(LegacyRequestEvent::Result {
+      LegacyRequestEvent::Result {
         request_id,
         inbound_resp_body,
         usage,
         ..
-      }) => {
+      } => {
         if let Some(state) = self.requests.get_mut(request_id) {
           let body_len = inbound_resp_body.len() as u64;
           if body_len > state.recv_bytes {
@@ -750,14 +810,14 @@ impl EventHandler for ProgressLogEventHandler {
           state.usage = usage.clone();
         }
       }
-      Event::LegacyRequest(LegacyRequestEvent::Completed {
+      LegacyRequestEvent::Completed {
         request_id,
         success,
         total_attempts,
         final_status,
         total_latency_ms,
         error,
-      }) => {
+      } => {
         if let Some(state) = self.requests.remove(request_id) {
           let line = state.render_completed(
             request_id,
@@ -773,6 +833,68 @@ impl EventHandler for ProgressLogEventHandler {
         self.completed = self.completed.saturating_add(1);
         if !success {
           self.errors = self.errors.saturating_add(1);
+        }
+      }
+      _ => {}
+    }
+  }
+
+  fn handle_request(&mut self, event: &RequestEvent) {
+    let request_id = event.request_id.as_str();
+    let composite_id = if event.attempt == 0 {
+      request_id.to_string()
+    } else {
+      format!("{}:{}", request_id, event.attempt)
+    };
+    match &event.payload {
+      RequestEventPayload::Stage(StageEvent::Started { endpoint }) => {
+        self
+          .requests
+          .insert(composite_id, RequestState::new(endpoint.as_str().to_string()));
+        self.in_flight = self.in_flight.saturating_add(1);
+      }
+      RequestEventPayload::Stage(StageEvent::Extract(s)) => {
+        if let Some(state) = self.requests.get_mut(&composite_id) {
+          state.model = s.model.to_string();
+        }
+      }
+      RequestEventPayload::Stage(StageEvent::Resolve(s)) => {
+        if let Some(state) = self.requests.get_mut(&composite_id) {
+          state.provider = s.provider_id.to_string();
+          state.account = s.account_id.to_string();
+        }
+      }
+      RequestEventPayload::Stage(StageEvent::Completed { success, .. }) => {
+        if let Some(state) = self.requests.remove(&composite_id) {
+          let latency_ms = state.started.elapsed().as_millis() as u64;
+          let line = state.render_completed(&composite_id, *success, 1, None, latency_ms, None);
+          self.write_line(&line);
+        }
+        self.in_flight = self.in_flight.saturating_sub(1);
+        self.completed = self.completed.saturating_add(1);
+        if !success {
+          self.errors = self.errors.saturating_add(1);
+        }
+      }
+      _ => {}
+    }
+  }
+}
+
+impl EventHandler for ProgressLogEventHandler {
+  fn handle(&mut self, event: &Event) {
+    match event {
+      Event::LegacyRequest(e) => self.handle_legacy(e),
+      Event::Requests(e) => self.handle_request(e),
+      Event::StreamProgress {
+        request_id,
+        bytes_streamed,
+        usage,
+        ..
+      } => {
+        if let Some(state) = self.requests.get_mut(request_id) {
+          state.recv_bytes = *bytes_streamed;
+          state.merge_usage(usage);
         }
       }
       _ => {}
