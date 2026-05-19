@@ -1,5 +1,6 @@
 [workspace]
 members = [
+  "crates/tokn",
   "crates/core",
   "crates/config",
   "crates/auth",
@@ -20,6 +21,7 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
+tokn = { path = "crates/tokn" }
 tokn-core = { path = "crates/core" }
 tokn-config = { path = "crates/config" }
 tokn-auth = { path = "crates/auth" }
