@@ -8,6 +8,7 @@ use crate::pipeline::error::PipelineError;
 use crate::pipeline::stages::{ConvertResponseStage, ConvertedResponse};
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures_util::stream::BoxStream;
 use llm_core::provider::Endpoint;
 use llm_headers::HeaderMap;
 use serde_json::Value;
@@ -47,7 +48,7 @@ impl ConvertResponseStage for NoopConvertResponse {
     status: u16,
     _headers: HeaderMap,
     _upstream_endpoint: Endpoint,
-    _response: reqwest::Response,
+    _body: BoxStream<'static, std::io::Result<Bytes>>,
   ) -> Result<ConvertedResponse, PipelineError> {
     let _ = status;
     Ok(noop_buffered())

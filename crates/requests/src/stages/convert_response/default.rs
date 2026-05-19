@@ -8,7 +8,7 @@
 //!    endpoints differ.
 //!
 //! 2. [`convert_stream`](DefaultConvertResponse::convert_stream):
-//!    wraps the live [`reqwest::Response`] in [`SsePipeline`]; installs an
+//!    wraps the live response byte stream in [`SsePipeline`]; installs an
 //!    [`EndpointTranslator`] when endpoints differ.
 //!
 //! The trait's provided [`convert_response`](ConvertResponseStage::convert_response)
@@ -20,6 +20,7 @@ use crate::pipeline::error::PipelineError;
 use crate::pipeline::stages::{ConvertResponseStage, ConvertedResponse};
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures_util::stream::BoxStream;
 use llm_convert::sse::{EndpointTranslator, SsePipeline};
 use llm_core::provider::Endpoint;
 use llm_headers::HeaderMap;
@@ -114,11 +115,11 @@ impl ConvertResponseStage for DefaultConvertResponse {
     status: u16,
     headers: HeaderMap,
     upstream_endpoint: Endpoint,
-    response: reqwest::Response,
+    body: BoxStream<'static, std::io::Result<Bytes>>,
   ) -> Result<ConvertedResponse, PipelineError> {
     debug!("wrapping upstream response as SSE stream");
     let inbound_endpoint = ctx.endpoint;
-    let mut pipeline = SsePipeline::from_response(response);
+    let mut pipeline = SsePipeline::from_stream(body);
     if upstream_endpoint != inbound_endpoint {
       pipeline = pipeline.with_transformer(EndpointTranslator::new(upstream_endpoint, inbound_endpoint));
     }
@@ -237,7 +238,7 @@ mod tests {
         200,
         HeaderMap::new(),
         Endpoint::ChatCompletions,
-        response(200, body, "text/event-stream"),
+        futures_util::stream::iter(vec![Ok(Bytes::from(body))]).boxed(),
       )
       .await
       .unwrap();

@@ -4,6 +4,7 @@ use crate::error::Result;
 use bytes::Bytes;
 use eventsource_stream::Eventsource;
 use futures_util::{Stream, StreamExt};
+use std::io;
 use serde_json::Value;
 use std::collections::VecDeque;
 use std::pin::Pin;
@@ -47,62 +48,36 @@ pub trait EventTransformer: Send {
 }
 
 pub struct SsePipeline {
-  source: EventStream,
-  /// Shared tap sender — also captured by the raw byte tee closure (when from_response_with_tap is used).
+  source: ByteStream,
+  /// Shared tap sender used for raw-byte teeing and parsed/transformed/output observation.
   tap: Option<Arc<ObserverSender>>,
+  tee_byte_streams: bool,
   transformers: Vec<Box<dyn EventTransformer>>,
 }
 
 impl SsePipeline {
-  /// Create a pipeline from an HTTP response without a tap (no observer overhead).
-  pub fn from_response(resp: reqwest::Response) -> Self {
-    let source = resp.bytes_stream().eventsource().map(|item| match item {
-      Ok(event) => Ok(SseEvent::from(event)),
-      Err(err) => Err(std::io::Error::other(err.to_string())),
-    });
+  /// Create a pipeline from a byte stream without a tap.
+  pub fn from_stream<S>(source: S) -> Self
+  where
+    S: Stream<Item = io::Result<Bytes>> + Send + 'static,
+  {
     Self {
       source: Box::pin(source),
       tap: None,
+      tee_byte_streams: false,
       transformers: Vec::new(),
     }
+  }
+
+  /// Create a pipeline from an HTTP response without a tap (no observer overhead).
+  pub fn from_response(resp: reqwest::Response) -> Self {
+    Self::from_stream(resp.bytes_stream().map(|item| item.map_err(io::Error::other)))
   }
 
   /// Create a pipeline from an HTTP response with a tap channel.
   /// Raw upstream bytes are sent as `From(Bytes)` before SSE parsing.
   pub fn from_response_with_tap(resp: reqwest::Response, tap: ObserverSender) -> Self {
-    let tap = Arc::new(tap);
-    let tap_for_bytes = tap.clone();
-
-    // Tee raw bytes: clone to observer channel before SSE parsing
-    let byte_stream = resp.bytes_stream().map(move |result| match &result {
-      Ok(bytes) => {
-        let _ = tap_for_bytes.send(ObserverMsg::From(bytes.clone()));
-        result
-      }
-      Err(_) => result,
-    });
-
-    let source = byte_stream.eventsource().map(|item| match item {
-      Ok(event) => Ok(SseEvent::from(event)),
-      Err(err) => Err(std::io::Error::other(err.to_string())),
-    });
-
-    Self {
-      source: Box::pin(source),
-      tap: Some(tap),
-      transformers: Vec::new(),
-    }
-  }
-
-  pub fn from_stream<S>(source: S) -> Self
-  where
-    S: Stream<Item = std::io::Result<SseEvent>> + Send + 'static,
-  {
-    Self {
-      source: Box::pin(source),
-      tap: None,
-      transformers: Vec::new(),
-    }
+    Self::from_response(resp).with_tee_byte_streams(tap)
   }
 
   pub fn with_transformer<T>(mut self, transformer: T) -> Self
@@ -113,16 +88,50 @@ impl SsePipeline {
     self
   }
 
+  /// Attach a tap channel and tee raw input bytes to it before SSE parsing.
+  pub fn with_tee_byte_streams(mut self, tap: ObserverSender) -> Self {
+    self.tap = Some(Arc::new(tap));
+    self.tee_byte_streams = true;
+    self
+  }
+
   /// Attach a tap channel for observing pipeline stages.
-  /// Note: this does NOT send `From(Bytes)` — use `from_response_with_tap` for that.
+  /// Note: this does NOT send `From(Bytes)` — use `with_tee_byte_streams` for that.
   pub fn with_tap(mut self, tap: ObserverSender) -> Self {
     self.tap = Some(Arc::new(tap));
     self
   }
 
   pub fn run(self) -> ByteStream {
+    let source: EventStream = if self.tee_byte_streams {
+      let tap = self.tap.clone();
+      Box::pin(self.source.map(move |result| match result {
+        Ok(bytes) => {
+          if let Some(ref tap) = tap {
+            let _ = tap.send(ObserverMsg::From(bytes.clone()));
+          }
+          Ok(bytes)
+        }
+        Err(err) => Err(err),
+      }))
+      .eventsource()
+      .map(|item| match item {
+        Ok(event) => Ok(SseEvent::from(event)),
+        Err(err) => Err(io::Error::other(err.to_string())),
+      })
+      .boxed()
+    } else {
+      self
+        .source
+        .eventsource()
+        .map(|item| match item {
+          Ok(event) => Ok(SseEvent::from(event)),
+          Err(err) => Err(io::Error::other(err.to_string())),
+        })
+        .boxed()
+    };
     Box::pin(StreamWithFinalizer::new(
-      PipelineStream::new(self.source, self.transformers, self.tap),
+      PipelineStream::new(source, self.transformers, self.tap),
       finalize_tap,
     ))
   }
@@ -318,8 +327,8 @@ mod tests {
     let (tx, mut rx) = observer_channel();
     let body = futures::executor::block_on(async move {
       let body = SsePipeline::from_stream(stream::iter(vec![
-        Ok(SseEvent::raw(None, "hello".into())),
-        Ok(SseEvent::done()),
+        Ok(Bytes::from_static(b"data: hello\n\n")),
+        Ok(Bytes::from_static(b"data: [DONE]\n\n")),
       ]))
       .with_transformer(AppendTransformer("-a"))
       .with_transformer(AppendTransformer("-b"))
@@ -352,5 +361,28 @@ mod tests {
     let text = std::str::from_utf8(&body).unwrap();
     assert!(text.contains("data: hello-a-b"));
     assert!(text.contains("data: [DONE]"));
+  }
+
+  #[test]
+  fn pipeline_tees_raw_bytes_when_enabled() {
+    let (tx, mut rx) = observer_channel();
+    futures::executor::block_on(async move {
+      let _ = SsePipeline::from_stream(stream::iter(vec![
+        Ok(Bytes::from_static(b"data: hello\n\n")),
+        Ok(Bytes::from_static(b"data: [DONE]\n\n")),
+      ]))
+      .with_tee_byte_streams(tx)
+      .run()
+      .collect::<Vec<_>>()
+      .await;
+    });
+
+    let mut from_count = 0;
+    while let Ok(msg) = rx.try_recv() {
+      if matches!(msg, ObserverMsg::From(_)) {
+        from_count += 1;
+      }
+    }
+    assert_eq!(from_count, 2);
   }
 }

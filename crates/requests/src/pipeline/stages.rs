@@ -18,6 +18,7 @@ use crate::pipeline::error::PipelineError;
 use crate::utils::codec::ContentEncodingKind;
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures_util::StreamExt;
 use llm_accounts::AccountHandle;
 use llm_core::provider::Endpoint;
 use llm_core::ClientId;
@@ -281,7 +282,7 @@ pub trait ConvertResponseStage: Send + Sync {
     status: u16,
     headers: HeaderMap,
     upstream_endpoint: Endpoint,
-    response: reqwest::Response,
+    body: futures_util::stream::BoxStream<'static, std::io::Result<Bytes>>,
   ) -> Result<ConvertedResponse, PipelineError>;
 
   async fn convert_response(
@@ -297,8 +298,12 @@ pub trait ConvertResponseStage: Send + Sync {
       response,
     } = sent;
     if stream {
+      let body = response
+        .bytes_stream()
+        .map(|item| item.map_err(std::io::Error::other))
+        .boxed();
       return self
-        .convert_stream(ctx, status, headers, upstream_endpoint, response)
+        .convert_stream(ctx, status, headers, upstream_endpoint, body)
         .await;
     }
     let raw = response.bytes().await.map_err(|e| {
