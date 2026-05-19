@@ -47,10 +47,10 @@ impl PipelineCtx {
     }));
   }
 
-  /// Publish a wire-truth [`RecordEvent`] tagged with the current request
-  /// id and attempt. Used by Send / ConvertResponse to surface what
-  /// reqwest actually put on the wire (vs the intent values carried on
-  /// per-stage summaries).
+  /// Publish a [`RecordEvent`] tagged with the current request id and
+  /// attempt. Used for transport-adjacent facts that live alongside the
+  /// stage lifecycle, such as outbound wire-truth, inbound connection
+  /// metadata, and parsed usage.
   pub fn emit_record(&self, payload: RecordEvent) {
     self.events.emit(CoreEvent::Requests(Event {
       request_id: self.request_id.clone(),

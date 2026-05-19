@@ -75,11 +75,25 @@ impl EventHandler for RequestEventHandler {
         StageEvent::Error { stage, message, .. } => self.on_error(request_id, attempt, *stage, message.as_str()),
         StageEvent::Completed { .. } => self.on_completed(request_id, attempt, now_unix()),
       },
-      // Wire-truth records emitted by Send / ConvertResponse. `UpstreamResp`
-      // duplicates `StageEvent::Send` (status + headers come from the same
-      // `reqwest::Response::headers()`) and so is intentionally a no-op
-      // here — we keep the event for downstream consumers (debug printers,
-      // observers) that want a single source of wire-truth events.
+      // Record events capture transport-adjacent facts that live alongside
+      // the stage lifecycle. `UpstreamResp` duplicates `StageEvent::Send`
+      // (status + headers come from the same `reqwest::Response::headers()`)
+      // and so is intentionally a no-op here.
+      RequestEventPayload::Record(RecordEvent::InboundConnection {
+        local_addr,
+        peer_addr,
+        mode,
+        method,
+        url,
+      }) => self.on_inbound_connection(
+        request_id,
+        attempt,
+        local_addr.as_deref(),
+        peer_addr.as_deref(),
+        mode.as_str(),
+        method.as_str(),
+        url.as_deref(),
+      ),
       RequestEventPayload::Record(RecordEvent::UpstreamReq {
         method,
         url,
@@ -88,6 +102,7 @@ impl EventHandler for RequestEventHandler {
       }) => self.on_upstream_req(request_id, attempt, method.as_str(), url.as_str(), headers, body),
       RequestEventPayload::Record(RecordEvent::UpstreamResp { .. }) => Ok(()),
       RequestEventPayload::Record(RecordEvent::UpstreamBody { body }) => self.on_upstream_body(request_id, attempt, body),
+      RequestEventPayload::Record(RecordEvent::Usage(usage)) => self.on_usage(request_id, attempt, usage),
     };
     if let Err(e) = result {
       tracing::warn!(error = %e, request_id, attempt, "requests persistence write failed");
@@ -96,6 +111,38 @@ impl EventHandler for RequestEventHandler {
 }
 
 impl RequestEventHandler {
+  pub fn on_inbound_connection(
+    &mut self,
+    request_id: &str,
+    attempt: u32,
+    local_addr: Option<&str>,
+    peer_addr: Option<&str>,
+    mode: &str,
+    method: &str,
+    url: Option<&str>,
+  ) -> Result<()> {
+    let id = composite_request_id(request_id, attempt);
+    let Some(conn) = self.db.conn_for_request(&id) else {
+      tracing::warn!(request_id = %id, "requests InboundConnection without prior Started");
+      return Ok(());
+    };
+    let updated = conn.execute(
+      "UPDATE requests SET
+         local_addr = COALESCE(?2, local_addr),
+         peer_addr = COALESCE(?3, peer_addr),
+         mode = COALESCE(?4, mode),
+         method = COALESCE(?5, method),
+         inbound_req_method = COALESCE(?5, inbound_req_method),
+         inbound_req_url = COALESCE(?6, inbound_req_url)
+       WHERE request_id = ?1",
+      params![id, local_addr, peer_addr, mode, method, url],
+    )?;
+    if updated == 0 {
+      tracing::warn!(request_id = %id, "requests InboundConnection UPDATE matched no row");
+    }
+    Ok(())
+  }
+
   /// Single INSERT for a fresh request. All subsequent stage handlers are
   /// UPDATEs that assume this row exists.
   pub fn on_started(&mut self, request_id: &str, attempt: u32, ts: i64, endpoint: &str) -> Result<()> {
@@ -363,6 +410,33 @@ impl RequestEventHandler {
     )?;
     if updated == 0 {
       tracing::warn!(request_id = %id, "requests UpstreamBody UPDATE matched no row");
+    }
+    Ok(())
+  }
+
+  pub fn on_usage(&mut self, request_id: &str, attempt: u32, usage: &llm_core::db::Usage) -> Result<()> {
+    let id = composite_request_id(request_id, attempt);
+    let Some(conn) = self.db.conn_for_request(&id) else {
+      tracing::warn!(request_id = %id, "requests Usage without prior Started");
+      return Ok(());
+    };
+    let updated = conn.execute(
+      "UPDATE requests SET
+         input_tok = ?2,
+         output_tok = ?3,
+         cached_tok = ?4,
+         reasoning_tok = ?5
+       WHERE request_id = ?1",
+      params![
+        id,
+        usage.input_tokens.map(|v| v as i64),
+        usage.output_tokens.map(|v| v as i64),
+        usage.details.cache_read.map(|v| v as i64),
+        usage.details.reasoning.map(|v| v as i64),
+      ],
+    )?;
+    if updated == 0 {
+      tracing::warn!(request_id = %id, "requests Usage UPDATE matched no row");
     }
     Ok(())
   }

@@ -7,8 +7,10 @@ use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
 use axum::response::Response;
+use llm_core::event::Event as CoreEvent;
 use llm_accounts::routing::route_mode_as_str;
 use llm_core::provider::Endpoint;
+use llm_core::request_event::{RecordEvent, RequestEvent, RequestEventPayload};
 use smol_str::SmolStr;
 use std::time::Instant;
 use tracing::instrument;
@@ -42,8 +44,20 @@ async fn handle(
   // RequestEventHandler's INSERT on StageEvent::Started would hit a UNIQUE
   // constraint and orphan every subsequent stage UPDATE.
   let use_pipeline = parser.endpoint() == Endpoint::ChatCompletions && state.chat_pipeline.is_some();
+  let mode = state.route.resolve_mode(hx.route_mode_hint.as_deref()).ok();
 
   if use_pipeline {
+    state.events.emit(CoreEvent::Requests(RequestEvent {
+      request_id: SmolStr::new(&hx.request_id),
+      attempt: 0,
+      payload: RequestEventPayload::Record(RecordEvent::InboundConnection {
+        local_addr: local_addr.clone().map(SmolStr::from),
+        peer_addr: None,
+        mode: SmolStr::new(request_record_mode(mode)),
+        method: SmolStr::new("POST"),
+        url: None,
+      }),
+    }));
     let decoded = super::codec::decode_json_request(&inbound, body)?;
     let pipeline = state.chat_pipeline.clone().expect("checked is_some above");
     let raw = llm_requests::RawInbound {
@@ -60,10 +74,7 @@ async fn handle(
     };
   }
 
-  let mode = state
-    .route
-    .resolve_mode(hx.route_mode_hint.as_deref())
-    .ok()
+  let mode = mode
     .map(route_mode_as_str)
     .map(str::to_string);
 
@@ -120,6 +131,13 @@ fn unix_ts() -> i64 {
     .duration_since(std::time::UNIX_EPOCH)
     .unwrap_or_default()
     .as_secs() as i64
+}
+
+fn request_record_mode(mode: Option<llm_config::RouteMode>) -> &'static str {
+  match mode {
+    Some(llm_config::RouteMode::Passthrough) => "passthrough",
+    _ => "route",
+  }
 }
 
 /// Inject route mode from path prefix into headers, overriding any existing value.

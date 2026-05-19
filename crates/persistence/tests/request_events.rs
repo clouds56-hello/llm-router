@@ -2,7 +2,9 @@
 
 use bytes::Bytes;
 use llm_core::event::{Event, EventHandler};
+use llm_core::db::{Usage, UsageDetails};
 use llm_core::provider::Endpoint;
+use llm_core::request_event::RecordEvent;
 use llm_core::request_event::stage::{
   BuiltHeadersSummary, ConvertedRequestSummary, ConvertedResponseSummary, ExtractedSummary, ResolvedSummary,
   SentSummary, Stage, StageEvent,
@@ -27,6 +29,14 @@ fn r2(request_id: &str, attempt: u32, payload: StageEvent) -> Event {
     request_id: SmolStr::new(request_id),
     attempt,
     payload: RequestEventPayload::Stage(payload),
+  })
+}
+
+fn rr(request_id: &str, attempt: u32, payload: RecordEvent) -> Event {
+  Event::Requests(RequestEvent {
+    request_id: SmolStr::new(request_id),
+    attempt,
+    payload: RequestEventPayload::Record(payload),
   })
 }
 
@@ -299,4 +309,69 @@ fn stage_event_without_started_is_dropped_with_warning() {
   h.handle(&r2(req, 0, extracted("m", false, None, b"")));
   h.handle(&r2(req, 0, completed(false, 1)));
   assert_eq!(count_rows(&dir), 0);
+}
+
+#[test]
+fn inbound_connection_record_updates_connection_fields() {
+  let dir = tempdir();
+  let mut h = RequestEventHandler::new(dir.clone()).unwrap();
+  let req = "req-conn";
+  h.handle(&r2(
+    req,
+    0,
+    StageEvent::Started {
+      endpoint: Endpoint::Responses,
+    },
+  ));
+  h.handle(&rr(
+    req,
+    0,
+    RecordEvent::InboundConnection {
+      local_addr: Some(SmolStr::new("127.0.0.1:4141")),
+      peer_addr: Some(SmolStr::new("127.0.0.1:4142")),
+      mode: SmolStr::new("route"),
+      method: SmolStr::new("POST"),
+      url: Some(SmolStr::new("https://example.test/v1/responses")),
+    },
+  ));
+
+  let row = fetch_row(&dir, req);
+  assert_eq!(as_text(&row["local_addr"]).as_deref(), Some("127.0.0.1:4141"));
+  assert_eq!(as_text(&row["peer_addr"]).as_deref(), Some("127.0.0.1:4142"));
+  assert_eq!(as_text(&row["mode"]).as_deref(), Some("route"));
+  assert_eq!(as_text(&row["method"]).as_deref(), Some("POST"));
+  assert_eq!(as_text(&row["inbound_req_method"]).as_deref(), Some("POST"));
+  assert_eq!(as_text(&row["inbound_req_url"]).as_deref(), Some("https://example.test/v1/responses"));
+}
+
+#[test]
+fn usage_record_updates_token_columns() {
+  let dir = tempdir();
+  let mut h = RequestEventHandler::new(dir.clone()).unwrap();
+  let req = "req-usage";
+  h.handle(&r2(
+    req,
+    0,
+    StageEvent::Started {
+      endpoint: Endpoint::Responses,
+    },
+  ));
+  h.handle(&rr(
+    req,
+    0,
+    RecordEvent::Usage(Usage {
+      input_tokens: Some(11),
+      output_tokens: Some(22),
+      details: UsageDetails {
+        cache_read: Some(3),
+        reasoning: Some(4),
+      },
+    }),
+  ));
+
+  let row = fetch_row(&dir, req);
+  assert_eq!(as_int(&row["input_tok"]), Some(11));
+  assert_eq!(as_int(&row["output_tok"]), Some(22));
+  assert_eq!(as_int(&row["cached_tok"]), Some(3));
+  assert_eq!(as_int(&row["reasoning_tok"]), Some(4));
 }

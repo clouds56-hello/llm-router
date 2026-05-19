@@ -11,11 +11,10 @@
 //! * [`StageEvent`] — a closed enum of lifecycle/observation variants
 //!   the runner emits at well-defined points (Started, per-stage
 //!   summaries, Error, Completed). Subscribers `match` on them.
-//! * [`RecordEvent`] — wire-truth captures from the actual outbound
-//!   HTTP call (request line + headers + body, response status +
-//!   headers, response body). Split from `StageEvent` so subscribers
-//!   that only care about one axis don't pay a match-arm tax for the
-//!   other.
+//! * [`RecordEvent`] — transport-adjacent captures that sit alongside the
+//!   stage lifecycle (inbound connection facts, outbound wire-truth,
+//!   parsed usage). Split from `StageEvent` so subscribers that only care
+//!   about one axis don't pay a match-arm tax for the other.
 //! * [`CustomEvent`] — an `Any`-typed escape hatch for middleware /
 //!   decorator stages (e.g. retry, cache) to publish their own
 //!   structured records without modifying either of the closed enums.
@@ -52,8 +51,8 @@ pub struct RequestEvent {
 ///
 /// - [`Stage`](RequestEventPayload::Stage) — closed-set lifecycle /
 ///   per-stage observation events.
-/// - [`Record`](RequestEventPayload::Record) — wire-truth captures from
-///   the actual outbound HTTP call.
+/// - [`Record`](RequestEventPayload::Record) — transport-adjacent captures
+///   such as inbound connection facts, outbound wire-truth, and usage.
 /// - [`Custom`](RequestEventPayload::Custom) — `Any`-typed escape hatch
 ///   for middleware / decorator stages.
 #[derive(Clone, Debug)]

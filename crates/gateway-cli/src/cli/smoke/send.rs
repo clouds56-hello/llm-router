@@ -26,6 +26,7 @@ use clap::Args;
 use futures_util::StreamExt;
 use llm_config::RouteMode;
 use llm_core::event::Event as CoreEvent;
+use llm_core::request_event::{RecordEvent, RequestEvent, RequestEventPayload};
 use llm_requests::event::{BuiltHeadersSummary, ConvertedRequestSummary, ResolvedSummary};
 use llm_requests::pipeline::stages::ConvertedResponse;
 use llm_requests::stages::{
@@ -196,7 +197,9 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
     None => build_request_body(endpoint, &model, args.message.as_deref().unwrap_or(""), args.stream),
   };
   let body_bytes = Bytes::from(serde_json::to_vec(&body_value)?);
-  let headers = build_inbound_headers(&args.headers)?;
+  let request_id = uuid::Uuid::new_v4().to_string();
+  let mut headers = build_inbound_headers(&args.headers)?;
+  headers.insert("x-request-id", request_id.clone());
 
   if args.no_redact {
     eprintln!(
@@ -253,13 +256,25 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
   };
   let runner = PipelineRunner::new(profile, bus.clone());
 
+  bus.emit(CoreEvent::Requests(RequestEvent {
+    request_id: request_id.clone().into(),
+    attempt: 0,
+    payload: RequestEventPayload::Record(RecordEvent::InboundConnection {
+      local_addr: None,
+      peer_addr: None,
+      mode: "smoke".into(),
+      method: "POST".into(),
+      url: None,
+    }),
+  }));
+
   let raw = RawInbound {
     endpoint,
     headers,
     raw_body: body_bytes.clone(),
     decoded_body: body_bytes.clone(),
     body_json: body_value,
-    request_id: None,
+    request_id: Some(request_id.into()),
   };
 
   let result = runner.run(raw).await;
@@ -415,8 +430,21 @@ fn print_event(event: &Event) {
       println!("[completed]        success={success} attempts={attempts}");
     }
     EventPayload::Record(r) => {
-      use llm_core::request_event::RecordEvent;
       match r {
+        RecordEvent::InboundConnection {
+          local_addr,
+          peer_addr,
+          mode,
+          method,
+          url,
+        } => {
+          println!(
+            "[record:inbound_conn] mode={mode} method={method} local={} peer={} url={}",
+            local_addr.as_deref().unwrap_or("-"),
+            peer_addr.as_deref().unwrap_or("-"),
+            url.as_deref().unwrap_or("-")
+          );
+        }
         RecordEvent::UpstreamReq {
           method,
           url,
@@ -434,6 +462,15 @@ fn print_event(event: &Event) {
         }
         RecordEvent::UpstreamBody { body } => {
           println!("[record:upstream_body] bytes={}", body.len());
+        }
+        RecordEvent::Usage(usage) => {
+          println!(
+            "[record:usage] input={:?} output={:?} cached={:?} reasoning={:?}",
+            usage.input_tokens,
+            usage.output_tokens,
+            usage.details.cache_read,
+            usage.details.reasoning
+          );
         }
       }
     }
