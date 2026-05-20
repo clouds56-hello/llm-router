@@ -35,7 +35,7 @@ pub async fn run(args: UpdateArgs) -> Result<()> {
 
   let http = reqwest::Client::builder()
     .timeout(Duration::from_secs(args.timeout))
-    .user_agent(concat!("llm-router/", env!("CARGO_PKG_VERSION")))
+    .user_agent(llm_core::util::version::llm_router_user_agent())
     .build()?;
 
   println!("fetching {} ...", args.url);

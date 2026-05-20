@@ -50,15 +50,15 @@ impl Default for CopilotHeaders {
 }
 
 fn default_editor_version() -> String {
-  "vscode/1.95.0".into()
+  llm_core::util::version::copilot_editor_version()
 }
 
 fn default_editor_plugin_version() -> String {
-  "copilot-chat/0.20.0".into()
+  llm_core::util::version::copilot_editor_plugin_version()
 }
 
 fn default_user_agent() -> String {
-  "GitHubCopilotChat/0.20.0".into()
+  llm_core::util::version::copilot_user_agent()
 }
 
 fn default_integration_id() -> String {

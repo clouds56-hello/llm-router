@@ -21,7 +21,7 @@ mod usage;
 pub use error::{Error, Result};
 
 #[derive(Parser, Debug)]
-#[command(name = "llm-router", version, about = "GitHub Copilot -> OpenAI-compatible API")]
+#[command(name = "llm-router", about = "GitHub Copilot -> OpenAI-compatible API")]
 pub struct Cli {
   /// Path to config file (default: ~/.config/llm-router/config.toml)
   #[arg(long, global = true)]

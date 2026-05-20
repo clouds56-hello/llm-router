@@ -77,9 +77,18 @@ mod tests {
     let h = copilot_request_headers("api-tok", &defaults(), false, "user").unwrap();
     assert_eq!(h.get("authorization").unwrap().as_str(), "Bearer api-tok");
     assert_eq!(h.get("accept").unwrap().as_str(), "application/json");
-    assert_eq!(h.get("user-agent").unwrap().as_str(), "GitHubCopilotChat/0.20.0");
-    assert_eq!(h.get("editor-version").unwrap().as_str(), "vscode/1.95.0");
-    assert_eq!(h.get("editor-plugin-version").unwrap().as_str(), "copilot-chat/0.20.0");
+    assert_eq!(
+      h.get("user-agent").unwrap().as_str(),
+      llm_core::util::version::copilot_user_agent()
+    );
+    assert_eq!(
+      h.get("editor-version").unwrap().as_str(),
+      llm_core::util::version::copilot_editor_version()
+    );
+    assert_eq!(
+      h.get("editor-plugin-version").unwrap().as_str(),
+      llm_core::util::version::copilot_editor_plugin_version()
+    );
     assert_eq!(h.get("copilot-integration-id").unwrap().as_str(), "vscode-chat");
     assert_eq!(h.get("openai-intent").unwrap().as_str(), "conversation-panel");
     assert_eq!(h.get("x-initiator").unwrap().as_str(), "user");
@@ -119,9 +128,18 @@ mod tests {
     let h = token_exchange_headers("gh-pat", &defaults()).unwrap();
     assert_eq!(h.get("authorization").unwrap().as_str(), "token gh-pat");
     assert_eq!(h.get("accept").unwrap().as_str(), "application/json");
-    assert_eq!(h.get("user-agent").unwrap().as_str(), "GitHubCopilotChat/0.20.0");
-    assert_eq!(h.get("editor-version").unwrap().as_str(), "vscode/1.95.0");
-    assert_eq!(h.get("editor-plugin-version").unwrap().as_str(), "copilot-chat/0.20.0");
+    assert_eq!(
+      h.get("user-agent").unwrap().as_str(),
+      llm_core::util::version::copilot_user_agent()
+    );
+    assert_eq!(
+      h.get("editor-version").unwrap().as_str(),
+      llm_core::util::version::copilot_editor_version()
+    );
+    assert_eq!(
+      h.get("editor-plugin-version").unwrap().as_str(),
+      llm_core::util::version::copilot_editor_plugin_version()
+    );
     let names: Vec<_> = h.iter().map(|(n, _)| n.as_str().to_string()).collect();
     assert_eq!(names.len(), 5, "unexpected extra headers: {names:?}");
   }

@@ -104,7 +104,7 @@ async fn http_form(
   client
     .post(url)
     .header("content-type", "application/x-www-form-urlencoded")
-    .header("user-agent", concat!("llm-router/", env!("CARGO_PKG_VERSION")))
+    .header("user-agent", llm_core::util::version::llm_router_user_agent())
     .form(&body)
     .send()
     .await
@@ -115,7 +115,7 @@ async fn http_json(client: &reqwest::Client, url: &str, body: serde_json::Value)
   client
     .post(url)
     .header("content-type", "application/json")
-    .header("user-agent", concat!("llm-router/", env!("CARGO_PKG_VERSION")))
+    .header("user-agent", llm_core::util::version::llm_router_user_agent())
     .json(&body)
     .send()
     .await

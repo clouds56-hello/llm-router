@@ -1,4 +1,4 @@
-use clap::Parser;
+use clap::{CommandFactory, FromArgMatches};
 use std::error::Error as StdError;
 use std::process::ExitCode;
 
@@ -23,7 +23,7 @@ async fn main() -> ExitCode {
   // The CLI installs its own subscriber once it has loaded config + decided
   // on a [`logging::RunMode`]. We do NOT call `logging::init_basic()` here
   // anymore: that races against the real subscriber.
-  let parsed = cli::Cli::parse();
+  let parsed = parse_cli();
   match parsed.run().await {
     Ok(()) => ExitCode::SUCCESS,
     Err(e) => {
@@ -31,6 +31,13 @@ async fn main() -> ExitCode {
       ExitCode::FAILURE
     }
   }
+}
+
+fn parse_cli() -> cli::Cli {
+  let mut cmd = cli::Cli::command();
+  cmd = cmd.version(llm_core::util::version::full());
+  let matches = cmd.get_matches();
+  cli::Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit())
 }
 
 /// Print an error and its full source chain to stderr.
