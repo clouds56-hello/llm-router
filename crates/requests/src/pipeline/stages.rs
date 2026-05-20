@@ -43,8 +43,6 @@ pub(crate) enum AccumMsg {
 
 impl AccumHelper {
   pub(crate) fn spawn(ctx: &PipelineCtx, model: SmolStr) -> Self {
-    const USAGE_SETTLE_DELAY_MS: u64 = 150;
-
     let request_id = ctx.request_id.clone();
     let attempt = ctx.attempt;
     let attempts = attempt + 1;
@@ -96,13 +94,6 @@ impl AccumHelper {
             });
           }
         }
-      }
-
-      if chunks > 0 {
-        // Streaming usage is extracted by separate SSE-tap tasks. Give those
-        // tasks a brief window to publish their final usage records before the
-        // request is marked completed and the CLI finalizes the progress line.
-        tokio::time::sleep(Duration::from_millis(USAGE_SETTLE_DELAY_MS)).await;
       }
 
       events.emit(llm_core::event::Event::Requests(

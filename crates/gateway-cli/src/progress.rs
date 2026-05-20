@@ -18,14 +18,15 @@ use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
-use std::time::Instant;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use time::{macros::format_description, OffsetDateTime};
 
 /// Process-wide [`MultiProgress`] shared between [`ProgressEventHandler`]
 /// and the tracing log writer (so log lines suspend the bars during
 /// emission instead of garbling them).
 static MULTI: OnceLock<MultiProgress> = OnceLock::new();
+const USAGE_GRACE_PERIOD: Duration = Duration::from_secs(3);
 
 /// Returns the shared [`MultiProgress`]. Lazily initialized on first call;
 /// safe to call from any context (logging init or event handler).
@@ -187,11 +188,27 @@ impl RequestState {
       elapsed,
     )
   }
+
+  fn render_waiting_for_usage(&self, request_id: &str) -> String {
+    format!(
+      "{} {}",
+      self.render_in_flight(request_id),
+      style("waiting for usage...").yellow()
+    )
+  }
 }
 
 struct BarState {
   bar: ProgressBar,
   request: RequestState,
+}
+
+struct PendingCompletion {
+  bar: ProgressBar,
+  request: RequestState,
+  success: bool,
+  attempts: u32,
+  done: bool,
 }
 
 fn truncate(s: &str, max: usize) -> &str {
@@ -255,6 +272,7 @@ fn format_usage(u: &Usage) -> String {
 pub struct ProgressEventHandler {
   multi: MultiProgress,
   bars: HashMap<String, BarState>,
+  pending: HashMap<String, Arc<Mutex<PendingCompletion>>>,
   /// Style for in-flight bars (spinner + dynamic message).
   style: ProgressStyle,
   /// Persistent footer bar (last line) showing session counters.
@@ -280,6 +298,7 @@ impl ProgressEventHandler {
     let handler = Self {
       multi,
       bars: HashMap::new(),
+      pending: HashMap::new(),
       style,
       footer,
       in_flight: 0,
@@ -295,6 +314,59 @@ impl ProgressEventHandler {
       let msg = state.request.render_in_flight(request_id);
       state.bar.set_message(msg);
       state.bar.tick();
+    }
+  }
+
+  fn prune_finished_pending(&mut self) {
+    self.pending.retain(|_, pending| {
+      let Ok(pending) = pending.lock() else {
+        return false;
+      };
+      !pending.done
+    });
+  }
+
+  fn finalize_pending(multi: &MultiProgress, request_id: &str, pending: &Arc<Mutex<PendingCompletion>>) {
+    let Ok(mut pending) = pending.lock() else {
+      return;
+    };
+    if pending.done {
+      return;
+    }
+    let latency_ms = pending.request.started.elapsed().as_millis() as u64;
+    let final_msg =
+      pending
+        .request
+        .render_completed(request_id, pending.success, pending.attempts, None, latency_ms, None);
+    pending.bar.disable_steady_tick();
+    let _ = multi.println(final_msg);
+    pending.bar.finish_and_clear();
+    pending.done = true;
+  }
+
+  fn queue_pending_completion(&mut self, request_id: String, state: BarState, attempts: u32) {
+    state
+      .bar
+      .set_message(state.request.render_waiting_for_usage(&request_id));
+    let pending = Arc::new(Mutex::new(PendingCompletion {
+      bar: state.bar,
+      request: state.request,
+      success: true,
+      attempts,
+      done: false,
+    }));
+    self.pending.insert(request_id.clone(), pending.clone());
+
+    let multi = self.multi.clone();
+    std::thread::spawn(move || {
+      std::thread::sleep(USAGE_GRACE_PERIOD);
+      Self::finalize_pending(&multi, &request_id, &pending);
+    });
+  }
+
+  fn finalize_pending_if_waiting(&mut self, request_id: &str) {
+    if let Some(pending) = self.pending.remove(request_id) {
+      Self::finalize_pending(&self.multi, request_id, &pending);
     }
   }
 
@@ -323,6 +395,7 @@ impl Default for ProgressEventHandler {
 
 impl ProgressEventHandler {
   fn handle_request(&mut self, event: &RequestEvent) {
+    self.prune_finished_pending();
     let request_id = event.request_id.as_str();
     let composite_id = if event.attempt == 0 {
       request_id.to_string()
@@ -365,18 +438,29 @@ impl ProgressEventHandler {
       RequestEventPayload::Record(RecordEvent::Usage(usage)) => {
         if let Some(state) = self.bars.get_mut(&composite_id) {
           state.request.merge_usage(usage);
+          self.refresh(&composite_id);
+          return;
         }
-        self.refresh(&composite_id);
+        if let Some(pending) = self.pending.get(&composite_id).cloned() {
+          if let Ok(mut pending) = pending.lock() {
+            pending.request.merge_usage(usage);
+          }
+          self.finalize_pending_if_waiting(&composite_id);
+        }
       }
       RequestEventPayload::Stage(StageEvent::Completed { success, attempts }) => {
         if let Some(state) = self.bars.remove(&composite_id) {
-          let latency_ms = state.request.started.elapsed().as_millis() as u64;
-          let final_msg = state
-            .request
-            .render_completed(&composite_id, *success, *attempts, None, latency_ms, None);
-          state.bar.disable_steady_tick();
-          let _ = self.multi.println(final_msg);
-          state.bar.finish_and_clear();
+          if *success {
+            self.queue_pending_completion(composite_id.clone(), state, *attempts);
+          } else {
+            let latency_ms = state.request.started.elapsed().as_millis() as u64;
+            let final_msg = state
+              .request
+              .render_completed(&composite_id, *success, *attempts, None, latency_ms, None);
+            state.bar.disable_steady_tick();
+            let _ = self.multi.println(final_msg);
+            state.bar.finish_and_clear();
+          }
         }
         self.in_flight = self.in_flight.saturating_sub(1);
         self.completed = self.completed.saturating_add(1);
@@ -392,6 +476,7 @@ impl ProgressEventHandler {
 
 impl EventHandler for ProgressEventHandler {
   fn handle(&mut self, event: &Event) {
+    self.prune_finished_pending();
     match event {
       Event::Requests(e) => self.handle_request(e),
       Event::StreamProgress {
@@ -421,6 +506,10 @@ impl EventHandler for ProgressEventHandler {
       let _ = self.multi.println(line);
       state.bar.disable_steady_tick();
       state.bar.finish_and_clear();
+    }
+    let waiting: Vec<(String, Arc<Mutex<PendingCompletion>>)> = self.pending.drain().collect();
+    for (request_id, pending) in waiting {
+      Self::finalize_pending(&self.multi, &request_id, &pending);
     }
 
     // Footer: print final session summary, then clear the live footer bar.
@@ -793,6 +882,29 @@ mod tests {
     assert_eq!(state.request.usage.output_tokens, Some(13));
     assert_eq!(state.request.usage.details.cache_read, Some(17));
     assert_eq!(state.request.usage.details.reasoning, Some(19));
+  }
+
+  #[test]
+  fn tty_handler_waits_for_usage_then_finalizes() {
+    let mut handler = ProgressEventHandler::new();
+    handler.handle_request(&req(RequestEventPayload::Stage(StageEvent::Started {
+      endpoint: llm_core::request_event::EndpointLabel::custom("responses"),
+    })));
+    handler.handle_request(&req(RequestEventPayload::Stage(StageEvent::Completed {
+      success: true,
+      attempts: 1,
+    })));
+
+    assert!(!handler.bars.contains_key("req-1"));
+    assert!(handler.pending.contains_key("req-1"));
+
+    handler.handle_request(&req(RequestEventPayload::Record(RecordEvent::Usage(Usage {
+      input_tokens: Some(7),
+      output_tokens: Some(9),
+      details: UsageDetails::default(),
+    }))));
+
+    assert!(!handler.pending.contains_key("req-1"));
   }
 
   #[test]
