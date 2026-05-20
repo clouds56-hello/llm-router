@@ -319,7 +319,7 @@ fn static_template_value(name: &str) -> Option<String> {
     }),
     "os-pretty" => Some(os_pretty()),
     "hostname" => std::env::var("HOSTNAME").ok().filter(|s| !s.trim().is_empty()),
-    "llm-router-version" => Some(env!("CARGO_PKG_VERSION").to_string()),
+    "llm-router-version" => Some(llm_core::util::version::full().to_string()),
     _ => None,
   }
 }

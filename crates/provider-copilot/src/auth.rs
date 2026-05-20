@@ -245,7 +245,7 @@ async fn fetch_github_username(client: &reqwest::Client, gh_token: &str) -> Resu
     .get("https://api.github.com/user")
     .header("authorization", format!("token {gh_token}"))
     .header("accept", "application/json")
-    .header("user-agent", "llm-router")
+    .header("user-agent", llm_core::util::version::llm_router_user_agent())
     .send()
     .await
     .map_err(|e| AuthError::Network(e.to_string()))?

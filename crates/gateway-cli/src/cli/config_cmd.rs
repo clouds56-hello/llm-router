@@ -22,7 +22,7 @@ pub struct ConfigArgs {
 pub enum ConfigCmd {
   /// Print the value of a key (e.g. `copilot.user_agent`)
   Get(GetArgs),
-  /// Set a key (e.g. `copilot.user_agent "vscode/1.95.0"`)
+  /// Set a key (e.g. `copilot.user_agent "vscode/<version>"`)
   Set(SetArgs),
   /// Remove a key
   Unset(UnsetArgs),
