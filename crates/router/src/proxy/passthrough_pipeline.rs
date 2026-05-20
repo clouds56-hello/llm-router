@@ -26,6 +26,7 @@
 
 use crate::api::error::ApiError;
 use crate::api::AppState;
+use crate::pipeline::request_header_extract;
 use anyhow::{Context, Result};
 use axum::body::Body;
 use axum::http::request::Parts;
@@ -33,33 +34,52 @@ use axum::http::{HeaderValue, Request, Response};
 use axum::response::IntoResponse;
 use bytes::Bytes;
 use http::header::HOST;
+use llm_core::event::Event as CoreEvent;
 use llm_core::provider::Endpoint;
+use llm_core::request_event::{RecordEvent, RequestEvent, RequestEventPayload};
+use smol_str::SmolStr;
 
 /// Dispatch an intercepted MITM request through the proxy-passthrough
 /// pipeline.
 ///
 /// * `intercepted_host` — bare host (no port) from the CONNECT
-///   authority. Used as the **fallback** authority and as the host key
-///   passed to [`crate::api::identity::AccountIdentityResolver::resolve`]
-///   (which indexes by bare host).
+///   authority. Used as the **fallback** authority and as the bare-host
+///   fallback for `provider_id` when identity resolution returns
+///   `None`.
 /// * `intercepted_port` — port from the CONNECT authority. Used as the
 ///   **fallback** port when neither `req.uri()` nor the `Host` header
 ///   carry one.
 /// * `scheme` — `"http"` or `"https"`. Production always passes
 ///   `"https"` (the MITM only runs for port 443); tests may pass
 ///   `"http"`.
+/// * `peer_addr` / `local_addr` — inbound TCP connection endpoints,
+///   forwarded into `RecordEvent::InboundConnection` for persistence.
 pub(super) async fn proxy_passthrough_via_pipeline(
   state: &AppState,
   intercepted_host: &str,
   intercepted_port: u16,
   scheme: &str,
+  peer_addr: Option<String>,
+  local_addr: Option<String>,
   req: Request<hyper::body::Incoming>,
 ) -> Result<Response<Body>> {
   let (parts, body) = req.into_parts();
   let raw_body = axum::body::to_bytes(Body::new(body), usize::MAX)
     .await
     .context("read proxy passthrough request body")?;
-  Ok(proxy_passthrough_via_pipeline_inner(state, intercepted_host, intercepted_port, scheme, parts, raw_body).await)
+  Ok(
+    proxy_passthrough_via_pipeline_inner(
+      state,
+      intercepted_host,
+      intercepted_port,
+      scheme,
+      peer_addr,
+      local_addr,
+      parts,
+      raw_body,
+    )
+    .await,
+  )
 }
 
 /// Inner core that does identity resolution, `RunConfig` construction,
@@ -68,11 +88,14 @@ pub(super) async fn proxy_passthrough_via_pipeline(
 /// `hyper::body::Incoming`) can drive the pipeline with pre-read body
 /// bytes and a custom `scheme` (e.g. `"http"` to point at a plain mock
 /// upstream).
+#[allow(clippy::too_many_arguments)]
 pub async fn proxy_passthrough_via_pipeline_inner(
   state: &AppState,
   intercepted_host: &str,
   intercepted_port: u16,
   scheme: &str,
+  peer_addr: Option<String>,
+  local_addr: Option<String>,
   mut parts: Parts,
   raw_body: Bytes,
 ) -> Response<Body> {
@@ -109,17 +132,48 @@ pub async fn proxy_passthrough_via_pipeline_inner(
   let decoded_body = raw_body.clone();
   let body_json = serde_json::Value::Null;
 
+  // Reconstruct the full URL the client targeted post-CONNECT.
+  // Identity resolution gets it (path helps providers like
+  // `matches_url` disambiguate shared-host scenarios — see
+  // `Registry::provider_id_for_url`); `RecordEvent::InboundConnection`
+  // persists it for the `requests.inbound_req_url` column.
+  let full_url = format!("{scheme}://{host_with_port}{path_and_query}");
+
   // Identity resolution — fingerprint the inbound bearer against
   // locally-known accounts so DB rows / events attribute the
-  // intercepted request to a concrete `account_id` + `provider_id`
-  // when we can. Always keyed by the bare intercepted host (the
-  // registry doesn't index by port).
+  // intercepted request to a concrete `account_id` + `provider_id`.
+  // Pass the full URL so descriptors with path-based `matches_url`
+  // discriminate correctly. Registry strips the port internally.
   let identity = state
     .identity
-    .resolve(&parts.headers, &host_with_port, &state.provider_registry);
+    .resolve(&parts.headers, &full_url, &state.provider_registry);
+  // Fallback to the bare intercepted host (not host:port and not the
+  // full URL) so the synthetic provider_id stays stable across
+  // requests to different paths/ports on the same upstream.
   let resolved_provider_id = identity
     .provider_id
-    .unwrap_or_else(|| host_with_port.to_string());
+    .unwrap_or_else(|| intercepted_host.to_string());
+
+  // Emit InboundConnection so persistence populates `local_addr`,
+  // `peer_addr`, `mode`, `method`, `inbound_req_method`, and
+  // `inbound_req_url` for the request row. Uses the same `request_id`
+  // the pipeline will derive from `parts.headers` (via
+  // `request_header_extract`) so the persistence UPDATE hits the same
+  // row the pipeline's `StageEvent::Started` INSERT creates.
+  let hx = request_header_extract(&parts.headers);
+  state.events.emit(CoreEvent::Requests(RequestEvent {
+    request_id: SmolStr::new(&hx.request_id),
+    attempt: 0,
+    ts: llm_core::util::now_unix_ms(),
+    payload: RequestEventPayload::Record(RecordEvent::InboundConnection {
+      local_addr: local_addr.map(SmolStr::from),
+      peer_addr: peer_addr.map(SmolStr::from),
+      mode: SmolStr::new("passthrough"),
+      method: SmolStr::new("proxy"),
+      inbound_method: SmolStr::new(method.as_str()),
+      url: Some(SmolStr::from(full_url.as_str())),
+    }),
+  }));
 
   let mut cfg_builder = llm_requests::RunConfig::builder()
     .with_str(llm_requests::stages::resolve::proxy::keys::HOST, &host_with_port)
@@ -141,7 +195,7 @@ pub async fn proxy_passthrough_via_pipeline_inner(
     raw_body,
     decoded_body,
     body_json,
-    request_id: None,
+    request_id: Some(SmolStr::new(&hx.request_id)),
   };
 
   match state.proxy_passthrough_pipeline.run_with(raw, cfg).await {

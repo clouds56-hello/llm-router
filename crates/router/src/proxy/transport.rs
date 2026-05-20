@@ -227,6 +227,8 @@ async fn route_intercepted_request(
         &intercepted_host,
         intercepted_port,
         "https",
+        Some(peer.to_string()),
+        Some(local.to_string()),
         req,
       )
       .await

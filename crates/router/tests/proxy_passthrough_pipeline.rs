@@ -90,6 +90,8 @@ async fn proxy_passthrough_pipeline_forwards_request_and_preserves_client_auth()
     &intercepted_host,
     intercepted_port,
     "http",
+    None,
+    Some(addr.to_string()),
     parts,
     inbound_body.clone(),
   )
@@ -134,27 +136,233 @@ async fn proxy_passthrough_pipeline_forwards_request_and_preserves_client_auth()
     "Host header must be {expected_authority}, got:\n{raw_req_str}"
   );
 
-  // Drain events; assert RecordEvent::UpstreamReq carries the expected
-  // url and that provider_id falls back to the intercepted host (no
-  // local account fingerprint match).
-  let mut saw_upstream_req = false;
-  for _ in 0..64 {
-    let ev = tokio::time::timeout(std::time::Duration::from_millis(250), rx.recv()).await;
-    let Ok(Ok(ev)) = ev else { break };
-    if let CoreEvent::Requests(req) = &*ev {
-      if let RequestEventPayload::Record(RecordEvent::UpstreamReq { url, method, .. }) = &req.payload {
-        assert_eq!(method.as_str(), "POST");
-        assert!(
-          url.starts_with(&format!("http://{expected_authority}")),
-          "upstream url must be http://{expected_authority}…, got {url}"
-        );
-        saw_upstream_req = true;
-        break;
-      }
+  // Drain the full pipeline event stream (StageEvent + RecordEvent) so
+  // we can assert ordering, content, and absence in one pass. The drain
+  // stops as soon as we see `StageEvent::Completed` (the runner emits
+  // it exactly once at the very end) or after a hard 2s budget.
+  let mut events: Vec<llm_core::request_event::RequestEvent> = Vec::new();
+  let drain_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+  loop {
+    let remaining = drain_deadline.saturating_duration_since(tokio::time::Instant::now());
+    if remaining.is_zero() {
+      break;
+    }
+    let Ok(Ok(ev)) = tokio::time::timeout(remaining, rx.recv()).await else {
+      break;
+    };
+    let CoreEvent::Requests(req) = &*ev else { continue };
+    let req = req.clone();
+    let done = matches!(&req.payload, RequestEventPayload::Stage(llm_core::request_event::StageEvent::Completed { .. }));
+    events.push(req);
+    if done {
+      break;
     }
   }
+
+  // Helper: locate the first event matching a predicate, or panic with
+  // a debug-dump of the whole stream.
+  let kinds: Vec<String> = events
+    .iter()
+    .map(|e| match &e.payload {
+      RequestEventPayload::Stage(s) => format!("Stage::{s:?}").chars().take(40).collect(),
+      RequestEventPayload::Record(r) => format!("Record::{r:?}").chars().take(40).collect(),
+      RequestEventPayload::Custom(c) => format!("Custom::{}", c.kind),
+    })
+    .collect();
+  let debug_dump = || format!("event stream was:\n  {}", kinds.join("\n  "));
+
+  // --- Stage stream: presence + ordering ---
+  use llm_core::request_event::StageEvent;
+  let pos = |pred: &dyn Fn(&RequestEventPayload) -> bool| -> Option<usize> {
+    events.iter().position(|e| pred(&e.payload))
+  };
+
+  let p_started = pos(&|p| matches!(p, RequestEventPayload::Stage(StageEvent::Started { .. })))
+    .unwrap_or_else(|| panic!("missing StageEvent::Started; {}", debug_dump()));
+  let p_extract = pos(&|p| matches!(p, RequestEventPayload::Stage(StageEvent::Extract(_))))
+    .unwrap_or_else(|| panic!("missing StageEvent::Extract; {}", debug_dump()));
+  let p_resolve = pos(&|p| matches!(p, RequestEventPayload::Stage(StageEvent::Resolve(_))))
+    .unwrap_or_else(|| panic!("missing StageEvent::Resolve; {}", debug_dump()));
+  let p_build = pos(&|p| matches!(p, RequestEventPayload::Stage(StageEvent::BuildHeaders(_))))
+    .unwrap_or_else(|| panic!("missing StageEvent::BuildHeaders; {}", debug_dump()));
+  let p_convreq = pos(&|p| matches!(p, RequestEventPayload::Stage(StageEvent::ConvertRequest(_))))
+    .unwrap_or_else(|| panic!("missing StageEvent::ConvertRequest; {}", debug_dump()));
+  let p_send = pos(&|p| matches!(p, RequestEventPayload::Stage(StageEvent::Send(_))))
+    .unwrap_or_else(|| panic!("missing StageEvent::Send; {}", debug_dump()));
+  let p_convresp = pos(&|p| matches!(p, RequestEventPayload::Stage(StageEvent::ConvertResponse(_))))
+    .unwrap_or_else(|| panic!("missing StageEvent::ConvertResponse; {}", debug_dump()));
+  let p_completed = pos(&|p| matches!(p, RequestEventPayload::Stage(StageEvent::Completed { .. })))
+    .unwrap_or_else(|| panic!("missing StageEvent::Completed; {}", debug_dump()));
+
   assert!(
-    saw_upstream_req,
-    "proxy passthrough pipeline must emit RecordEvent::UpstreamReq"
+    p_started < p_extract
+      && p_extract < p_resolve
+      && p_resolve < p_build
+      && p_build < p_convreq
+      && p_convreq < p_send
+      && p_send < p_convresp
+      && p_convresp < p_completed,
+    "stage events out of order; {}",
+    debug_dump()
+  );
+
+  // StageEvent::Started carries the endpoint inferred from the path.
+  if let RequestEventPayload::Stage(StageEvent::Started { endpoint }) = &events[p_started].payload {
+    assert_eq!(*endpoint, llm_core::provider::Endpoint::ChatCompletions);
+  }
+
+  // StageEvent::Resolve: provider_id falls back to bare intercepted
+  // host (no accounts configured → no fingerprint match). account_id
+  // is the bearer-token fingerprint synthesised by
+  // `AccountIdentityResolver` for the long `Authorization` header in
+  // this test (≥32 chars triggers the `account_fp_<suffix>` fallback).
+  if let RequestEventPayload::Stage(StageEvent::Resolve(r)) = &events[p_resolve].payload {
+    assert_eq!(r.provider_id.as_str(), intercepted_host);
+    assert!(
+      r.account_id.as_str().starts_with("account_fp_"),
+      "expected synthetic fingerprint account_id, got {:?}",
+      r.account_id
+    );
+  } else {
+    unreachable!()
+  }
+
+  // StageEvent::Send summary carries the upstream status.
+  if let RequestEventPayload::Stage(StageEvent::Send(s)) = &events[p_send].payload {
+    assert_eq!(s.status, 200, "send summary status; {}", debug_dump());
+    assert!(!s.stream, "non-streaming");
+  } else {
+    unreachable!()
+  }
+
+  // StageEvent::Completed signals success.
+  if let RequestEventPayload::Stage(StageEvent::Completed { success, attempts }) = &events[p_completed].payload {
+    assert!(*success, "pipeline should report success; {}", debug_dump());
+    assert!(*attempts >= 1, "at least one attempt");
+  } else {
+    unreachable!()
+  }
+
+  // --- Record stream: transport-truth captures ---
+  let p_upreq = pos(&|p| matches!(p, RequestEventPayload::Record(RecordEvent::UpstreamReq { .. })))
+    .unwrap_or_else(|| panic!("missing RecordEvent::UpstreamReq; {}", debug_dump()));
+  let p_upresp = pos(&|p| matches!(p, RequestEventPayload::Record(RecordEvent::UpstreamResp { .. })))
+    .unwrap_or_else(|| panic!("missing RecordEvent::UpstreamResp; {}", debug_dump()));
+  let p_upbody = pos(&|p| matches!(p, RequestEventPayload::Record(RecordEvent::UpstreamBody { .. })))
+    .unwrap_or_else(|| panic!("missing RecordEvent::UpstreamBody; {}", debug_dump()));
+
+  // Wire-truth ordering: req → resp → body, all within the
+  // Send/ConvertResponse window of the stage stream.
+  assert!(
+    p_upreq < p_upresp && p_upresp < p_upbody,
+    "record events out of order; {}",
+    debug_dump()
+  );
+
+  if let RequestEventPayload::Record(RecordEvent::UpstreamReq {
+    method,
+    url,
+    headers,
+    body,
+  }) = &events[p_upreq].payload
+  {
+    assert_eq!(method.as_str(), "POST");
+    assert_eq!(
+      url.as_str(),
+      &format!("http://{expected_authority}/v1/chat/completions"),
+      "upstream url; {}",
+      debug_dump()
+    );
+    assert_eq!(
+      body.as_ref(),
+      inbound_body.as_ref(),
+      "upstream request body verbatim"
+    );
+    // Client-auth preserved on the wire-truth capture too.
+    let auth = headers
+      .get("authorization")
+      .map(|v| v.as_str().to_string())
+      .unwrap_or_default();
+    assert!(
+      auth.contains("Bearer client-bearer-should-reach-upstream"),
+      "wire-truth authorization header preserved, got {auth:?}"
+    );
+    // Host header rewritten to the resolved authority.
+    let host_hdr = headers
+      .get("host")
+      .map(|v| v.as_str().to_string())
+      .unwrap_or_default();
+    assert_eq!(host_hdr, expected_authority, "wire-truth Host header");
+    // Router-owned headers stripped before send.
+    assert!(
+      headers.get("x-llm-router-local-addr").is_none(),
+      "wire-truth must not include x-llm-router-* headers"
+    );
+  } else {
+    unreachable!()
+  }
+
+  if let RequestEventPayload::Record(RecordEvent::UpstreamResp { status, headers }) = &events[p_upresp].payload {
+    assert_eq!(*status, 200);
+    let ct = headers
+      .get("content-type")
+      .map(|v| v.as_str().to_string())
+      .unwrap_or_default();
+    assert!(ct.starts_with("application/json"), "content-type; got {ct:?}");
+  } else {
+    unreachable!()
+  }
+
+  if let RequestEventPayload::Record(RecordEvent::UpstreamBody { body, error }) = &events[p_upbody].payload {
+    assert!(error.is_none(), "no upstream body error");
+    assert_eq!(body.as_ref(), upstream_body, "upstream body bytes");
+  } else {
+    unreachable!()
+  }
+
+  // Buffered (non-streaming) path: ConvertedBody is only emitted for
+  // streams, so it must be absent here.
+  assert!(
+    !events
+      .iter()
+      .any(|e| matches!(&e.payload, RequestEventPayload::Record(RecordEvent::ConvertedBody { .. }))),
+    "buffered proxy passthrough must not emit ConvertedBody; {}",
+    debug_dump()
+  );
+
+  // InboundConnection MUST be emitted with the inbound transport facts
+  // so persistence populates `local_addr`/`peer_addr`/`mode`/`method`/
+  // `inbound_req_method`/`inbound_req_url`.
+  let p_inbound = pos(&|p| matches!(p, RequestEventPayload::Record(RecordEvent::InboundConnection { .. })))
+    .unwrap_or_else(|| panic!("missing RecordEvent::InboundConnection; {}", debug_dump()));
+  if let RequestEventPayload::Record(RecordEvent::InboundConnection {
+    local_addr,
+    peer_addr,
+    mode,
+    method,
+    inbound_method,
+    url,
+  }) = &events[p_inbound].payload
+  {
+    assert_eq!(local_addr.as_deref(), Some(addr.to_string().as_str()));
+    assert_eq!(peer_addr.as_deref(), None);
+    assert_eq!(mode.as_str(), "passthrough");
+    assert_eq!(method.as_str(), "proxy");
+    assert_eq!(inbound_method.as_str(), "POST");
+    assert_eq!(
+      url.as_deref(),
+      Some(format!("http://{expected_authority}/v1/chat/completions").as_str())
+    );
+  } else {
+    unreachable!()
+  }
+
+  // Stage::Error must not appear on a successful run.
+  assert!(
+    !events
+      .iter()
+      .any(|e| matches!(&e.payload, RequestEventPayload::Stage(StageEvent::Error { .. }))),
+    "no StageEvent::Error on a successful run; {}",
+    debug_dump()
   );
 }
