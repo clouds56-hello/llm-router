@@ -6,9 +6,16 @@
 //! * [`pool`] — [`PoolAccountSelector`], the production [`AccountSelector`]
 //!   implementation backed by [`llm_accounts::AccountPool`] +
 //!   [`llm_accounts::RouteResolver`].
+//! * [`proxy`] — [`ProxyResolve`], the no-account variant used by the
+//!   MITM proxy passthrough pipeline. Reads `proxy.host` from
+//!   `PipelineCtx::config` and emits a `Resolved` with a stub
+//!   `AccountHandle` so the proxy pipeline can reuse the standard
+//!   stage shape without an actual account selection step.
 
 mod pool;
+pub mod proxy;
 mod stage;
 
 pub use pool::PoolAccountSelector;
+pub use proxy::{ProxyResolve, ProxyStubProvider};
 pub use stage::{AccountSelector, PoolResolve, SelectorOutcome};

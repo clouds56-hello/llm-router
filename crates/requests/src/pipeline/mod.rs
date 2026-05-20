@@ -29,12 +29,14 @@
 //! [`StageEvent::Error`]: crate::event::StageEvent::Error
 //! [`EventBus`]: crate::event::EventBus
 
+pub mod config;
 pub mod ctx;
 pub mod error;
 pub mod stages;
 
 use crate::event::{EventBus, StageEvent};
 use crate::profile::Profile;
+pub use config::{RunConfig, RunConfigBuilder};
 use ctx::PipelineCtx;
 use error::PipelineError;
 use smol_str::SmolStr;
@@ -67,8 +69,17 @@ impl PipelineRunner {
   /// termination (e.g. dry-run); it is still returned as `Err` but should
   /// not be reported as a failure.
   pub async fn run(&self, raw: RawInbound) -> Result<ConvertedResponse, PipelineError> {
+    self.run_with(raw, RunConfig::default()).await
+  }
+
+  /// Same as [`run`](Self::run) but with a caller-supplied [`RunConfig`]
+  /// bag. The bag is attached to [`PipelineCtx::config`] (wrapped in an
+  /// `Arc`) and is visible to every stage via `ctx.config`. Used by
+  /// secondary pipeline variants (proxy passthrough) that thread
+  /// transport-level hints down to custom Resolve / Send stages.
+  pub async fn run_with(&self, raw: RawInbound, config: RunConfig) -> Result<ConvertedResponse, PipelineError> {
     let request_id = raw.request_id.clone().unwrap_or_else(|| SmolStr::new(uuid_like()));
-    let ctx = PipelineCtx::new(request_id, raw.endpoint, self.events.clone());
+    let ctx = PipelineCtx::new_with_config(request_id, raw.endpoint, self.events.clone(), Arc::new(config));
     ctx.emit_stage(StageEvent::Started { endpoint: raw.endpoint });
 
     // ---- Extract ----

@@ -9,6 +9,7 @@
 //! state we add later (timings, cancellation tokens, etc.).
 
 use crate::event::{CustomEvent, Event, EventBus, EventPayload, RecordEvent, StageEvent};
+use crate::pipeline::config::RunConfig;
 use llm_core::event::Event as CoreEvent;
 use llm_core::provider::Endpoint;
 use smol_str::SmolStr;
@@ -26,15 +27,31 @@ pub struct PipelineCtx {
   /// required.
   pub endpoint: Endpoint,
   pub events: Arc<EventBus>,
+  /// Caller-supplied per-run config bag. Stages may read transport-level
+  /// hints from it; secondary pipeline variants (e.g. proxy passthrough)
+  /// use it to thread `proxy.host` / `proxy.path` / `proxy.method` down
+  /// to their custom Resolve and Send stages. Empty for the default JSON
+  /// pipeline path that calls [`crate::Pipeline::run`].
+  pub config: Arc<RunConfig>,
 }
 
 impl PipelineCtx {
   pub fn new(request_id: impl Into<SmolStr>, endpoint: Endpoint, events: Arc<EventBus>) -> Self {
+    Self::new_with_config(request_id, endpoint, events, Arc::new(RunConfig::default()))
+  }
+
+  pub fn new_with_config(
+    request_id: impl Into<SmolStr>,
+    endpoint: Endpoint,
+    events: Arc<EventBus>,
+    config: Arc<RunConfig>,
+  ) -> Self {
     Self {
       request_id: request_id.into(),
       attempt: 0,
       endpoint,
       events,
+      config,
     }
   }
 

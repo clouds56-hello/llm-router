@@ -2,6 +2,7 @@ mod ca;
 mod connect_proxy;
 pub mod header_pipeline;
 mod passthrough;
+mod passthrough_pipeline;
 mod transport;
 
 use crate::api::AppState;

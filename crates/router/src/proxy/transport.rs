@@ -1,6 +1,7 @@
 use super::ca::DynamicResolver;
 use super::connect_proxy::{connect_upstream, ConnectProxy};
-use super::passthrough::proxy_passthrough;
+use super::passthrough_pipeline;
+
 use super::{extract_proxy_auth_mode, rewrite_target, split_authority, HostPolicy, ProxyCa};
 use crate::api::{error::ApiError, AppState};
 use crate::pipeline::{build_failure_result_event_from_api_err, request_header_extract};
@@ -214,7 +215,7 @@ async fn route_intercepted_request(
   tracing::trace!(%host, path = %path, method = %method, route_mode = ?route_mode, resolved_mode = ?resolved_mode, "resolved route mode for intercepted request");
   if matches!(resolved_mode, Ok(RouteMode::Passthrough)) {
     return Ok(
-      proxy_passthrough(state.as_ref(), &http, &host, peer, local, req)
+      super::passthrough_pipeline::proxy_passthrough_via_pipeline(state.as_ref(), &host, peer, local, req)
         .await
         .inspect(|b| {
           if !b.status().is_success() {

@@ -41,6 +41,14 @@ pub struct AppState {
   /// (no JSON parse, no cross-endpoint translation) while still
   /// emitting `RecordEvent::*` for observability and persistence.
   pub passthrough_pipeline: Arc<llm_requests::Pipeline>,
+  /// Shared `llm-requests` pipeline used by the MITM proxy passthrough
+  /// path. Unlike [`Self::passthrough_pipeline`], this variant does **no
+  /// account resolution** — the intercepted TLS host is the upstream
+  /// and the client's own `Authorization` reaches it unchanged. Wired
+  /// via `RunConfig` keys (`proxy.host`, `proxy.path`, `proxy.method`,
+  /// `proxy.provider_id`, `proxy.account_id`) that the proxy transport
+  /// layer fills before calling `run_with`.
+  pub proxy_passthrough_pipeline: Arc<llm_requests::Pipeline>,
 }
 
 /// Header name used for request ids. Honors inbound `x-request-id` if present.
@@ -229,6 +237,7 @@ pub fn build_state(cfg: &Config, accounts: &[AccountConfig], events: Arc<EventBu
   let request_pipeline = build_request_pipeline(pool.clone(), route.clone(), http.clone(), events.clone());
   let passthrough_pipeline =
     build_passthrough_pipeline(pool.clone(), route.clone(), http.clone(), events.clone());
+  let proxy_passthrough_pipeline = build_proxy_passthrough_pipeline(http.clone(), events.clone());
   Ok(AppState {
     pool,
     provider_registry,
@@ -239,6 +248,7 @@ pub fn build_state(cfg: &Config, accounts: &[AccountConfig], events: Arc<EventBu
     body_max_bytes,
     request_pipeline,
     passthrough_pipeline,
+    proxy_passthrough_pipeline,
   })
 }
 
@@ -295,6 +305,38 @@ fn build_passthrough_pipeline(
     Arc::new(PassthroughBuildHeaders),
     Arc::new(PassthroughConvertRequest),
     Arc::new(DefaultSend::new(http)),
+    Arc::new(PassthroughConvertResponse::new()),
+  );
+  Arc::new(llm_requests::Pipeline::new(Arc::new(profile), events))
+}
+
+/// Construct the proxy-passthrough `llm-requests` pipeline used by the
+/// MITM proxy when the resolved route mode is
+/// [`RouteMode::Passthrough`]. Unlike [`build_passthrough_pipeline`],
+/// this variant performs **no account resolution** — the intercepted
+/// TLS host is the upstream, the client's `Authorization` reaches it
+/// untouched, and there is no provider-side auth injection.
+///
+/// The proxy transport layer supplies per-request hints
+/// (`proxy.host`, `proxy.path`, `proxy.method`, …) through a
+/// [`llm_requests::RunConfig`] passed to `Pipeline::run_with`.
+/// [`ProxyResolve`] and [`ProxySend`] read those keys; the remaining
+/// stages are the same as the standard passthrough variant.
+fn build_proxy_passthrough_pipeline(
+  http: reqwest::Client,
+  events: Arc<EventBus>,
+) -> Arc<llm_requests::Pipeline> {
+  use llm_requests::stages::{
+    PassthroughBuildHeaders, PassthroughConvertRequest, PassthroughConvertResponse, PassthroughExtract, ProxyResolve,
+    ProxySend,
+  };
+  let profile = llm_requests::Profile::full(
+    "router-proxy-passthrough",
+    Arc::new(PassthroughExtract),
+    Arc::new(ProxyResolve),
+    Arc::new(PassthroughBuildHeaders),
+    Arc::new(PassthroughConvertRequest),
+    Arc::new(ProxySend::new(http)),
     Arc::new(PassthroughConvertResponse::new()),
   );
   Arc::new(llm_requests::Pipeline::new(Arc::new(profile), events))

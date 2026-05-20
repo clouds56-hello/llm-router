@@ -13,7 +13,9 @@ use crate::pipeline::stages::{BuiltHeaders, ConvertedRequest, Extracted, Resolve
 use async_trait::async_trait;
 
 pub mod default;
+pub mod proxy;
 pub use default::DefaultSend;
+pub use proxy::ProxySend;
 
 pub struct NoopSend;
 
