@@ -29,11 +29,11 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 #[derive(Clone)]
-struct AccumHelper {
+pub(crate) struct AccumHelper {
   tx: mpsc::UnboundedSender<AccumMsg>,
 }
 
-enum AccumMsg {
+pub(crate) enum AccumMsg {
   Upstream(Bytes),
   Converted(Bytes),
   UpstreamError(SmolStr),
@@ -42,7 +42,7 @@ enum AccumMsg {
 }
 
 impl AccumHelper {
-  fn spawn(ctx: &PipelineCtx, model: SmolStr) -> Self {
+  pub(crate) fn spawn(ctx: &PipelineCtx, model: SmolStr) -> Self {
     let request_id = ctx.request_id.clone();
     let attempt = ctx.attempt;
     let attempts = attempt + 1;
@@ -134,7 +134,7 @@ impl AccumHelper {
     Self { tx }
   }
 
-  fn note_upstream(&self, item: &std::io::Result<Bytes>) {
+  pub(crate) fn note_upstream(&self, item: &std::io::Result<Bytes>) {
     match item {
       Ok(bytes) => {
         let _ = self.tx.send(AccumMsg::Upstream(bytes.clone()));
@@ -146,7 +146,7 @@ impl AccumHelper {
     }
   }
 
-  fn note_converted(&self, item: &std::io::Result<Bytes>) {
+  pub(crate) fn note_converted(&self, item: &std::io::Result<Bytes>) {
     match item {
       Ok(bytes) => {
         let _ = self.tx.send(AccumMsg::Converted(bytes.clone()));
@@ -158,7 +158,7 @@ impl AccumHelper {
     }
   }
 
-  fn finish(&self) {
+  pub(crate) fn finish(&self) {
     tracing::debug!("upstream stream ended");
     let _ = self.tx.send(AccumMsg::Finish);
   }
@@ -455,19 +455,24 @@ pub trait ConvertResponseStage: Send + Sync {
     body: futures_util::stream::BoxStream<'static, std::io::Result<Bytes>>,
   ) -> Result<ConvertedResponse, PipelineError>;
 
+  fn is_sse_response(&self, _ctx: &PipelineCtx, sent: &SentResponse) -> bool {
+    sent.stream
+  }
+
   async fn convert_response(
     &self,
     ctx: &PipelineCtx,
     sent: SentResponse,
   ) -> Result<ConvertedResponse, PipelineError> {
+    let is_sse = self.is_sse_response(ctx, &sent);
     let SentResponse {
       status,
       headers,
-      stream,
       upstream_endpoint,
       response,
+      ..
     } = sent;
-    if stream {
+    if is_sse {
       let accum = AccumHelper::spawn(ctx, SmolStr::default());
       let accum_upstream = accum.clone();
       let body = response

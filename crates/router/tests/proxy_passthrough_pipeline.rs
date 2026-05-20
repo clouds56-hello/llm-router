@@ -320,15 +320,23 @@ async fn proxy_passthrough_pipeline_forwards_request_and_preserves_client_auth()
     unreachable!()
   }
 
-  // Buffered (non-streaming) path: ConvertedBody is only emitted for
-  // streams, so it must be absent here.
-  assert!(
-    !events
-      .iter()
-      .any(|e| matches!(&e.payload, RequestEventPayload::Record(RecordEvent::ConvertedBody { .. }))),
-    "buffered proxy passthrough must not emit ConvertedBody; {}",
-    debug_dump()
-  );
+  // Buffered (non-streaming) passthrough: ConvertedBody MUST be
+  // emitted (verbatim copy of upstream bytes) so the persistence
+  // layer fills `inbound_resp_body` with the real wire bytes rather
+  // than the `null` placeholder that `StageEvent::ConvertResponse`
+  // carries for passthrough (where body_json is intentionally Null).
+  let p_convbody = pos(&|p| matches!(p, RequestEventPayload::Record(RecordEvent::ConvertedBody { .. })))
+    .unwrap_or_else(|| panic!("missing RecordEvent::ConvertedBody for buffered passthrough; {}", debug_dump()));
+  if let RequestEventPayload::Record(RecordEvent::ConvertedBody { body, error }) = &events[p_convbody].payload {
+    assert!(error.is_none(), "no converted body error");
+    assert_eq!(
+      body.as_ref(),
+      upstream_body,
+      "buffered passthrough ConvertedBody must equal upstream bytes verbatim"
+    );
+  } else {
+    unreachable!()
+  }
 
   // InboundConnection MUST be emitted with the inbound transport facts
   // so persistence populates `local_addr`/`peer_addr`/`mode`/`method`/
@@ -365,4 +373,160 @@ async fn proxy_passthrough_pipeline_forwards_request_and_preserves_client_auth()
     "no StageEvent::Error on a successful run; {}",
     debug_dump()
   );
+}
+
+/// Streaming SSE passthrough: the inner pipeline must spawn the
+/// shared accumulator so `RecordEvent::UpstreamBody`,
+/// `RecordEvent::ConvertedBody`, and `StageEvent::Completed` all fire
+/// after the upstream byte stream drains. Without this wiring the
+/// persistence layer would leave `outbound_resp_body`/`inbound_resp_body`
+/// empty and the row would stay "in-flight" forever (no `Completed`
+/// → no `latency_ms` write, no `clear_request`).
+#[tokio::test]
+async fn proxy_passthrough_pipeline_streams_emit_bodies_and_completed() {
+  use llm_core::event::Event as CoreEvent;
+  use llm_core::request_event::{RecordEvent, RequestEventPayload, StageEvent};
+
+  // Mock TCP upstream that emits a 3-frame SSE response.
+  let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+  let addr = listener.local_addr().unwrap();
+  let frame1 = "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n";
+  let frame2 = "data: {\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":4}}\n\n";
+  let frame3 = "data: [DONE]\n\n";
+  let sse_body = format!("{frame1}{frame2}{frame3}");
+  let sse_body_clone = sse_body.clone();
+
+  let server = tokio::spawn(async move {
+    let (mut stream, _) = listener.accept().await.unwrap();
+    let mut buf = vec![0_u8; 16384];
+    let _ = stream.read(&mut buf).await.unwrap();
+    // Chunked SSE response.
+    let header = "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ntransfer-encoding: chunked\r\n\r\n";
+    stream.write_all(header.as_bytes()).await.unwrap();
+    for frame in [frame1, frame2, frame3] {
+      let chunk = format!("{:x}\r\n{}\r\n", frame.len(), frame);
+      stream.write_all(chunk.as_bytes()).await.unwrap();
+      stream.flush().await.unwrap();
+      tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    stream.write_all(b"0\r\n\r\n").await.unwrap();
+    stream.flush().await.unwrap();
+  });
+
+  let mut cfg = Config::default();
+  cfg.server.route_mode = RouteMode::Passthrough;
+  let events = Arc::new(EventBus::new(512));
+  let mut rx = events.subscribe();
+  let state = build_state(&cfg, &[], events.clone()).unwrap();
+
+  let inbound_body = Bytes::from_static(
+    br#"{"stream":true,"model":"glm-4.6","messages":[{"role":"user","content":"hi"}]}"#,
+  );
+
+  let intercepted_host = addr.ip().to_string();
+  let intercepted_port = addr.port();
+
+  let req = Request::builder()
+    .method(Method::POST)
+    .uri("/v1/chat/completions")
+    .header("content-type", "application/json")
+    .header("accept", "text/event-stream")
+    .header("authorization", "Bearer client-bearer-sse")
+    .body(())
+    .unwrap();
+  let (parts, ()) = req.into_parts();
+
+  let resp = proxy_passthrough_via_pipeline_inner(
+    &state,
+    &intercepted_host,
+    intercepted_port,
+    "http",
+    None,
+    Some(addr.to_string()),
+    parts,
+    inbound_body,
+  )
+  .await;
+  assert_eq!(resp.status(), StatusCode::OK);
+
+  // Drain the body fully so the AccumHelper finishes and emits
+  // UpstreamBody / ConvertedBody / Completed.
+  let drained = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+  assert_eq!(
+    std::str::from_utf8(drained.as_ref()).unwrap(),
+    sse_body_clone.as_str(),
+    "downstream SSE bytes must equal upstream verbatim"
+  );
+
+  server.await.unwrap();
+
+  // Drain pipeline events until we see Completed (or hard timeout).
+  let mut collected: Vec<llm_core::request_event::RequestEvent> = Vec::new();
+  let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+  loop {
+    let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+    if remaining.is_zero() {
+      break;
+    }
+    let Ok(Ok(ev)) = tokio::time::timeout(remaining, rx.recv()).await else {
+      break;
+    };
+    let CoreEvent::Requests(req) = &*ev else { continue };
+    let req = req.clone();
+    let done = matches!(
+      &req.payload,
+      RequestEventPayload::Stage(StageEvent::Completed { .. })
+    );
+    collected.push(req);
+    if done {
+      break;
+    }
+  }
+
+  let kinds: Vec<String> = collected
+    .iter()
+    .map(|e| match &e.payload {
+      RequestEventPayload::Stage(s) => format!("Stage::{s:?}").chars().take(40).collect(),
+      RequestEventPayload::Record(r) => format!("Record::{r:?}").chars().take(40).collect(),
+      RequestEventPayload::Custom(c) => format!("Custom::{}", c.kind),
+    })
+    .collect();
+  let dump = || format!("event stream was:\n  {}", kinds.join("\n  "));
+
+  // Mandatory persistence-feeding events for streaming passthrough.
+  let upstream_body = collected.iter().find_map(|e| match &e.payload {
+    RequestEventPayload::Record(RecordEvent::UpstreamBody { body, error }) => Some((body.clone(), error.clone())),
+    _ => None,
+  });
+  let (up_bytes, up_err) =
+    upstream_body.unwrap_or_else(|| panic!("missing RecordEvent::UpstreamBody for SSE; {}", dump()));
+  assert!(up_err.is_none(), "no upstream body error");
+  assert_eq!(
+    std::str::from_utf8(&up_bytes).unwrap(),
+    sse_body.as_str(),
+    "UpstreamBody must accumulate the full SSE stream verbatim"
+  );
+
+  let converted_body = collected.iter().find_map(|e| match &e.payload {
+    RequestEventPayload::Record(RecordEvent::ConvertedBody { body, error }) => Some((body.clone(), error.clone())),
+    _ => None,
+  });
+  let (conv_bytes, conv_err) =
+    converted_body.unwrap_or_else(|| panic!("missing RecordEvent::ConvertedBody for SSE; {}", dump()));
+  assert!(conv_err.is_none(), "no converted body error");
+  assert_eq!(
+    std::str::from_utf8(&conv_bytes).unwrap(),
+    sse_body.as_str(),
+    "ConvertedBody must equal UpstreamBody for passthrough"
+  );
+
+  // Completed MUST fire (otherwise the row stays in-flight and CLI
+  // shows perpetual progress).
+  let completed = collected.iter().any(|e| {
+    matches!(
+      &e.payload,
+      RequestEventPayload::Stage(StageEvent::Completed { success: true, .. })
+    )
+  });
+  assert!(completed, "StageEvent::Completed must fire after stream drains; {}", dump());
 }

@@ -24,9 +24,8 @@
 //! Detection helper mirrors
 //! `crates/router/src/relay/passthrough.rs::is_sse_response`.
 
-use crate::event::Stage;
 use crate::pipeline::ctx::PipelineCtx;
-use crate::pipeline::error::{PipelineError, RequestsError};
+use crate::pipeline::error::{PipelineError};
 use crate::pipeline::stages::{ConvertResponseStage, ConvertedBody, ConvertedResponse, SentResponse};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -196,57 +195,8 @@ impl ConvertResponseStage for PassthroughConvertResponse {
     })
   }
 
-  /// Override the trait default to choose buffered vs stream by
-  /// `Content-Type`, mirroring `relay/passthrough.rs::is_sse_response`.
-  ///
-  /// The default implementation keys off `SentResponse.stream` (the
-  /// client's intent inferred at Extract), but for passthrough we trust
-  /// the upstream's actual `Content-Type` to ensure binary / JSON
-  /// responses are buffered and only true SSE bodies are streamed.
-  async fn convert_response(
-    &self,
-    ctx: &PipelineCtx,
-    sent: SentResponse,
-  ) -> Result<ConvertedResponse, PipelineError> {
-    let SentResponse {
-      status,
-      headers,
-      stream: client_wants_stream,
-      upstream_endpoint,
-      response,
-    } = sent;
-    let is_sse = is_sse_response(&headers, client_wants_stream);
-
-    if is_sse {
-      // Forward upstream byte stream verbatim. The trait's provided
-      // dispatcher does the AccumHelper wrap (UpstreamBody / Completed
-      // / StreamProgress events) for streams; we mirror that by going
-      // through the same code path it uses.
-      let body = response.bytes_stream().map(|r| r.map_err(std::io::Error::other)).boxed();
-      // Call our own convert_stream directly — there's no benefit to
-      // re-entering the default dispatcher, and doing so would
-      // re-wrap with AccumHelper twice if we ever added internal
-      // calls to the default.
-      let converted = self
-        .convert_stream(ctx, status, headers, upstream_endpoint, body)
-        .await?;
-      return Ok(converted);
-    }
-
-    // Non-SSE: drain to bytes (matching legacy relay/passthrough.rs).
-    let raw = response.bytes().await.map_err(|e| {
-      PipelineError::recoverable(
-        Stage::ConvertResponse,
-        RequestsError::ReadingUpstreamBody { source: e },
-      )
-    })?;
-    ctx.emit_record(RecordEvent::UpstreamBody {
-      body: raw.clone(),
-      error: None,
-    });
-    self
-      .convert_buffered(ctx, status, headers, upstream_endpoint, raw)
-      .await
+  fn is_sse_response(&self, _ctx: &PipelineCtx, sent: &SentResponse) -> bool {
+    is_sse_response(&sent.headers, sent.stream)
   }
 }
 
