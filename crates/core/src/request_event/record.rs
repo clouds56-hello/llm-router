@@ -46,6 +46,7 @@ pub enum RecordEvent {
     peer_addr: Option<SmolStr>,
     mode: SmolStr,
     method: SmolStr,
+    inbound_method: SmolStr,
     url: Option<SmolStr>,
   },
   /// Outbound request as it left reqwest. Headers reflect post-strip,

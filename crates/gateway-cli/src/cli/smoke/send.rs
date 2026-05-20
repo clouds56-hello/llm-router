@@ -265,6 +265,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
       peer_addr: None,
       mode: "smoke".into(),
       method: "POST".into(),
+      inbound_method: "POST".into(),
       url: None,
     }),
   }));
@@ -465,10 +466,11 @@ fn print_event(event: &Event) {
           peer_addr,
           mode,
           method,
+          inbound_method,
           url,
         } => {
           println!(
-            "[record:inbound_conn] mode={mode} method={method} local={} peer={} url={}",
+            "[record:inbound_conn] mode={mode} method={method} inbound_method={inbound_method} local={} peer={} url={}",
             local_addr.as_deref().unwrap_or("-"),
             peer_addr.as_deref().unwrap_or("-"),
             url.as_deref().unwrap_or("-")

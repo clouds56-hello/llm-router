@@ -3,6 +3,7 @@ use super::connect_proxy::{connect_upstream, ConnectProxy};
 use super::passthrough::proxy_passthrough;
 use super::{extract_proxy_auth_mode, rewrite_target, split_authority, HostPolicy, ProxyCa};
 use crate::api::{error::ApiError, AppState};
+use crate::pipeline::{build_failure_result_event_from_api_err, request_header_extract};
 use anyhow::{Context, Result};
 use axum::body::Body;
 use axum::http::{HeaderMap, Method, Request, Response, Uri};
@@ -13,7 +14,7 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper_util::rt::TokioIo;
 use llm_accounts::registry::Registry;
-use llm_accounts::routing::RouteResolver;
+use llm_accounts::routing::{route_mode_as_str, RouteResolver};
 use llm_auth::descriptor::RewriteTarget;
 use llm_config::RouteMode;
 use std::net::SocketAddr;
@@ -224,13 +225,14 @@ async fn route_intercepted_request(
         .unwrap_or_else(|err| ApiError::bad_gateway(err.to_string()).into_response()),
     );
   }
-  if let Err(err) = resolved_mode {
+  if let Err(err) = &resolved_mode {
     return Ok(ApiError::bad_request(err.to_string()).into_response());
   }
 
   let rewritten = if let Some(rewritten) = rewrite_target(&host, &path, &method) {
     rewritten
   } else {
+    emit_router_not_implemented(&state, &req, &host, peer, local, resolved_mode.ok());
     return Ok(ApiError::not_implemented(path, host).into_response());
   };
 
@@ -267,6 +269,77 @@ async fn route_intercepted_request(
     .await
     .unwrap_or_else(|err| ApiError::bad_gateway(err.to_string()).into_response());
   Ok(response)
+}
+
+fn emit_router_not_implemented(
+  state: &AppState,
+  req: &Request<hyper::body::Incoming>,
+  host: &str,
+  peer: SocketAddr,
+  local: SocketAddr,
+  mode: Option<RouteMode>,
+) {
+  let started = std::time::Instant::now();
+  let ts = std::time::SystemTime::now()
+    .duration_since(std::time::UNIX_EPOCH)
+    .unwrap_or_default()
+    .as_secs() as i64;
+  let path_and_query = req
+    .uri()
+    .path_and_query()
+    .map(|v| v.as_str().to_string())
+    .unwrap_or_else(|| req.uri().path().to_string());
+  let path = req.uri().path().to_string();
+  let url = format!("https://{host}{path_and_query}");
+  let hx = request_header_extract(req.headers());
+  let request_id = hx.request_id.clone();
+  let api_err = ApiError::not_implemented(path.clone(), host.to_string());
+
+  state.events.emit(llm_core::event::Event::LegacyRequest(
+    llm_core::event::LegacyRequestEvent::Started {
+      request_id: request_id.clone(),
+      ts,
+      endpoint: path.clone(),
+      session_id: hx.session_id.clone(),
+      peer_addr: Some(peer.to_string()),
+      local_addr: Some(local.to_string()),
+      method: "requests".to_string(),
+      inbound_method: req.method().to_string(),
+      url: Some(url.clone()),
+    },
+  ));
+  state.events.emit(llm_core::event::Event::LegacyRequest(
+    llm_core::event::LegacyRequestEvent::Headers {
+      request_id: request_id.clone(),
+      ts,
+      endpoint_hint: None,
+      path: Some(path),
+      session_id: hx.session_id,
+      project_id: hx.project_id,
+      header_initiator: hx.header_initiator,
+      local_addr: Some(local.to_string()),
+      mode: Some(route_mode_as_str(mode.unwrap_or(RouteMode::Route)).to_string()),
+      route_mode_hint: hx.route_mode_hint,
+      inbound_headers: req.headers().into(),
+    },
+  ));
+  state.events.emit(build_failure_result_event_from_api_err(
+    request_id.clone(),
+    0,
+    started,
+    &api_err,
+    None,
+  ));
+  state.events.emit(llm_core::event::Event::LegacyRequest(
+    llm_core::event::LegacyRequestEvent::Completed {
+      request_id,
+      success: false,
+      total_attempts: 1,
+      final_status: Some(api_err.status().as_u16()),
+      total_latency_ms: started.elapsed().as_millis() as u64,
+      error: Some(api_err.to_string()),
+    },
+  ));
 }
 
 fn is_websocket_upgrade_headers(headers: &HeaderMap) -> bool {

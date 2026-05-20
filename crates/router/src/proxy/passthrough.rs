@@ -47,6 +47,7 @@ pub(super) async fn proxy_passthrough(
       peer_addr: Some(peer_addr.to_string()),
       local_addr: Some(local_addr.to_string()),
       method: parts.method.to_string(),
+      inbound_method: parts.method.to_string(),
       url: Some(url.clone()),
     },
   ));

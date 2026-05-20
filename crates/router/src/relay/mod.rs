@@ -426,6 +426,7 @@ mod tests {
         peer_addr: Some("127.0.0.1:4142".into()),
         local_addr: Some("127.0.0.1:4141".into()),
         method: "POST".into(),
+        inbound_method: "POST".into(),
         url: Some("https://api.openai.com/v1/chat/completions".into()),
       },
     ));

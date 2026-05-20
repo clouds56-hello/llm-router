@@ -199,16 +199,17 @@ impl DbEventHandler {
     )?;
     self.pending.insert(
       (request_id.to_string(), 0),
-      PendingRequest {
+        PendingRequest {
         ts,
         session_id: session_id.map(str::to_string),
         project_id: None,
         local_addr: ctx.local_addr.map(str::to_string),
         mode: None,
-        behave_as: None,
-        peer_addr: peer_addr.map(str::to_string),
-        method: method.map(str::to_string),
-        endpoint: endpoint.to_string(),
+          behave_as: None,
+          peer_addr: peer_addr.map(str::to_string),
+          method: method.map(str::to_string),
+          inbound_method: inbound_req.method.clone(),
+          endpoint: endpoint.to_string(),
         model: String::new(),
         initiator: String::new(),
         stream: false,
@@ -278,6 +279,7 @@ impl DbEventHandler {
       behave_as: None,
       peer_addr: None,
       method: method.map(str::to_string),
+      inbound_method: h.inbound_req.method.clone(),
       endpoint: h.endpoint.to_string(),
       model: String::new(),
       initiator: header_initiator.unwrap_or_default().to_string(),
@@ -302,6 +304,10 @@ impl DbEventHandler {
     pending.local_addr = h.local_addr.map(str::to_string).or_else(|| pending.local_addr.clone());
     pending.mode = h.mode.map(str::to_string).or_else(|| pending.mode.clone());
     pending.method = pending.method.clone().or_else(|| method.map(str::to_string));
+    pending.inbound_method = pending
+      .inbound_method
+      .clone()
+      .or_else(|| h.inbound_req.method.clone());
     if !h.endpoint.is_empty() {
       pending.endpoint = h.endpoint.to_string();
     }
@@ -727,7 +733,7 @@ mod tests {
       Some("sess-1"),
       RequestContext::default(),
       Some("127.0.0.1:4142"),
-      Some("POST"),
+      Some("requests"),
       &started,
     )
     .unwrap();
@@ -750,7 +756,7 @@ mod tests {
         session_id: Some("sess-1"),
         local_addr: Some("localhost:4141"),
         mode: Some("route"),
-        method: Some("POST"),
+        method: Some("requests"),
         inbound_req: &with_headers,
       },
     )
@@ -767,7 +773,7 @@ mod tests {
     assert_eq!(row.0, 1);
     assert_eq!(row.1, "responses");
     assert_eq!(row.2.as_deref(), Some("127.0.0.1:4142"));
-    assert_eq!(row.3.as_deref(), Some("POST"));
+    assert_eq!(row.3.as_deref(), Some("requests"));
     assert!(String::from_utf8(row.4).unwrap().contains("\"x-test\":\"1\""));
   }
 

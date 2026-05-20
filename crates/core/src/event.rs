@@ -66,6 +66,7 @@ pub enum LegacyRequestEvent {
     peer_addr: Option<String>,
     local_addr: Option<String>,
     method: String,
+    inbound_method: String,
     url: Option<String>,
   },
 

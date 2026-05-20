@@ -93,6 +93,7 @@ struct PendingRequest {
   behave_as: Option<String>,
   peer_addr: Option<String>,
   method: Option<String>,
+  inbound_method: Option<String>,
   endpoint: String,
   model: String,
   initiator: String,
@@ -156,10 +157,11 @@ impl EventHandler for DbEventHandler {
         peer_addr,
         local_addr,
         method,
+        inbound_method,
         url,
       }) => {
         let inbound_req = HttpSnapshot {
-          method: Some(method.clone()),
+          method: Some(inbound_method.clone()),
           url: url.clone(),
           status: None,
           req_headers: HeaderMap::new(),
@@ -199,9 +201,10 @@ impl EventHandler for DbEventHandler {
         let endpoint = endpoint_hint.clone().or_else(|| path.clone()).unwrap_or_default();
         let pending_start = self.pending.get(&(request_id.clone(), 0)).cloned();
         let method = pending_start.as_ref().and_then(|p| p.method.as_deref());
+        let inbound_method = pending_start.as_ref().and_then(|p| p.inbound_method.as_deref());
         let url = pending_start.as_ref().and_then(|p| p.inbound_url.as_deref());
         let inbound_req = HttpSnapshot {
-          method: method.map(str::to_string),
+          method: inbound_method.map(str::to_string),
           url: url.map(str::to_string),
           status: None,
           req_headers: inbound_headers.clone(),
@@ -368,7 +371,8 @@ mod tests {
       session_id: Some("sess-1".into()),
       peer_addr: Some("127.0.0.1:4142".into()),
       local_addr: Some("127.0.0.1:4141".into()),
-      method: "POST".into(),
+      method: "requests".into(),
+      inbound_method: "POST".into(),
       url: Some("https://example.test/v1/responses".into()),
     })
   }
@@ -381,7 +385,8 @@ mod tests {
       session_id: Some("sess-1".into()),
       peer_addr: None,
       local_addr: None,
-      method: "POST".into(),
+      method: "requests".into(),
+      inbound_method: "POST".into(),
       url: Some("https://example.test/v1/responses".into()),
     })
   }
@@ -680,7 +685,7 @@ mod tests {
     let rows = fetch_peer_addr_and_method(&dir);
     assert_eq!(
       rows,
-      vec![("req-peer".into(), Some("127.0.0.1:4142".into()), Some("POST".into()))]
+      vec![("req-peer".into(), Some("127.0.0.1:4142".into()), Some("requests".into()))]
     );
   }
 
@@ -692,7 +697,7 @@ mod tests {
     h.handle(&started_without_peer(req, ts));
 
     let rows = fetch_peer_addr_and_method(&dir);
-    assert_eq!(rows, vec![("req-no-peer".into(), None, Some("POST".into()))]);
+    assert_eq!(rows, vec![("req-no-peer".into(), None, Some("requests".into()))]);
   }
 
   #[test]
@@ -773,7 +778,7 @@ mod tests {
       vec![(
         "req-parse-fail".into(),
         Some("127.0.0.1:4142".into()),
-        Some("POST".into())
+        Some("requests".into())
       )]
     );
   }
@@ -843,8 +848,16 @@ mod tests {
     assert_eq!(
       peer_rows,
       vec![
-        ("req-2".into(), Some("127.0.0.1:4142".into()), Some("POST".into())),
-        ("req-2:1".into(), Some("127.0.0.1:4142".into()), Some("POST".into())),
+        (
+          "req-2".into(),
+          Some("127.0.0.1:4142".into()),
+          Some("requests".into())
+        ),
+        (
+          "req-2:1".into(),
+          Some("127.0.0.1:4142".into()),
+          Some("requests".into())
+        ),
       ]
     );
   }
@@ -951,7 +964,8 @@ mod tests {
       session_id: Some("sess-full".into()),
       peer_addr: Some("10.0.0.1:9999".into()),
       local_addr: Some("127.0.0.1:4141".into()),
-      method: "POST".into(),
+      method: "requests".into(),
+      inbound_method: "POST".into(),
       url: Some("https://upstream.test/v1/responses".into()),
     });
     h.handle(&started);
@@ -960,7 +974,7 @@ mod tests {
       assert_eq!(as_int(&row["ts"]), Some(ts), "ts after RequestStarted");
       assert_eq!(as_text(&row["session_id"]).as_deref(), Some("sess-full"));
       assert_eq!(as_text(&row["peer_addr"]).as_deref(), Some("10.0.0.1:9999"));
-      assert_eq!(as_text(&row["method"]).as_deref(), Some("POST"));
+      assert_eq!(as_text(&row["method"]).as_deref(), Some("requests"));
       assert_eq!(as_text(&row["endpoint"]).as_deref(), Some("chat_completions"));
       assert_eq!(as_text(&row["inbound_req_method"]).as_deref(), Some("POST"));
       assert_eq!(
@@ -1014,7 +1028,7 @@ mod tests {
       );
       // COALESCE keeps prior values.
       assert_eq!(as_text(&row["session_id"]).as_deref(), Some("sess-full"));
-      assert_eq!(as_text(&row["method"]).as_deref(), Some("POST"));
+      assert_eq!(as_text(&row["method"]).as_deref(), Some("requests"));
       assert_eq!(as_text(&row["inbound_req_method"]).as_deref(), Some("POST"));
       assert_eq!(
         as_text(&row["inbound_req_url"]).as_deref(),

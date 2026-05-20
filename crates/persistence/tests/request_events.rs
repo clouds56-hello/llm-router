@@ -332,7 +332,8 @@ fn inbound_connection_record_updates_connection_fields() {
       local_addr: Some(SmolStr::new("127.0.0.1:4141")),
       peer_addr: Some(SmolStr::new("127.0.0.1:4142")),
       mode: SmolStr::new("route"),
-      method: SmolStr::new("POST"),
+      method: SmolStr::new("requests"),
+      inbound_method: SmolStr::new("POST"),
       url: Some(SmolStr::new("https://example.test/v1/responses")),
     },
   ));
@@ -341,7 +342,7 @@ fn inbound_connection_record_updates_connection_fields() {
   assert_eq!(as_text(&row["local_addr"]).as_deref(), Some("127.0.0.1:4141"));
   assert_eq!(as_text(&row["peer_addr"]).as_deref(), Some("127.0.0.1:4142"));
   assert_eq!(as_text(&row["mode"]).as_deref(), Some("route"));
-  assert_eq!(as_text(&row["method"]).as_deref(), Some("POST"));
+  assert_eq!(as_text(&row["method"]).as_deref(), Some("requests"));
   assert_eq!(as_text(&row["inbound_req_method"]).as_deref(), Some("POST"));
   assert_eq!(as_text(&row["inbound_req_url"]).as_deref(), Some("https://example.test/v1/responses"));
 }
@@ -358,7 +359,8 @@ fn record_without_started_bootstraps_row() {
       local_addr: Some(SmolStr::new("127.0.0.1:4141")),
       peer_addr: Some(SmolStr::new("127.0.0.1:4142")),
       mode: SmolStr::new("route"),
-      method: SmolStr::new("POST"),
+      method: SmolStr::new("requests"),
+      inbound_method: SmolStr::new("POST"),
       url: Some(SmolStr::new("https://example.test/v1/responses")),
     },
   ));
@@ -367,7 +369,8 @@ fn record_without_started_bootstraps_row() {
   assert_eq!(as_text(&row["local_addr"]).as_deref(), Some("127.0.0.1:4141"));
   assert_eq!(as_text(&row["peer_addr"]).as_deref(), Some("127.0.0.1:4142"));
   assert_eq!(as_text(&row["mode"]).as_deref(), Some("route"));
-  assert_eq!(as_text(&row["method"]).as_deref(), Some("POST"));
+  assert_eq!(as_text(&row["method"]).as_deref(), Some("requests"));
+  assert_eq!(as_text(&row["inbound_req_method"]).as_deref(), Some("POST"));
   assert_eq!(as_text(&row["inbound_req_url"]).as_deref(), Some("https://example.test/v1/responses"));
 }
 

@@ -93,6 +93,7 @@ impl EventHandler for RequestEventHandler {
             peer_addr,
             mode,
             method,
+            inbound_method,
             url,
           } => self.on_inbound_connection(
             request_id,
@@ -101,6 +102,7 @@ impl EventHandler for RequestEventHandler {
             peer_addr.as_deref(),
             mode.as_str(),
             method.as_str(),
+            inbound_method.as_str(),
             url.as_deref(),
           ),
           RecordEvent::UpstreamReq {
@@ -139,6 +141,7 @@ impl RequestEventHandler {
     peer_addr: Option<&str>,
     mode: &str,
     method: &str,
+    inbound_method: &str,
     url: Option<&str>,
   ) -> Result<()> {
     let id = composite_request_id(request_id, attempt);
@@ -152,10 +155,10 @@ impl RequestEventHandler {
          peer_addr = COALESCE(?3, peer_addr),
          mode = COALESCE(?4, mode),
          method = COALESCE(?5, method),
-         inbound_req_method = COALESCE(?5, inbound_req_method),
-         inbound_req_url = COALESCE(?6, inbound_req_url)
-       WHERE request_id = ?1",
-      params![id, local_addr, peer_addr, mode, method, url],
+         inbound_req_method = COALESCE(?6, inbound_req_method),
+         inbound_req_url = COALESCE(?7, inbound_req_url)
+        WHERE request_id = ?1",
+      params![id, local_addr, peer_addr, mode, method, inbound_method, url],
     )?;
     if updated == 0 {
       tracing::warn!(request_id = %id, "requests InboundConnection UPDATE matched no row");

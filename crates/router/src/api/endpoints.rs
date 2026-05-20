@@ -55,7 +55,8 @@ async fn handle(
         local_addr: local_addr.clone().map(SmolStr::from),
         peer_addr: None,
         mode: SmolStr::new(request_record_mode(mode)),
-        method: SmolStr::new("POST"),
+        method: SmolStr::new("requests"),
+        inbound_method: SmolStr::new("POST"),
         url: None,
       }),
     }));
@@ -87,7 +88,8 @@ async fn handle(
       session_id: hx.session_id.clone(),
       peer_addr: None,
       local_addr: local_addr.clone(),
-      method: "POST".to_string(),
+      method: "requests".to_string(),
+      inbound_method: "POST".to_string(),
       url: None,
     },
   ));
@@ -136,8 +138,8 @@ fn unix_ts() -> i64 {
 
 fn request_record_mode(mode: Option<llm_config::RouteMode>) -> &'static str {
   match mode {
-    Some(llm_config::RouteMode::Passthrough) => "passthrough",
-    _ => "route",
+    Some(mode) => route_mode_as_str(mode),
+    None => "route",
   }
 }
 
