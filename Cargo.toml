@@ -56,7 +56,7 @@ llm-provider-zai = { version = "0.2.0-rc.0", path = "crates/provider-zai" }
 anyhow = "1"
 arc-swap = "1"
 async-trait = "0.1"
-axum = { version = "0.7", features = ["macros"] }
+axum = { version = "0.8", features = ["macros"] }
 bytes = "1"
 clap = { version = "4", features = ["derive"] }
 console = "0.15"
@@ -92,7 +92,7 @@ tokio-rustls = "0.26"
 toml = "0.8"
 toml_edit = "0.22"
 tower = "0.5"
-tower-http = { version = "0.5", features = ["trace", "cors", "request-id", "util"] }
+tower-http = { version = "0.6", features = ["trace", "cors", "request-id", "util"] }
 thiserror = "1"
 tracing = "0.1"
 tracing-appender = "0.2"
