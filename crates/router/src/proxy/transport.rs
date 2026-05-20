@@ -1,6 +1,5 @@
 use super::ca::DynamicResolver;
 use super::connect_proxy::{connect_upstream, ConnectProxy};
-use super::passthrough_pipeline;
 
 use super::{extract_proxy_auth_mode, rewrite_target, split_authority, HostPolicy, ProxyCa};
 use crate::api::{error::ApiError, AppState};

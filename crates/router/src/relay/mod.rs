@@ -7,36 +7,31 @@
 mod buffered;
 pub(crate) mod context;
 mod observers;
-mod passthrough;
 mod recording;
 mod stream;
 
 pub(crate) use buffered::buffered_response;
 pub(crate) use context::ForwardContext;
-pub(crate) use passthrough::{is_sse_response, passthrough_buffered_response, passthrough_streaming_response};
 pub(crate) use stream::stream_response;
 
 #[cfg(test)]
 mod tests {
   use super::buffered_response;
   use super::context::ForwardContext;
-  use super::passthrough::{is_sse_response, passthrough_buffered_response, passthrough_streaming_response};
   use super::recording::{extract_request_messages, CompletedEventBuilder};
   use crate::api::build_state;
   use crate::config::{Account as AccountCfg, AuthType, Config};
   use crate::db::{CallRecord, SessionSource, Usage};
-  use crate::pipeline::{BodyExtract, HeaderExtract};
   use crate::provider::Endpoint;
   use crate::util::secret::Secret;
   use axum::body::to_bytes;
-  use axum::http::{HeaderMap, Method};
+  use axum::http::HeaderMap;
   use bytes::Bytes;
   use llm_core::event::{Event, EventBus, EventHandler, LegacyRequestEvent};
   use reqwest::ResponseBuilderExt;
   use serde_json::json;
   use std::sync::{Arc, Mutex};
   use std::time::Instant;
-  use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
   /// Shared record collector for tests.
   type Records = Arc<Mutex<Vec<CallRecord>>>;
@@ -255,24 +250,6 @@ mod tests {
   }
 
   #[test]
-  fn detects_sse_content_type_with_charset() {
-    let mut headers = HeaderMap::new();
-    headers.insert(
-      axum::http::header::CONTENT_TYPE,
-      "text/event-stream; charset=utf-8".parse().unwrap(),
-    );
-
-    assert!(is_sse_response(&headers, false));
-  }
-
-  #[test]
-  fn falls_back_to_stream_when_content_type_missing() {
-    let headers = HeaderMap::new();
-    assert!(is_sse_response(&headers, true));
-    assert!(!is_sse_response(&headers, false));
-  }
-
-  #[test]
   fn chat_array_content_becomes_multiple_parts() {
     let body = json!({
       "messages": [{
@@ -358,155 +335,6 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn record_passthrough_call_persists_requests_row_shape() {
-    let cfg = Config::default();
-    let accounts = vec![AccountCfg {
-      id: "acct".into(),
-      provider: "zai-coding-plan".into(),
-      enabled: true,
-      tier: llm_core::account::AccountTier::Active,
-      tags: Vec::new(),
-      label: None,
-      base_url: None,
-      headers: Default::default(),
-      auth_type: Some(AuthType::Bearer),
-      username: None,
-      api_key: Some(Secret::new("sk-test".into())),
-      api_key_expires_at: None,
-      access_token: None,
-      access_token_expires_at: None,
-      id_token: None,
-      refresh_token: None,
-      provider_account_id: None,
-      extra: Default::default(),
-      refresh_url: None,
-      last_refresh: None,
-      settings: toml::Table::new(),
-    }];
-    let (events, records) = test_event_bus();
-    let state = build_state(&cfg, &accounts, events.clone()).unwrap();
-    let mut req_headers = HeaderMap::new();
-    req_headers.insert("x-session-id", "client-session".parse().unwrap());
-    let req_body =
-      Bytes::from_static(br#"{"model":"gpt-4.1","messages":[{"role":"user","content":"hi"}],"stream":true}"#);
-
-    let req_body_json: serde_json::Value = serde_json::from_slice(&req_body).unwrap();
-    let request_id = "request-123".to_string();
-    let header_extract = HeaderExtract {
-      request_id: request_id.clone(),
-      session_id: Some("client-session".to_string()),
-      project_id: None,
-      header_initiator: None,
-      route_mode_hint: None,
-    };
-    let body_extract = BodyExtract {
-      model: "gpt-4.1".to_string(),
-      stream: true,
-      initiator: "user".to_string(),
-      header_initiator: None,
-    };
-
-    let ctx = ForwardContext::from_passthrough(
-      &Method::POST,
-      "/v1/chat/completions",
-      &header_extract,
-      &body_extract,
-      req_headers.clone(),
-      Instant::now(),
-    );
-    assert_eq!(ctx.request_id, request_id);
-
-    // Emit lifecycle events as caller would
-    state.events.emit(llm_core::event::Event::LegacyRequest(
-      llm_core::event::LegacyRequestEvent::Started {
-        request_id: ctx.request_id.clone(),
-        ts: 0,
-        endpoint: ctx.endpoint.map(|e| e.as_str()).unwrap_or("unknown").to_string(),
-        session_id: ctx.session_id.clone(),
-        peer_addr: Some("127.0.0.1:4142".into()),
-        local_addr: Some("127.0.0.1:4141".into()),
-        method: "POST".into(),
-        inbound_method: "POST".into(),
-        url: Some("https://api.openai.com/v1/chat/completions".into()),
-      },
-    ));
-    state.events.emit(llm_core::event::Event::LegacyRequest(
-      llm_core::event::LegacyRequestEvent::Parsed {
-        request_id: ctx.request_id.clone(),
-        attempt: 0,
-        account_id: "passthrough".to_string(),
-        provider_id: "api.openai.com".to_string(),
-        model: ctx.model.clone(),
-        stream: true,
-        initiator: "user".to_string(),
-        behave_as: None,
-        inbound_body: req_body.clone(),
-      },
-    ));
-    state.events.emit(llm_core::event::Event::LegacyRequest(
-      llm_core::event::LegacyRequestEvent::Responded {
-        request_id: ctx.request_id.clone(),
-        attempt: 0,
-        outbound_status: 200,
-        latency_ms: 1,
-        outbound_resp_headers: llm_headers::HeaderMap::new(),
-        outbound_req_method: Some("POST".to_string()),
-        outbound_req_url: Some("https://api.openai.com/v1/chat/completions".to_string()),
-        outbound_req_headers: Some((&req_headers).into()),
-        outbound_req_body: Some(req_body.clone()),
-      },
-    ));
-
-    // Set up a mock upstream server
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move {
-      let (mut stream, _) = listener.accept().await.unwrap();
-      let mut buf = vec![0_u8; 8192];
-      let _ = stream.read(&mut buf).await.unwrap();
-      stream
-        .write_all(
-          b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":2}}",
-        )
-        .await
-        .unwrap();
-    });
-
-    let response = reqwest::Client::new()
-      .get(format!("http://{addr}/test"))
-      .send()
-      .await
-      .unwrap();
-
-    let resp = passthrough_buffered_response(&state, &ctx, &req_body_json, response).await;
-    let resp_body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-    server.await.unwrap();
-    assert!(std::str::from_utf8(&resp_body).unwrap().contains("prompt_tokens"));
-
-    // Shut down event bus to flush
-    events.shutdown().await;
-    let records = records.lock().unwrap();
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].endpoint, "chat_completions");
-    assert_eq!(records[0].account_id, "passthrough");
-    assert_eq!(records[0].provider_id, "api.openai.com");
-    assert_eq!(records[0].model, "gpt-4.1");
-    assert_eq!(records[0].session_id, "client-session");
-    assert_eq!(records[0].stream, true);
-    assert_eq!(records[0].usage.input_tokens, Some(1));
-    assert_eq!(records[0].usage.output_tokens, Some(2));
-    assert_eq!(records[0].inbound.method.as_deref(), Some("POST"));
-    assert_eq!(
-      records[0].inbound.url.as_deref(),
-      Some("https://api.openai.com/v1/chat/completions")
-    );
-    assert_eq!(
-      records[0].outbound.as_ref().and_then(|s| s.url.as_deref()),
-      Some("https://api.openai.com/v1/chat/completions")
-    );
-  }
-
-  #[tokio::test]
   async fn buffered_response_synthesizes_json_error_for_blank_upstream_error() {
     let cfg = Config::default();
     let accounts = vec![AccountCfg {
@@ -563,101 +391,4 @@ mod tests {
     );
   }
 
-  #[tokio::test]
-  async fn passthrough_streaming_response_records_sse_usage() {
-    let cfg = Config::default();
-    let accounts = vec![AccountCfg {
-      id: "acct".into(),
-      provider: "zai-coding-plan".into(),
-      enabled: true,
-      tier: llm_core::account::AccountTier::Active,
-      tags: Vec::new(),
-      label: None,
-      base_url: None,
-      headers: Default::default(),
-      auth_type: Some(AuthType::Bearer),
-      username: None,
-      api_key: Some(Secret::new("sk-test".into())),
-      api_key_expires_at: None,
-      access_token: None,
-      access_token_expires_at: None,
-      id_token: None,
-      refresh_token: None,
-      provider_account_id: None,
-      extra: Default::default(),
-      refresh_url: None,
-      last_refresh: None,
-      settings: toml::Table::new(),
-    }];
-    let (events, records) = test_event_bus();
-    let state = build_state(&cfg, &accounts, events.clone()).unwrap();
-
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move {
-      let (mut stream, _) = listener.accept().await.unwrap();
-      let mut buf = vec![0_u8; 8192];
-      let _ = stream.read(&mut buf).await.unwrap();
-      stream
-        .write_all(
-          b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\n\r\ndata: {\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":3}}\n\ndata: [DONE]\n\n",
-        )
-        .await
-        .unwrap();
-    });
-
-    let response = reqwest::Client::new()
-      .get(format!("http://{addr}/stream"))
-      .send()
-      .await
-      .unwrap();
-    assert!(is_sse_response(response.headers(), true));
-
-    let req_body_bytes =
-      Bytes::from_static(br#"{"model":"gpt-4.1","messages":[{"role":"user","content":"hi"}],"stream":true}"#);
-    let req_body_json: serde_json::Value = serde_json::from_slice(&req_body_bytes).unwrap();
-    let request_id = "request-456".to_string();
-    let header_extract = HeaderExtract {
-      request_id: request_id.clone(),
-      session_id: None,
-      project_id: None,
-      header_initiator: None,
-      route_mode_hint: None,
-    };
-    let body_extract = BodyExtract {
-      model: "gpt-4.1".to_string(),
-      stream: true,
-      initiator: "user".to_string(),
-      header_initiator: None,
-    };
-
-    let ctx = ForwardContext::from_passthrough(
-      &Method::POST,
-      "/v1/chat/completions",
-      &header_extract,
-      &body_extract,
-      HeaderMap::new(),
-      Instant::now(),
-    );
-    assert_eq!(ctx.request_id, request_id);
-
-    let streamed = passthrough_streaming_response(state, ctx, &req_body_json, response);
-    let streamed_body = to_bytes(streamed.into_body(), usize::MAX).await.unwrap();
-    server.await.unwrap();
-
-    let body_text = std::str::from_utf8(&streamed_body).unwrap();
-    assert!(body_text.contains("prompt_tokens"));
-    // Allow background recorder task to finish processing
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    // Flush the event bus to ensure the record is captured
-    events.shutdown().await;
-    let records = records.lock().unwrap();
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].usage.input_tokens, Some(2));
-    assert_eq!(records[0].usage.output_tokens, Some(3));
-    assert_eq!(records[0].request_error, None);
-    assert!(std::str::from_utf8(records[0].inbound.resp_body.as_ref())
-      .unwrap()
-      .contains("[DONE]"));
-  }
 }

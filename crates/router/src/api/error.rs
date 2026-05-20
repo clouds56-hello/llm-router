@@ -182,16 +182,6 @@ pub(crate) fn fallback_upstream_message(status: StatusCode) -> String {
   format!("upstream returned {} with an empty response body", status.as_u16())
 }
 
-pub(crate) fn sanitized_transport_failure_message(host: &str, err: &reqwest::Error) -> String {
-  if err.is_timeout() {
-    format!("upstream request to '{host}' timed out before any response was received")
-  } else if err.is_connect() {
-    format!("upstream request to '{host}' could not connect before any response was received")
-  } else {
-    format!("upstream request to '{host}' failed before any response was received")
-  }
-}
-
 #[cfg(test)]
 mod tests {
   use super::*;

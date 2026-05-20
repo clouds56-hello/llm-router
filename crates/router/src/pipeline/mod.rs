@@ -4,8 +4,7 @@ pub(crate) mod request;
 mod transformer;
 
 pub(crate) use parse::{
-  request_body_extract, request_header_extract, BodyExtract, ChatParser, HeaderExtract, MessagesParser, RequestParser,
-  ResponsesParser,
+  request_header_extract, ChatParser, MessagesParser, RequestParser, ResponsesParser,
 };
 
 use crate::api::{error::ApiError, AppState};

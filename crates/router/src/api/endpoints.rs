@@ -9,7 +9,6 @@ use llm_accounts::routing::{route_mode_as_str, ResolveError};
 use llm_core::request_event::{RecordEvent, RequestEvent, RequestEventPayload};
 use llm_core::event::Event as CoreEvent;
 use llm_requests::pipeline::error::RequestsError;
-use llm_requests::Stage;
 use smol_str::SmolStr;
 use tracing::instrument;
 

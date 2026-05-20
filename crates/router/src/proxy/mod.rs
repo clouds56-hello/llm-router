@@ -1,7 +1,6 @@
 mod ca;
 mod connect_proxy;
 pub mod header_pipeline;
-mod passthrough;
 pub mod passthrough_pipeline;
 mod transport;
 
