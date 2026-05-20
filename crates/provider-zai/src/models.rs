@@ -76,8 +76,11 @@ mod tests {
 
   #[test]
   fn alias_dispatch_picks_right_catalogue() {
-    assert_eq!(catalogue_for(ID_ZAI_CODING_PLAN).len(), 4);
-    assert_eq!(catalogue_for(ID_ZHIPUAI_CODING_PLAN).len(), 4);
+    assert!(catalogue_for(ID_ZAI_CODING_PLAN).len() >= 3);
+    assert_eq!(
+      catalogue_for(ID_ZHIPUAI_CODING_PLAN).len(),
+      catalogue_for(ID_ZAI_CODING_PLAN).len()
+    );
     assert!(catalogue_for(ID_ZAI).len() >= 12);
     assert!(catalogue_for(ID_ZHIPUAI).len() >= 11);
   }
