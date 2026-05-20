@@ -156,7 +156,7 @@ fn hash_part(part_type: &str, content: &[u8]) -> String {
   h.update(part_type.as_bytes());
   h.update([0u8]);
   h.update(content);
-  format!("{:x}", h.finalize())
+  h.finalize().iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 #[cfg(test)]

@@ -56,11 +56,11 @@ llm-provider-zai = { version = "0.2.0-rc.0", path = "crates/provider-zai" }
 anyhow = "1"
 arc-swap = "1"
 async-trait = "0.1"
-axum = { version = "0.7", features = ["macros"] }
+axum = { version = "0.8", features = ["macros"] }
 bytes = "1"
 clap = { version = "4", features = ["derive"] }
-console = "0.15"
-directories = "5"
+console = "0.16"
+directories = "6"
 eventsource-stream = "0.2"
 futures = "0.3"
 futures-util = "0.3"
@@ -70,30 +70,30 @@ hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 humantime = "2"
 ipnet = "2"
-indicatif = "0.17"
-inquire = { version = "0.7", default-features = false, features = ["crossterm"] }
-notify = "6"
+indicatif = "0.18"
+inquire = { version = "0.9", default-features = false, features = ["crossterm"] }
+notify = "8"
 parking_lot = "0.12"
 rcgen = { version = "0.14", features = ["crypto", "pem"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "socks", "gzip", "brotli", "deflate", "zstd"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls", "socks", "gzip", "brotli", "deflate", "zstd", "form"] }
 rustls-native-certs = "0.8"
-rustls = "0.23"
+rustls = { version = "0.23", features = ["ring"] }
 rustls-pemfile = "2"
 rpassword = "7"
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.39", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sha2 = "0.10.9"
+sha2 = "0.11"
 smol_str = { version = "0.3", features = ["serde"] }
-snafu = "0.8"
+snafu = "0.9"
 time = { version = "0.3", features = ["formatting", "parsing", "macros"] }
 tokio = { version = "1", features = ["full"] }
 tokio-rustls = "0.26"
-toml = "0.8"
-toml_edit = "0.22"
+toml = "1"
+toml_edit = "0.25"
 tower = "0.5"
-tower-http = { version = "0.5", features = ["trace", "cors", "request-id", "util"] }
-thiserror = "1"
+tower-http = { version = "0.6", features = ["trace", "cors", "request-id", "util"] }
+thiserror = "2"
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
