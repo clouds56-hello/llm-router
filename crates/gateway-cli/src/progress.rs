@@ -13,7 +13,7 @@ use console::style;
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use llm_core::db::Usage;
 use llm_core::event::{Event, EventHandler};
-use llm_core::request_event::{RequestEvent, RequestEventPayload, StageEvent};
+use llm_core::request_event::{RecordEvent, RequestEvent, RequestEventPayload, StageEvent};
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Write};
@@ -356,6 +356,18 @@ impl ProgressEventHandler {
         }
         self.refresh(&composite_id);
       }
+      RequestEventPayload::Record(RecordEvent::UpstreamReq { body, .. }) => {
+        if let Some(state) = self.bars.get_mut(&composite_id) {
+          state.request.sent_bytes = body.len() as u64;
+        }
+        self.refresh(&composite_id);
+      }
+      RequestEventPayload::Record(RecordEvent::Usage(usage)) => {
+        if let Some(state) = self.bars.get_mut(&composite_id) {
+          state.request.merge_usage(usage);
+        }
+        self.refresh(&composite_id);
+      }
       RequestEventPayload::Stage(StageEvent::Completed { success, attempts }) => {
         if let Some(state) = self.bars.remove(&composite_id) {
           let latency_ms = state.request.started.elapsed().as_millis() as u64;
@@ -674,6 +686,16 @@ impl ProgressLogEventHandler {
           state.account = s.account_id.to_string();
         }
       }
+      RequestEventPayload::Record(RecordEvent::UpstreamReq { body, .. }) => {
+        if let Some(state) = self.requests.get_mut(&composite_id) {
+          state.sent_bytes = body.len() as u64;
+        }
+      }
+      RequestEventPayload::Record(RecordEvent::Usage(usage)) => {
+        if let Some(state) = self.requests.get_mut(&composite_id) {
+          state.merge_usage(usage);
+        }
+      }
       RequestEventPayload::Stage(StageEvent::Completed { success, .. }) => {
         if let Some(state) = self.requests.remove(&composite_id) {
           let latency_ms = state.started.elapsed().as_millis() as u64;
@@ -726,4 +748,78 @@ fn progress_log_path(log_dir: &Path) -> PathBuf {
     .format(format_description!("[year]-[month]-[day]"))
     .unwrap_or_else(|_| "unknown-date".to_string());
   log_dir.join(format!("llm-router-progress.log.{date}"))
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use bytes::Bytes;
+  use llm_core::db::UsageDetails;
+  use llm_core::request_event::{RequestEventPayload, StageEvent};
+
+  fn req(payload: RequestEventPayload) -> RequestEvent {
+    RequestEvent {
+      request_id: "req-1".into(),
+      attempt: 0,
+      ts: 0,
+      payload,
+    }
+  }
+
+  #[test]
+  fn tty_handler_tracks_sent_bytes_and_usage_from_records() {
+    let mut handler = ProgressEventHandler::new();
+    handler.handle_request(&req(RequestEventPayload::Stage(StageEvent::Started {
+      endpoint: llm_core::request_event::EndpointLabel::custom("responses"),
+    })));
+    handler.handle_request(&req(RequestEventPayload::Record(RecordEvent::UpstreamReq {
+      method: "POST".into(),
+      url: "https://example.test".into(),
+      headers: llm_headers::HeaderMap::new(),
+      body: Bytes::from_static(b"123456"),
+    })));
+    handler.handle_request(&req(RequestEventPayload::Record(RecordEvent::Usage(Usage {
+      input_tokens: Some(11),
+      output_tokens: Some(13),
+      details: UsageDetails {
+        cache_read: Some(17),
+        reasoning: Some(19),
+      },
+    }))));
+
+    let state = handler.bars.get("req-1").expect("request state must exist");
+    assert_eq!(state.request.sent_bytes, 6);
+    assert_eq!(state.request.usage.input_tokens, Some(11));
+    assert_eq!(state.request.usage.output_tokens, Some(13));
+    assert_eq!(state.request.usage.details.cache_read, Some(17));
+    assert_eq!(state.request.usage.details.reasoning, Some(19));
+  }
+
+  #[test]
+  fn log_handler_tracks_sent_bytes_and_usage_from_records() {
+    let dir = std::env::temp_dir().join(format!("llm-router-progress-test-{}", uuid::Uuid::new_v4()));
+    let mut handler = ProgressLogEventHandler::new(&dir).unwrap();
+    handler.handle_request(&req(RequestEventPayload::Stage(StageEvent::Started {
+      endpoint: llm_core::request_event::EndpointLabel::custom("responses"),
+    })));
+    handler.handle_request(&req(RequestEventPayload::Record(RecordEvent::UpstreamReq {
+      method: "POST".into(),
+      url: "https://example.test".into(),
+      headers: llm_headers::HeaderMap::new(),
+      body: Bytes::from_static(b"123456789"),
+    })));
+    handler.handle_request(&req(RequestEventPayload::Record(RecordEvent::Usage(Usage {
+      input_tokens: Some(3),
+      output_tokens: Some(5),
+      details: UsageDetails::default(),
+    }))));
+
+    let state = handler.requests.get("req-1").expect("request state must exist");
+    assert_eq!(state.sent_bytes, 9);
+    assert_eq!(state.usage.input_tokens, Some(3));
+    assert_eq!(state.usage.output_tokens, Some(5));
+
+    drop(handler);
+    std::fs::remove_dir_all(&dir).unwrap();
+  }
 }
