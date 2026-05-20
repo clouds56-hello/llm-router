@@ -92,7 +92,7 @@ fn rewrite_model(body: &Value, model: &str) -> Value {
 }
 
 fn perm(source: RequestsError) -> PipelineError {
-  PipelineError::permanent_with_source(Stage::ConvertRequest, source.to_string(), source)
+  PipelineError::permanent(Stage::ConvertRequest, source)
 }
 
 #[cfg(test)]
@@ -279,6 +279,6 @@ mod tests {
       .unwrap_err();
     assert_eq!(err.stage, Stage::ConvertRequest);
     assert!(!err.recoverable);
-    assert!(err.message.contains("boom"));
+    assert!(err.message().contains("boom"));
   }
 }

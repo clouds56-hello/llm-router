@@ -71,25 +71,17 @@ impl<S: AccountSelector + 'static> ResolveStage for PoolResolve<S> {
         provider_id,
         account_handle,
       }),
-      SelectorOutcome::SessionExpired { session_id } => {
-        let source = RequestsError::SessionExpired { session_id };
-        Err(PipelineError::permanent_with_source(
-          Stage::Resolve,
-          source.to_string(),
-          source,
-        ))
-      }
-      SelectorOutcome::NoAccount => {
-        let source = RequestsError::NoAccount {
+      SelectorOutcome::SessionExpired { session_id } => Err(PipelineError::permanent(
+        Stage::Resolve,
+        RequestsError::SessionExpired { session_id },
+      )),
+      SelectorOutcome::NoAccount => Err(PipelineError::permanent(
+        Stage::Resolve,
+        RequestsError::NoAccount {
           endpoint: ctx.endpoint,
           model: extracted.model.clone(),
-        };
-        Err(PipelineError::permanent_with_source(
-          Stage::Resolve,
-          source.to_string(),
-          source,
-        ))
-      }
+        },
+      )),
     }
   }
 }
@@ -164,6 +156,6 @@ mod tests {
     let err = stage.resolve(&ctx(), &fake_extracted()).await.unwrap_err();
     assert_eq!(err.stage, Stage::Resolve);
     assert!(!err.recoverable);
-    assert!(err.message.contains("no account"));
+    assert!(err.message().contains("no account"));
   }
 }

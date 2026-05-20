@@ -11,7 +11,6 @@ use crate::pipeline::ctx::PipelineCtx;
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::stages::{BuiltHeaders, ConvertedRequest, Extracted, Resolved, SendStage, SentResponse};
 use async_trait::async_trait;
-use smol_str::SmolStr;
 
 pub mod default;
 pub use default::DefaultSend;
@@ -28,9 +27,6 @@ impl SendStage for NoopSend {
     _headers: &BuiltHeaders,
     _body: &ConvertedRequest,
   ) -> Result<SentResponse, PipelineError> {
-    Err(PipelineError::stop(
-      Stage::Send,
-      SmolStr::new("NoopSend: dry-run profile stopped before contacting upstream"),
-    ))
+    Err(PipelineError::stop(Stage::Send))
   }
 }

@@ -58,13 +58,18 @@ pub enum RequestsError {
 
   #[snafu(display("upstream {status}: {body}"))]
   UpstreamStatus { status: u16, body: String },
+
+  #[snafu(display("reading upstream body: {source}"))]
+  ReadingUpstreamBody { source: reqwest::Error },
+
+  #[snafu(display("dry-run profile stopped before contacting upstream"))]
+  Stop,
 }
 
 #[derive(Debug)]
 pub struct PipelineError {
   pub stage: Stage,
-  pub message: SmolStr,
-  source: Option<BoxError>,
+  source: BoxError,
   /// `true` iff a retry-style decorator may sensibly re-invoke the stage.
   /// Permanent failures (bad request, 4xx, unknown model) set this to
   /// `false`. Always `false` when `stop == true`.
@@ -76,77 +81,61 @@ pub struct PipelineError {
 }
 
 impl PipelineError {
-  pub fn new(stage: Stage, message: impl Into<SmolStr>, recoverable: bool) -> Self {
-    Self::with_source(stage, message, recoverable, None::<std::io::Error>)
-  }
-
-  pub fn with_source<E>(
-    stage: Stage,
-    message: impl Into<SmolStr>,
-    recoverable: bool,
-    source: Option<E>,
-  ) -> Self
+  pub fn permanent<E>(stage: Stage, source: E) -> Self
   where
     E: std::error::Error + Send + Sync + 'static,
   {
     Self {
       stage,
-      message: message.into(),
-      source: source.map(|err| Box::new(err) as BoxError),
-      recoverable,
+      source: Box::new(source),
+      recoverable: false,
       stop: false,
     }
   }
 
-  pub fn permanent(stage: Stage, message: impl Into<SmolStr>) -> Self {
-    Self::new(stage, message, false)
-  }
-
-  pub fn permanent_with_source<E>(stage: Stage, message: impl Into<SmolStr>, source: E) -> Self
+  pub fn recoverable<E>(stage: Stage, source: E) -> Self
   where
     E: std::error::Error + Send + Sync + 'static,
   {
-    Self::with_source(stage, message, false, Some(source))
-  }
-
-  pub fn recoverable(stage: Stage, message: impl Into<SmolStr>) -> Self {
-    Self::new(stage, message, true)
-  }
-
-  pub fn recoverable_with_source<E>(stage: Stage, message: impl Into<SmolStr>, source: E) -> Self
-  where
-    E: std::error::Error + Send + Sync + 'static,
-  {
-    Self::with_source(stage, message, true, Some(source))
+    Self {
+      stage,
+      source: Box::new(source),
+      recoverable: true,
+      stop: false,
+    }
   }
 
   /// A deliberate short-circuit: the stage chose to halt the pipeline
   /// without producing a response. Not a failure; callers should render
   /// whatever partial state they captured (typically via the event bus).
-  pub fn stop(stage: Stage, message: impl Into<SmolStr>) -> Self {
+  pub fn stop(stage: Stage) -> Self {
     Self {
       stage,
-      message: message.into(),
-      source: None,
+      source: Box::new(RequestsError::Stop),
       recoverable: false,
       stop: true,
     }
   }
 
-  pub fn source_ref(&self) -> Option<&(dyn std::error::Error + 'static)> {
-    self.source.as_deref().map(|err| err as &(dyn std::error::Error + 'static))
+  pub fn source_ref(&self) -> &(dyn std::error::Error + 'static) {
+    self.source.as_ref()
+  }
+
+  pub fn message(&self) -> std::borrow::Cow<'_, str> {
+    let s = self.source.to_string();
+    std::borrow::Cow::Owned(s)
   }
 }
 
 impl std::fmt::Display for PipelineError {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    write!(f, "[{}] {}", self.stage, self.message)
+    write!(f, "[{}] {}", self.stage, self.source)
   }
 }
 
 impl std::error::Error for PipelineError {
   fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-    self.source_ref()
+    Some(self.source_ref())
   }
 }
 
@@ -160,8 +149,9 @@ mod tests {
 
   #[test]
   fn preserves_inner_error_as_source() {
-    let err = PipelineError::permanent_with_source(Stage::Resolve, "boom", Boom);
-    let source = err.source_ref().expect("source should be present");
+    let err = PipelineError::permanent(Stage::Resolve, Boom);
+    let source = err.source_ref();
     assert!(source.downcast_ref::<Boom>().is_some());
+    assert_eq!(err.to_string(), "[resolve] boom");
   }
 }

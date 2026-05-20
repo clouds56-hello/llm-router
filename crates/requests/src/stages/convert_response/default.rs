@@ -73,8 +73,10 @@ impl ConvertResponseStage for DefaultConvertResponse {
     }
 
     let upstream_json: Value = serde_json::from_slice(&body).map_err(|source| {
-      let source = RequestsError::UpstreamBodyNotJson { source };
-      PipelineError::permanent_with_source(crate::event::Stage::ConvertResponse, source.to_string(), source)
+      PipelineError::permanent(
+        crate::event::Stage::ConvertResponse,
+        RequestsError::UpstreamBodyNotJson { source },
+      )
     })?;
 
     // Best-effort usage extraction. Emit a RecordEvent::Usage so the
@@ -89,13 +91,17 @@ impl ConvertResponseStage for DefaultConvertResponse {
     } else {
       let translated = llm_convert::convert_response(upstream_endpoint, inbound_endpoint, &upstream_json).map_err(
         |source| {
-          let source = RequestsError::ResponseConversion { source };
-          PipelineError::permanent_with_source(crate::event::Stage::ConvertResponse, source.to_string(), source)
+          PipelineError::permanent(
+            crate::event::Stage::ConvertResponse,
+            RequestsError::ResponseConversion { source },
+          )
         },
       )?;
       let bytes = serde_json::to_vec(&translated).map(Bytes::from).map_err(|source| {
-        let source = RequestsError::SerializeTranslatedResponse { source };
-        PipelineError::permanent_with_source(crate::event::Stage::ConvertResponse, source.to_string(), source)
+        PipelineError::permanent(
+          crate::event::Stage::ConvertResponse,
+          RequestsError::SerializeTranslatedResponse { source },
+        )
       })?;
       (translated, bytes)
     };
@@ -255,7 +261,7 @@ mod tests {
       .unwrap_err();
     assert_eq!(err.stage, crate::event::Stage::ConvertResponse);
     assert!(!err.recoverable);
-    assert!(err.message.contains("not valid JSON"));
+    assert!(err.message().contains("not valid JSON"));
   }
 
   #[tokio::test]

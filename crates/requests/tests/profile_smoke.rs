@@ -586,9 +586,9 @@ async fn pipeline_send_failure_preserves_partial_outcome() {
   // The pipeline failed at Send.
   assert_eq!(err.stage, Stage::Send);
   assert!(
-    err.message.contains("401"),
+    err.message().contains("401"),
     "error message should mention upstream status: {}",
-    err.message
+    err.message()
   );
   assert!(!err.stop, "401 is a real failure, not a stop");
 

@@ -165,7 +165,7 @@ impl PipelineRunner {
   fn fail(&self, ctx: &PipelineCtx, err: PipelineError) -> PipelineError {
     ctx.emit_stage(StageEvent::Error {
       stage: err.stage,
-      message: err.message.clone(),
+      message: SmolStr::new(err.message().as_ref()),
       recoverable: err.recoverable,
       stop: err.stop,
     });

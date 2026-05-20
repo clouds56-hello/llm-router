@@ -129,34 +129,28 @@ impl SendStage for DefaultSend {
       let body_text = match resp.text().await {
         Ok(t) => t,
         Err(e) => {
-          let source = RequestsError::UpstreamReadFailed { status, source: e };
-          return Err(PipelineError::recoverable_with_source(
+          return Err(PipelineError::recoverable(
             Stage::Send,
-            source.to_string(),
-            source,
+            RequestsError::UpstreamReadFailed { status, source: e },
           ));
         }
       };
-      let source = RequestsError::UpstreamStatus {
-        status,
-        body: truncate(&body_text, 512),
-      };
-      return Err(PipelineError::recoverable_with_source(
+      return Err(PipelineError::recoverable(
         Stage::Send,
-        source.to_string(),
-        source,
+        RequestsError::UpstreamStatus {
+          status,
+          body: truncate(&body_text, 512),
+        },
       ));
     }
     if status >= 400 {
       let body_text = resp.text().await.unwrap_or_default();
-      let source = RequestsError::UpstreamStatus {
-        status,
-        body: truncate(&body_text, 512),
-      };
-      return Err(PipelineError::permanent_with_source(
+      return Err(PipelineError::permanent(
         Stage::Send,
-        source.to_string(),
-        source,
+        RequestsError::UpstreamStatus {
+          status,
+          body: truncate(&body_text, 512),
+        },
       ));
     }
 
@@ -183,28 +177,32 @@ impl SendStage for DefaultSend {
 fn classify_provider_error(err: llm_core::provider::Error) -> PipelineError {
   use llm_core::provider::Error as E;
   let recoverable = matches!(&err, E::Http { .. });
-  let msg = SmolStr::new(format_with_chain(&err));
   if recoverable {
-    PipelineError::recoverable_with_source(Stage::Send, msg, err)
+    PipelineError::recoverable(Stage::Send, ProviderChainError(err))
   } else {
-    PipelineError::permanent_with_source(Stage::Send, msg, err)
+    PipelineError::permanent(Stage::Send, ProviderChainError(err))
   }
 }
 
-/// Concatenate `err.to_string()` with every cause in the
-/// `Error::source()` chain, separated by `": "`. Reqwest in particular
-/// hides the actual transport failure (`hyper`, `rustls`, `io::Error`,
-/// `dns`) behind its own opaque top-level Display, so the chain is the
-/// only way to see what really went wrong.
-fn format_with_chain(err: &dyn std::error::Error) -> String {
-  use std::fmt::Write as _;
-  let mut out = err.to_string();
-  let mut src = err.source();
-  while let Some(cause) = src {
-    let _ = write!(out, ": {cause}");
-    src = cause.source();
+#[derive(Debug)]
+struct ProviderChainError(llm_core::provider::Error);
+
+impl std::fmt::Display for ProviderChainError {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    let mut src: &dyn std::error::Error = &self.0;
+    write!(f, "{}", src)?;
+    while let Some(cause) = src.source() {
+      write!(f, ": {cause}")?;
+      src = cause;
+    }
+    Ok(())
   }
-  out
+}
+
+impl std::error::Error for ProviderChainError {
+  fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+    Some(&self.0)
+  }
 }
 
 fn truncate(s: &str, max: usize) -> String {
@@ -241,10 +239,10 @@ mod tests {
       initiator: SmolStr::new("user"),
       header_initiator: None,
       route_mode_hint: None,
-      headers: llm_headers::HeaderMap::new(),
+      headers: HeaderMap::new(),
       raw_body: Bytes::new(),
       decoded_body: Bytes::new(),
-      body_json: Arc::new(Value::Null),
+      body_json: std::sync::Arc::new(Value::Null),
       content_encoding: None,
     }
   }
@@ -255,17 +253,16 @@ mod tests {
       model: SmolStr::new("m"),
       upstream_model: SmolStr::new("m"),
       upstream_endpoint: Endpoint::ChatCompletions,
-      account_id: SmolStr::new("acct"),
-      provider_id: SmolStr::new("mock"),
+      account_id: SmolStr::new("acct-1"),
+      provider_id: SmolStr::from(handle.provider.id()),
       account_handle: handle,
     }
   }
 
   fn body() -> ConvertedRequest {
-    let v = serde_json::json!({"model": "m"});
-    let bytes = Bytes::from(serde_json::to_vec(&v).unwrap());
+    let bytes = Bytes::from(serde_json::to_vec(&serde_json::json!({"model":"m"})).unwrap());
     ConvertedRequest {
-      upstream_body: Arc::new(v),
+      upstream_body: std::sync::Arc::new(Value::Null),
       upstream_wire_body: bytes.clone(),
       debug_outbound_body: bytes,
       content_encoding: None,
@@ -318,7 +315,11 @@ mod tests {
       .unwrap_err();
     assert_eq!(err.stage, Stage::Send);
     assert!(err.recoverable);
-    assert!(err.message.contains("503"));
+    let src = err.source_ref().downcast_ref::<RequestsError>().unwrap();
+    match src {
+      RequestsError::UpstreamStatus { status, .. } => assert_eq!(*status, 503),
+      other => panic!("expected UpstreamStatus, got {other:?}"),
+    }
   }
 
   #[tokio::test]
@@ -338,7 +339,11 @@ mod tests {
       .unwrap_err();
     assert_eq!(err.stage, Stage::Send);
     assert!(!err.recoverable);
-    assert!(err.message.contains("401"));
+    let src = err.source_ref().downcast_ref::<RequestsError>().unwrap();
+    match src {
+      RequestsError::UpstreamStatus { status, .. } => assert_eq!(*status, 401),
+      other => panic!("expected UpstreamStatus, got {other:?}"),
+    }
   }
 
   #[tokio::test]
@@ -359,7 +364,7 @@ mod tests {
       .unwrap_err();
     assert_eq!(err.stage, Stage::Send);
     assert!(!err.recoverable);
-    assert!(err.message.contains("boom"));
+    assert!(err.to_string().contains("boom"));
   }
 
   // Ensure the test harness compiles even if `ProviderResult` is unused
@@ -367,42 +372,5 @@ mod tests {
   #[allow(dead_code)]
   fn _types_used() -> Option<ProviderResult<()>> {
     None
-  }
-
-  #[test]
-  fn format_with_chain_walks_full_source_chain() {
-    use std::error::Error;
-    use std::fmt;
-
-    #[derive(Debug)]
-    struct Wrap {
-      msg: &'static str,
-      cause: Option<Box<dyn Error + Send + Sync>>,
-    }
-    impl fmt::Display for Wrap {
-      fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.msg)
-      }
-    }
-    impl Error for Wrap {
-      fn source(&self) -> Option<&(dyn Error + 'static)> {
-        self.cause.as_deref().map(|c| c as &dyn Error)
-      }
-    }
-
-    let leaf = Wrap {
-      msg: "connection refused",
-      cause: None,
-    };
-    let mid = Wrap {
-      msg: "tcp connect error",
-      cause: Some(Box::new(leaf)),
-    };
-    let top = Wrap {
-      msg: "error sending request",
-      cause: Some(Box::new(mid)),
-    };
-    let s = super::format_with_chain(&top);
-    assert_eq!(s, "error sending request: tcp connect error: connection refused");
   }
 }

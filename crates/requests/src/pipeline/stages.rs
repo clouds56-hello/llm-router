@@ -504,7 +504,7 @@ pub trait ConvertResponseStage: Send + Sync {
     let raw = response.bytes().await.map_err(|e| {
       PipelineError::recoverable(
         crate::event::Stage::ConvertResponse,
-        SmolStr::new(format!("reading upstream body: {e}")),
+        crate::pipeline::error::RequestsError::ReadingUpstreamBody { source: e },
       )
     })?;
     ctx.emit_record(llm_core::request_event::RecordEvent::UpstreamBody {

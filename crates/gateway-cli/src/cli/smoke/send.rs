@@ -336,7 +336,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
     }
     Err(err) => {
       print_failure_outcome(&err, &snapshot, persisted.as_ref(), args.format, !args.no_redact)?;
-      anyhow::bail!("pipeline failed: {}: {}", err.stage, err.message);
+      anyhow::bail!("pipeline failed: {}: {}", err.stage, err.message());
     }
   }
 
@@ -722,7 +722,7 @@ fn print_failure_outcome(
         "request_id": snap.request_id.as_ref().map(|s| s.as_str()),
         "error": {
           "stage": err.stage.as_str(),
-          "message": err.message.as_str(),
+          "message": err.message().as_ref(),
           "recoverable": err.recoverable,
           "stop": err.stop,
         },
@@ -749,7 +749,7 @@ fn print_failure_outcome(
       }
       println!("stage:    {}", err.stage);
       println!("recoverable: {}", err.recoverable);
-      println!("message:  {}", err.message);
+      println!("message:  {}", err.message());
       if let Some(r) = resolved {
         println!("account:  {}", r.account_id);
         println!("provider: {}", r.provider_id);
