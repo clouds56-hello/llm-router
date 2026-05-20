@@ -173,6 +173,22 @@ impl Endpoint {
       Endpoint::Messages => "messages",
     }
   }
+
+  /// Best-effort guess at which [`Endpoint`] variant a given path
+  /// represents. Used only to populate [`llm_requests::RawInbound::endpoint`];
+  /// the proxy passthrough pipeline never branches on it.
+  pub fn infer_from(path: impl AsRef<str>) -> Option<Self> {
+    let path = path.as_ref();
+    if path.ends_with("/chat/completions") {
+      Some(Endpoint::ChatCompletions)
+    } else if path.ends_with("/responses") {
+      Some(Endpoint::Responses)
+    } else if path.ends_with("/messages") {
+      Some(Endpoint::Messages)
+    } else {
+      None
+    }
+  }
 }
 
 impl std::fmt::Display for Endpoint {

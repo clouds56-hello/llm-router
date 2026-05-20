@@ -124,7 +124,7 @@ pub async fn proxy_passthrough_via_pipeline_inner(
   // parse, no route lookup), but `RawInbound` requires a value.
   // Pick the closest match from the path so downstream introspection
   // (e.g. logs) is sensible.
-  let endpoint = infer_endpoint(path_only);
+  let endpoint = Endpoint::infer_from(path_only).unwrap_or(Endpoint::ChatCompletions);
 
   // Pre-decoded body matches raw body — `PassthroughConvertRequest`
   // forwards bytes verbatim and never reads `decoded_body`. Same for
@@ -263,19 +263,6 @@ fn normalize_authority(host: &str, port: Option<u16>, scheme: &str) -> String {
   match port {
     Some(p) if Some(p) != default => format!("{host}:{p}"),
     _ => host.to_string(),
-  }
-}
-
-/// Best-effort guess at which [`Endpoint`] variant a given path
-/// represents. Used only to populate [`llm_requests::RawInbound::endpoint`];
-/// the proxy passthrough pipeline never branches on it.
-fn infer_endpoint(path: &str) -> Endpoint {
-  if path.ends_with("/responses") {
-    Endpoint::Responses
-  } else if path.ends_with("/messages") {
-    Endpoint::Messages
-  } else {
-    Endpoint::ChatCompletions
   }
 }
 

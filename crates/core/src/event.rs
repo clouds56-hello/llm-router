@@ -20,6 +20,7 @@ use tokio::sync::{broadcast, oneshot};
 #[derive(Debug)]
 pub enum Event {
   /// Inbound request lifecycle events.
+  #[deprecated(note = "moved to llm_core::request_event::RequestEvent")]
   LegacyRequest(LegacyRequestEvent),
   /// Account / pool lifecycle events.
   Account(AccountEvent),
@@ -56,6 +57,7 @@ pub enum Event {
 /// Inbound request lifecycle. Each variant corresponds to a well-defined
 /// point in the gateway's per-request state machine.
 #[derive(Debug)]
+#[deprecated(note = "moved to llm_core::request_event::RequestEvent")]
 pub enum LegacyRequestEvent {
   /// Request accepted. Emitted before body decode/parse begins.
   Started {

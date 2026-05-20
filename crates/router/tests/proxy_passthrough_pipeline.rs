@@ -208,7 +208,10 @@ async fn proxy_passthrough_pipeline_forwards_request_and_preserves_client_auth()
 
   // StageEvent::Started carries the endpoint inferred from the path.
   if let RequestEventPayload::Stage(StageEvent::Started { endpoint }) = &events[p_started].payload {
-    assert_eq!(*endpoint, llm_core::provider::Endpoint::ChatCompletions);
+    assert_eq!(
+      *endpoint,
+      llm_core::request_event::EndpointLabel::Known(llm_core::provider::Endpoint::ChatCompletions)
+    );
   }
 
   // StageEvent::Resolve: provider_id falls back to bare intercepted

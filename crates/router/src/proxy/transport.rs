@@ -3,7 +3,7 @@ use super::connect_proxy::{connect_upstream, ConnectProxy};
 
 use super::{extract_proxy_auth_mode, rewrite_target, split_authority, HostPolicy, ProxyCa};
 use crate::api::{error::ApiError, AppState};
-use crate::pipeline::{build_failure_result_event_from_api_err, request_header_extract};
+use crate::pipeline::request_header_extract;
 use anyhow::{Context, Result};
 use axum::body::Body;
 use axum::http::{HeaderMap, Method, Request, Response, Uri};
@@ -17,6 +17,10 @@ use llm_accounts::registry::Registry;
 use llm_accounts::routing::{route_mode_as_str, RouteResolver};
 use llm_auth::descriptor::RewriteTarget;
 use llm_config::RouteMode;
+use llm_core::event::Event as CoreEvent;
+use llm_core::provider::Endpoint;
+use llm_core::request_event::{EndpointLabel, RecordEvent, RequestEvent, RequestEventPayload, Stage, StageEvent};
+use smol_str::SmolStr;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -294,11 +298,7 @@ fn emit_router_not_implemented(
   local: SocketAddr,
   mode: Option<RouteMode>,
 ) {
-  let started = std::time::Instant::now();
-  let ts = std::time::SystemTime::now()
-    .duration_since(std::time::UNIX_EPOCH)
-    .unwrap_or_default()
-    .as_secs() as i64;
+  let ts = llm_core::util::now_unix_ms();
   let path_and_query = req
     .uri()
     .path_and_query()
@@ -307,54 +307,65 @@ fn emit_router_not_implemented(
   let path = req.uri().path().to_string();
   let url = format!("https://{host}{path_and_query}");
   let hx = request_header_extract(req.headers());
-  let request_id = hx.request_id.clone();
+  let request_id = SmolStr::new(&hx.request_id);
   let api_err = ApiError::not_implemented(path.clone(), host.to_string());
+  let response_body = serde_json::from_slice(&api_err.body_bytes()).unwrap_or(serde_json::Value::Null);
+  let mut response_headers = llm_headers::HeaderMap::new();
+  response_headers.insert("content-type", "application/json");
 
-  state.events.emit(llm_core::event::Event::LegacyRequest(
-    llm_core::event::LegacyRequestEvent::Started {
-      request_id: request_id.clone(),
-      ts,
-      endpoint: path.clone(),
-      session_id: hx.session_id.clone(),
-      peer_addr: Some(peer.to_string()),
-      local_addr: Some(local.to_string()),
-      method: "requests".to_string(),
-      inbound_method: req.method().to_string(),
-      url: Some(url.clone()),
-    },
-  ));
-  state.events.emit(llm_core::event::Event::LegacyRequest(
-    llm_core::event::LegacyRequestEvent::Headers {
-      request_id: request_id.clone(),
-      ts,
-      endpoint_hint: None,
-      path: Some(path),
-      session_id: hx.session_id,
-      project_id: hx.project_id,
-      header_initiator: hx.header_initiator,
-      local_addr: Some(local.to_string()),
-      mode: Some(route_mode_as_str(mode.unwrap_or(RouteMode::Route)).to_string()),
-      route_mode_hint: hx.route_mode_hint,
-      inbound_headers: req.headers().into(),
-    },
-  ));
-  state.events.emit(build_failure_result_event_from_api_err(
-    request_id.clone(),
-    0,
-    started,
-    &api_err,
-    None,
-  ));
-  state.events.emit(llm_core::event::Event::LegacyRequest(
-    llm_core::event::LegacyRequestEvent::Completed {
-      request_id,
+  state.events.emit(CoreEvent::Requests(RequestEvent {
+    request_id: request_id.clone(),
+    attempt: 0,
+    ts,
+    payload: RequestEventPayload::Stage(StageEvent::Started {
+      endpoint: EndpointLabel::Custom(path.into()),
+    }),
+  }));
+  state.events.emit(CoreEvent::Requests(RequestEvent {
+    request_id: request_id.clone(),
+    attempt: 0,
+    ts,
+    payload: RequestEventPayload::Record(RecordEvent::InboundConnection {
+      local_addr: Some(SmolStr::new(local.to_string())),
+      peer_addr: Some(SmolStr::new(peer.to_string())),
+      mode: SmolStr::new(route_mode_as_str(mode.unwrap_or(RouteMode::Route))),
+      method: SmolStr::new("requests"),
+      inbound_method: SmolStr::new(req.method().as_str()),
+      url: Some(SmolStr::new(url)),
+    }),
+  }));
+  state.events.emit(CoreEvent::Requests(RequestEvent {
+    request_id: request_id.clone(),
+    attempt: 0,
+    ts,
+    payload: RequestEventPayload::Stage(StageEvent::Error {
+      stage: Stage::Resolve,
+      message: SmolStr::new(api_err.to_string()),
+      recoverable: false,
+      stop: true,
+    }),
+  }));
+  state.events.emit(CoreEvent::Requests(RequestEvent {
+    request_id: request_id.clone(),
+    attempt: 0,
+    ts,
+    payload: RequestEventPayload::Stage(StageEvent::ConvertResponse(
+      llm_core::request_event::ConvertedResponseSummary {
+        status: api_err.status().as_u16(),
+        headers: response_headers,
+        body: Some(std::sync::Arc::new(response_body)),
+      },
+    )),
+  }));
+  state.events.emit(CoreEvent::Requests(RequestEvent {
+    request_id,
+    attempt: 0,
+    ts,
+    payload: RequestEventPayload::Stage(StageEvent::Completed {
       success: false,
-      total_attempts: 1,
-      final_status: Some(api_err.status().as_u16()),
-      total_latency_ms: started.elapsed().as_millis() as u64,
-      error: Some(api_err.to_string()),
-    },
-  ));
+      attempts: 1,
+    }),
+  }));
 }
 
 fn is_websocket_upgrade_headers(headers: &HeaderMap) -> bool {

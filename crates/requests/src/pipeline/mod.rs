@@ -80,7 +80,9 @@ impl PipelineRunner {
   pub async fn run_with(&self, raw: RawInbound, config: RunConfig) -> Result<ConvertedResponse, PipelineError> {
     let request_id = raw.request_id.clone().unwrap_or_else(|| SmolStr::new(uuid_like()));
     let ctx = PipelineCtx::new_with_config(request_id, raw.endpoint, self.events.clone(), Arc::new(config));
-    ctx.emit_stage(StageEvent::Started { endpoint: raw.endpoint });
+    ctx.emit_stage(StageEvent::Started {
+      endpoint: raw.endpoint.into(),
+    });
 
     // ---- Extract ----
     let extracted = match self.profile.extract.extract(&ctx, raw).await {

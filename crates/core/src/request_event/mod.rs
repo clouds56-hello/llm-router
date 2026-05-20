@@ -30,8 +30,8 @@ pub mod stage;
 
 pub use record::RecordEvent;
 pub use stage::{
-  BuiltHeadersSummary, ConvertedRequestSummary, ConvertedResponseSummary, ExtractedSummary, ResolvedSummary,
-  SentSummary, Stage, StageEvent,
+  BuiltHeadersSummary, ConvertedRequestSummary, ConvertedResponseSummary, EndpointLabel, ExtractedSummary,
+  ResolvedSummary, SentSummary, Stage, StageEvent,
 };
 
 use smol_str::SmolStr;

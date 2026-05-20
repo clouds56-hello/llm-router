@@ -20,9 +20,67 @@ use crate::provider::Endpoint;
 use crate::ClientId;
 use bytes::Bytes;
 use llm_headers::{HeaderMap, TemplateVars};
+use serde::Serialize;
 use serde_json::Value;
 use smol_str::SmolStr;
 use std::sync::Arc;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[serde(untagged)]
+pub enum EndpointLabel {
+  Known(Endpoint),
+  Custom(SmolStr),
+}
+
+impl EndpointLabel {
+  pub fn as_str(&self) -> &str {
+    match self {
+      EndpointLabel::Known(endpoint) => endpoint.as_str(),
+      EndpointLabel::Custom(label) => label.as_str(),
+    }
+  }
+
+  pub fn custom(label: impl Into<SmolStr>) -> Self {
+    Self::Custom(label.into())
+  }
+
+  pub fn infer_from(path: impl AsRef<str>) -> Self {
+    let path = path.as_ref();
+    if let Some(endpoint) = Endpoint::infer_from(path) {
+      Self::Known(endpoint)
+    } else {
+      Self::Custom(SmolStr::new(path))
+    }
+  }
+
+  pub fn unwrap_or(&self, default: Endpoint) -> Endpoint {
+    match self {
+      EndpointLabel::Known(endpoint) => *endpoint,
+      EndpointLabel::Custom(_) => default,
+    }
+  }
+}
+
+impl From<Endpoint> for EndpointLabel {
+  fn from(value: Endpoint) -> Self {
+    Self::Known(value)
+  }
+}
+
+impl PartialEq<Endpoint> for EndpointLabel {
+  fn eq(&self, other: &Endpoint) -> bool {
+    match self {
+      EndpointLabel::Known(endpoint) => endpoint == other,
+      EndpointLabel::Custom(_) => false,
+    }
+  }
+}
+
+impl std::fmt::Display for EndpointLabel {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.write_str(self.as_str())
+  }
+}
 
 /// Identifies which pipeline stage produced an event. Used both as a tag on
 /// success variants (implicit via the variant name) and as a field on
@@ -134,7 +192,7 @@ pub struct ConvertedResponseSummary {
 pub enum StageEvent {
   /// Emitted once at the very start of requests's `PipelineRunner::run`,
   /// before any stage has produced output.
-  Started { endpoint: Endpoint },
+  Started { endpoint: EndpointLabel },
   /// Extract stage completed successfully.
   Extract(ExtractedSummary),
   /// Resolve stage completed successfully.

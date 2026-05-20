@@ -9,7 +9,7 @@ use llm_core::request_event::stage::{
   BuiltHeadersSummary, ConvertedRequestSummary, ConvertedResponseSummary, ExtractedSummary, ResolvedSummary,
   SentSummary, Stage, StageEvent,
 };
-use llm_core::request_event::{RequestEvent, RequestEventPayload};
+use llm_core::request_event::{EndpointLabel, RequestEvent, RequestEventPayload};
 use llm_headers::{HeaderMap, TemplateVars};
 use llm_persistence::RequestEventHandler;
 use rusqlite::{params, Connection};
@@ -189,7 +189,7 @@ fn happy_path_persists_all_stages() {
     req,
     0,
     StageEvent::Started {
-      endpoint: Endpoint::Responses,
+      endpoint: EndpointLabel::Known(Endpoint::Responses),
     },
   ));
   h.handle(&r2(
@@ -245,7 +245,7 @@ fn error_before_send_leaves_status_null_and_records_error() {
     req,
     0,
     StageEvent::Started {
-      endpoint: Endpoint::Messages,
+      endpoint: EndpointLabel::Known(Endpoint::Messages),
     },
   ));
   h.handle(&r2(req, 0, extracted("m", false, None, b"")));
@@ -269,7 +269,7 @@ fn retry_produces_two_independent_rows() {
     req,
     0,
     StageEvent::Started {
-      endpoint: Endpoint::Responses,
+      endpoint: EndpointLabel::Known(Endpoint::Responses),
     },
   ));
   h.handle(&r2(req, 0, extracted("m", false, None, b"a")));
@@ -283,7 +283,7 @@ fn retry_produces_two_independent_rows() {
     req,
     1,
     StageEvent::Started {
-      endpoint: Endpoint::Responses,
+      endpoint: EndpointLabel::Known(Endpoint::Responses),
     },
   ));
   h.handle(&r2(req, 1, extracted("m", false, None, b"a")));
@@ -322,7 +322,7 @@ fn inbound_connection_record_updates_connection_fields() {
     req,
     0,
     StageEvent::Started {
-      endpoint: Endpoint::Responses,
+      endpoint: EndpointLabel::Known(Endpoint::Responses),
     },
   ));
   h.handle(&rr(
@@ -383,7 +383,7 @@ fn usage_record_updates_token_columns() {
     req,
     0,
     StageEvent::Started {
-      endpoint: Endpoint::Responses,
+      endpoint: EndpointLabel::Known(Endpoint::Responses),
     },
   ));
   h.handle(&rr(
