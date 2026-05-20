@@ -104,9 +104,11 @@ fn prepare_dry_run(
 ) -> crate::provider::Result<PreparedDryRun> {
   let mut upstream_body = rewrite_model(&body, &meta.upstream_model);
   if meta.upstream_endpoint != meta.endpoint {
-    upstream_body = crate::convert::convert_request(meta.endpoint, meta.upstream_endpoint, &upstream_body)
-      .map_err(|source| crate::provider::error::Error::Profiles {
-        message: format!("request conversion failed: {source}"),
+    upstream_body =
+      crate::convert::convert_request(meta.endpoint, meta.upstream_endpoint, &upstream_body).map_err(|source| {
+        crate::provider::error::Error::Profiles {
+          message: format!("request conversion failed: {source}"),
+        }
       })?;
   }
   if let Some(transformer) = account.provider.input_transformer() {

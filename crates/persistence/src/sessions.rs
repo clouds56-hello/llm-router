@@ -166,16 +166,16 @@ mod tests {
 
   fn rec(parts: Vec<(String, Bytes)>) -> Vec<MessageRecord> {
     vec![MessageRecord {
-        role: "user".into(),
-        status: None,
-        parts: parts
-          .into_iter()
-          .map(|(t, c)| PartRecord {
-            part_type: t,
-            content: c,
-          })
-          .collect(),
-      }]
+      role: "user".into(),
+      status: None,
+      parts: parts
+        .into_iter()
+        .map(|(t, c)| PartRecord {
+          part_type: t,
+          content: c,
+        })
+        .collect(),
+    }]
   }
 
   #[test]
@@ -251,7 +251,7 @@ mod tests {
       model: "m",
       messages: &messages2,
     })
-      .unwrap();
+    .unwrap();
     let max_part_seq: i64 = db
       .conn
       .query_row(

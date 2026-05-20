@@ -54,7 +54,8 @@ fn main() {
   if docs_rs || cargo_offline {
     if vendored.exists() {
       ensure_sane(&vendored);
-      fs::copy(&vendored, &dest).unwrap_or_else(|e| panic!("vendored snapshot {} could not be copied: {e}", vendored.display()));
+      fs::copy(&vendored, &dest)
+        .unwrap_or_else(|e| panic!("vendored snapshot {} could not be copied: {e}", vendored.display()));
       emit(&dest);
       return;
     }
@@ -72,8 +73,12 @@ fn main() {
   match status {
     Ok(s) if s.success() => {
       ensure_sane(&tmp);
-      fs::rename(&tmp, &dest)
-        .unwrap_or_else(|e| panic!("downloaded snapshot {} could not be moved into place: {e}", tmp.display()));
+      fs::rename(&tmp, &dest).unwrap_or_else(|e| {
+        panic!(
+          "downloaded snapshot {} could not be moved into place: {e}",
+          tmp.display()
+        )
+      });
       emit(&dest);
     }
     _ => {
@@ -83,7 +88,8 @@ fn main() {
       // 5. Offline or curl-less environments fall back to the vendored copy.
       if vendored.exists() {
         ensure_sane(&vendored);
-        fs::copy(&vendored, &dest).unwrap_or_else(|e| panic!("vendored snapshot {} could not be copied: {e}", vendored.display()));
+        fs::copy(&vendored, &dest)
+          .unwrap_or_else(|e| panic!("vendored snapshot {} could not be copied: {e}", vendored.display()));
         emit(&dest);
         return;
       }
@@ -109,7 +115,8 @@ fn main() {
 }
 
 fn ensure_sane(p: &Path) {
-  let mut file = fs::File::open(p).unwrap_or_else(|e| panic!("models.dev snapshot at {} could not be opened: {e}", p.display()));
+  let mut file =
+    fs::File::open(p).unwrap_or_else(|e| panic!("models.dev snapshot at {} could not be opened: {e}", p.display()));
   let mut buf = Vec::new();
   file
     .read_to_end(&mut buf)
@@ -134,6 +141,11 @@ fn emit(p: &Path) {
 
 fn is_truthy(v: &std::ffi::OsStr) -> bool {
   v.to_str()
-    .map(|s| matches!(s, "1" | "true" | "TRUE" | "True" | "yes" | "YES" | "Yes" | "on" | "ON" | "On"))
+    .map(|s| {
+      matches!(
+        s,
+        "1" | "true" | "TRUE" | "True" | "yes" | "YES" | "Yes" | "on" | "ON" | "On"
+      )
+    })
     .unwrap_or(false)
 }

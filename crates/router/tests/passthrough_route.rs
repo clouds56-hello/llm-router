@@ -108,9 +108,8 @@ async fn passthrough_route_forwards_body_verbatim_and_injects_auth() {
 
   // Inbound request body — note the unusual key order to prove no
   // re-serialization happens (a JSON re-encode would canonicalize).
-  let inbound_body = Bytes::from_static(
-    br#"{"stream":false,"messages":[{"role":"user","content":"hi"}],"model":"glm-4.6"}"#,
-  );
+  let inbound_body =
+    Bytes::from_static(br#"{"stream":false,"messages":[{"role":"user","content":"hi"}],"model":"glm-4.6"}"#);
 
   let req = Request::builder()
     .method(Method::POST)
@@ -217,9 +216,8 @@ async fn passthrough_route_streams_sse_verbatim_and_emits_usage() {
   let state = build_state(&cfg, &[acct_core], events.clone()).unwrap();
   let app = router(state);
 
-  let inbound_body = Bytes::from_static(
-    br#"{"model":"glm-4.6","messages":[{"role":"user","content":"hi"}],"stream":true}"#,
-  );
+  let inbound_body =
+    Bytes::from_static(br#"{"model":"glm-4.6","messages":[{"role":"user","content":"hi"}],"stream":true}"#);
   let req = Request::builder()
     .method(Method::POST)
     .uri("/v1/chat/completions")

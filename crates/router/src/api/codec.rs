@@ -145,5 +145,4 @@ mod tests {
       axum::http::StatusCode::UNSUPPORTED_MEDIA_TYPE
     );
   }
-
 }

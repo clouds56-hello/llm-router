@@ -145,7 +145,11 @@ mod tests {
   use std::sync::Arc;
 
   fn ctx() -> PipelineCtx {
-    PipelineCtx::new("req-passthrough", Endpoint::ChatCompletions, Arc::new(EventBus::new(64)))
+    PipelineCtx::new(
+      "req-passthrough",
+      Endpoint::ChatCompletions,
+      Arc::new(EventBus::new(64)),
+    )
   }
 
   fn raw_with_body(body_bytes: Bytes, headers: HeaderMap) -> RawInbound {

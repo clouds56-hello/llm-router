@@ -3,7 +3,9 @@
 //! these `From` impls at emit time so subscribers receive llm-core types
 //! while stages keep operating on the richer requests-internal structs.
 
-use crate::pipeline::stages::{BuiltHeaders, ConvertedBody, ConvertedRequest, ConvertedResponse, Extracted, Resolved, SentResponse};
+use crate::pipeline::stages::{
+  BuiltHeaders, ConvertedBody, ConvertedRequest, ConvertedResponse, Extracted, Resolved, SentResponse,
+};
 use llm_core::request_event::{
   BuiltHeadersSummary, ConvertedRequestSummary, ConvertedResponseSummary, ExtractedSummary, ResolvedSummary,
   SentSummary,

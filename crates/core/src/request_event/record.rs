@@ -22,8 +22,8 @@
 //!
 //! [`RequestEventPayload::Record`]: super::RequestEventPayload::Record
 
-use bytes::Bytes;
 use crate::db::Usage;
+use bytes::Bytes;
 use llm_headers::HeaderMap;
 use smol_str::SmolStr;
 
@@ -65,17 +65,11 @@ pub enum RecordEvent {
   /// Materialized upstream response body. Emitted only for buffered
   /// responses or after streaming accumulation finishes. Streaming paths may
   /// carry a partial body plus the stream termination error.
-  UpstreamBody {
-    body: Bytes,
-    error: Option<SmolStr>,
-  },
+  UpstreamBody { body: Bytes, error: Option<SmolStr> },
   /// Materialized client-facing response body after any endpoint translation.
   /// For buffered responses the `StageEvent::ConvertResponse` summary already
   /// carries the JSON body, so this record is emitted only for streaming paths.
-  ConvertedBody {
-    body: Bytes,
-    error: Option<SmolStr>,
-  },
+  ConvertedBody { body: Bytes, error: Option<SmolStr> },
   /// Parsed token usage attributed to the request. Added now so callers and
   /// persistence can converge on a stable shape before every execution path
   /// emits it.

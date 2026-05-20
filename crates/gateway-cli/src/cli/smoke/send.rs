@@ -457,63 +457,58 @@ fn print_event(event: &Event) {
     EventPayload::Stage(StageEvent::Completed { success, attempts }) => {
       println!("[completed]        success={success} attempts={attempts}");
     }
-    EventPayload::Record(r) => {
-      match r {
-        RecordEvent::InboundConnection {
-          local_addr,
-          peer_addr,
-          mode,
-          method,
-          inbound_method,
-          url,
-        } => {
-          println!(
-            "[record:inbound_conn] mode={mode} method={method} inbound_method={inbound_method} local={} peer={} url={}",
-            local_addr.as_deref().unwrap_or("-"),
-            peer_addr.as_deref().unwrap_or("-"),
-            url.as_deref().unwrap_or("-")
-          );
-        }
-        RecordEvent::UpstreamReq {
-          method,
-          url,
-          headers,
-          body,
-        } => {
-          println!(
-            "[record:upstream_req] {method} {url} headers={} body_bytes={}",
-            headers.len(),
-            body.len()
-          );
-        }
-        RecordEvent::UpstreamResp { status, headers } => {
-          println!("[record:upstream_resp] status={status} headers={}", headers.len());
-        }
-        RecordEvent::UpstreamBody { body, error } => {
-          println!(
-            "[record:upstream_body] bytes={} error={}",
-            body.len(),
-            error.as_deref().unwrap_or("-")
-          );
-        }
-        RecordEvent::ConvertedBody { body, error } => {
-          println!(
-            "[record:converted_body] bytes={} error={}",
-            body.len(),
-            error.as_deref().unwrap_or("-")
-          );
-        }
-        RecordEvent::Usage(usage) => {
-          println!(
-            "[record:usage] input={:?} output={:?} cached={:?} reasoning={:?}",
-            usage.input_tokens,
-            usage.output_tokens,
-            usage.details.cache_read,
-            usage.details.reasoning
-          );
-        }
+    EventPayload::Record(r) => match r {
+      RecordEvent::InboundConnection {
+        local_addr,
+        peer_addr,
+        mode,
+        method,
+        inbound_method,
+        url,
+      } => {
+        println!(
+          "[record:inbound_conn] mode={mode} method={method} inbound_method={inbound_method} local={} peer={} url={}",
+          local_addr.as_deref().unwrap_or("-"),
+          peer_addr.as_deref().unwrap_or("-"),
+          url.as_deref().unwrap_or("-")
+        );
       }
-    }
+      RecordEvent::UpstreamReq {
+        method,
+        url,
+        headers,
+        body,
+      } => {
+        println!(
+          "[record:upstream_req] {method} {url} headers={} body_bytes={}",
+          headers.len(),
+          body.len()
+        );
+      }
+      RecordEvent::UpstreamResp { status, headers } => {
+        println!("[record:upstream_resp] status={status} headers={}", headers.len());
+      }
+      RecordEvent::UpstreamBody { body, error } => {
+        println!(
+          "[record:upstream_body] bytes={} error={}",
+          body.len(),
+          error.as_deref().unwrap_or("-")
+        );
+      }
+      RecordEvent::ConvertedBody { body, error } => {
+        println!(
+          "[record:converted_body] bytes={} error={}",
+          body.len(),
+          error.as_deref().unwrap_or("-")
+        );
+      }
+      RecordEvent::Usage(usage) => {
+        println!(
+          "[record:usage] input={:?} output={:?} cached={:?} reasoning={:?}",
+          usage.input_tokens, usage.output_tokens, usage.details.cache_read, usage.details.reasoning
+        );
+      }
+    },
     EventPayload::Custom(c) => {
       println!("[custom]           kind={}", c.kind);
     }

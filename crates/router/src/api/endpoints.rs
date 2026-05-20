@@ -6,8 +6,8 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 use llm_accounts::routing::{route_mode_as_str, ResolveError};
-use llm_core::request_event::{RecordEvent, RequestEvent, RequestEventPayload};
 use llm_core::event::Event as CoreEvent;
+use llm_core::request_event::{RecordEvent, RequestEvent, RequestEventPayload};
 use llm_requests::pipeline::error::RequestsError;
 use smol_str::SmolStr;
 use tracing::instrument;
@@ -70,14 +70,14 @@ async fn handle(
 
 fn pipeline_error_to_api_error(err: llm_requests::PipelineError) -> ApiError {
   match err.inner() {
-    RequestsError::Resolve { source: ResolveError::InvalidRouteMode { .. } }
-    | RequestsError::Resolve { source: ResolveError::InvalidExactModel { .. } } => {
-      ApiError::bad_request(err.message().to_owned())
+    RequestsError::Resolve {
+      source: ResolveError::InvalidRouteMode { .. },
     }
+    | RequestsError::Resolve {
+      source: ResolveError::InvalidExactModel { .. },
+    } => ApiError::bad_request(err.message().to_owned()),
     RequestsError::SessionExpired { session_id } => ApiError::session_expired(session_id.to_string()),
-    RequestsError::NoAccount { endpoint, model } => {
-      ApiError::not_implemented(endpoint.to_string(), model.to_string())
-    }
+    RequestsError::NoAccount { endpoint, model } => ApiError::not_implemented(endpoint.to_string(), model.to_string()),
     RequestsError::UpstreamStatus { status, body } => match StatusCode::from_u16(*status) {
       Ok(status) => ApiError::upstream(status, body.clone()),
       Err(_) => ApiError::bad_gateway(body.clone()),

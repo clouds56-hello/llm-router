@@ -6,9 +6,9 @@ pub use llm_core as core;
 pub mod endpoint {
   pub use llm_endpoint_chat_completions as chat_completions;
   pub use llm_endpoint_core as core;
+  pub use llm_endpoint_macros as macros;
   pub use llm_endpoint_messages as messages;
   pub use llm_endpoint_responses as responses;
-  pub use llm_endpoint_macros as macros;
 }
 pub use llm_headers as headers;
 pub mod provider {

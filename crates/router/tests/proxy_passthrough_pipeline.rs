@@ -63,9 +63,8 @@ async fn proxy_passthrough_pipeline_forwards_request_and_preserves_client_auth()
   let mut rx = events.subscribe();
   let state = build_state(&cfg, &[], events.clone()).unwrap();
 
-  let inbound_body = Bytes::from_static(
-    br#"{"stream":false,"model":"glm-4.6","messages":[{"role":"user","content":"hi proxy"}]}"#,
-  );
+  let inbound_body =
+    Bytes::from_static(br#"{"stream":false,"model":"glm-4.6","messages":[{"role":"user","content":"hi proxy"}]}"#);
 
   // Use a non-default port + http scheme so the test exercises the
   // port-preservation path. The mock listener already bound to an
@@ -152,7 +151,10 @@ async fn proxy_passthrough_pipeline_forwards_request_and_preserves_client_auth()
     };
     let CoreEvent::Requests(req) = &*ev else { continue };
     let req = req.clone();
-    let done = matches!(&req.payload, RequestEventPayload::Stage(llm_core::request_event::StageEvent::Completed { .. }));
+    let done = matches!(
+      &req.payload,
+      RequestEventPayload::Stage(llm_core::request_event::StageEvent::Completed { .. })
+    );
     events.push(req);
     if done {
       break;
@@ -173,9 +175,8 @@ async fn proxy_passthrough_pipeline_forwards_request_and_preserves_client_auth()
 
   // --- Stage stream: presence + ordering ---
   use llm_core::request_event::StageEvent;
-  let pos = |pred: &dyn Fn(&RequestEventPayload) -> bool| -> Option<usize> {
-    events.iter().position(|e| pred(&e.payload))
-  };
+  let pos =
+    |pred: &dyn Fn(&RequestEventPayload) -> bool| -> Option<usize> { events.iter().position(|e| pred(&e.payload)) };
 
   let p_started = pos(&|p| matches!(p, RequestEventPayload::Stage(StageEvent::Started { .. })))
     .unwrap_or_else(|| panic!("missing StageEvent::Started; {}", debug_dump()));
@@ -276,11 +277,7 @@ async fn proxy_passthrough_pipeline_forwards_request_and_preserves_client_auth()
       "upstream url; {}",
       debug_dump()
     );
-    assert_eq!(
-      body.as_ref(),
-      inbound_body.as_ref(),
-      "upstream request body verbatim"
-    );
+    assert_eq!(body.as_ref(), inbound_body.as_ref(), "upstream request body verbatim");
     // Client-auth preserved on the wire-truth capture too.
     let auth = headers
       .get("authorization")
@@ -291,10 +288,7 @@ async fn proxy_passthrough_pipeline_forwards_request_and_preserves_client_auth()
       "wire-truth authorization header preserved, got {auth:?}"
     );
     // Host header rewritten to the resolved authority.
-    let host_hdr = headers
-      .get("host")
-      .map(|v| v.as_str().to_string())
-      .unwrap_or_default();
+    let host_hdr = headers.get("host").map(|v| v.as_str().to_string()).unwrap_or_default();
     assert_eq!(host_hdr, expected_authority, "wire-truth Host header");
     // Router-owned headers stripped before send.
     assert!(
@@ -329,7 +323,12 @@ async fn proxy_passthrough_pipeline_forwards_request_and_preserves_client_auth()
   // than the `null` placeholder that `StageEvent::ConvertResponse`
   // carries for passthrough (where body_json is intentionally Null).
   let p_convbody = pos(&|p| matches!(p, RequestEventPayload::Record(RecordEvent::ConvertedBody { .. })))
-    .unwrap_or_else(|| panic!("missing RecordEvent::ConvertedBody for buffered passthrough; {}", debug_dump()));
+    .unwrap_or_else(|| {
+      panic!(
+        "missing RecordEvent::ConvertedBody for buffered passthrough; {}",
+        debug_dump()
+      )
+    });
   if let RequestEventPayload::Record(RecordEvent::ConvertedBody { body, error }) = &events[p_convbody].payload {
     assert!(error.is_none(), "no converted body error");
     assert_eq!(
@@ -422,9 +421,8 @@ async fn proxy_passthrough_pipeline_streams_emit_bodies_and_completed() {
   let mut rx = events.subscribe();
   let state = build_state(&cfg, &[], events.clone()).unwrap();
 
-  let inbound_body = Bytes::from_static(
-    br#"{"stream":true,"model":"glm-4.6","messages":[{"role":"user","content":"hi"}]}"#,
-  );
+  let inbound_body =
+    Bytes::from_static(br#"{"stream":true,"model":"glm-4.6","messages":[{"role":"user","content":"hi"}]}"#);
 
   let intercepted_host = addr.ip().to_string();
   let intercepted_port = addr.port();
@@ -476,10 +474,7 @@ async fn proxy_passthrough_pipeline_streams_emit_bodies_and_completed() {
     };
     let CoreEvent::Requests(req) = &*ev else { continue };
     let req = req.clone();
-    let done = matches!(
-      &req.payload,
-      RequestEventPayload::Stage(StageEvent::Completed { .. })
-    );
+    let done = matches!(&req.payload, RequestEventPayload::Stage(StageEvent::Completed { .. }));
     collected.push(req);
     if done {
       break;
@@ -531,5 +526,9 @@ async fn proxy_passthrough_pipeline_streams_emit_bodies_and_completed() {
       RequestEventPayload::Stage(StageEvent::Completed { success: true, .. })
     )
   });
-  assert!(completed, "StageEvent::Completed must fire after stream drains; {}", dump());
+  assert!(
+    completed,
+    "StageEvent::Completed must fire after stream drains; {}",
+    dump()
+  );
 }

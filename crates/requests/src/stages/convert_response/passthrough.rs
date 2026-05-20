@@ -25,7 +25,7 @@
 //! `crates/router/src/relay/passthrough.rs::is_sse_response`.
 
 use crate::pipeline::ctx::PipelineCtx;
-use crate::pipeline::error::{PipelineError};
+use crate::pipeline::error::PipelineError;
 use crate::pipeline::stages::{ConvertResponseStage, ConvertedBody, ConvertedResponse, SentResponse};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -120,8 +120,7 @@ impl ConvertResponseStage for PassthroughConvertResponse {
     // To avoid duplicating the upstream stream (which is not Clone),
     // we use an intermediate channel: the byte stream forwards to the
     // client while also being teed into the SSE parser.
-    let (parse_tx, mut parse_rx) =
-      tokio::sync::mpsc::unbounded_channel::<std::io::Result<Bytes>>();
+    let (parse_tx, mut parse_rx) = tokio::sync::mpsc::unbounded_channel::<std::io::Result<Bytes>>();
 
     let forward_stream = body
       .inspect(move |chunk| {
@@ -170,9 +169,7 @@ impl ConvertResponseStage for PassthroughConvertResponse {
                   request_id: parse_request_id.clone(),
                   attempt: parse_attempt,
                   ts: llm_core::util::now_unix_ms(),
-                  payload: llm_core::request_event::RequestEventPayload::Record(
-                    RecordEvent::Usage(parsed),
-                  ),
+                  payload: llm_core::request_event::RequestEventPayload::Record(RecordEvent::Usage(parsed)),
                 },
               ));
             }
@@ -332,7 +329,10 @@ mod tests {
         }
       }
     }
-    assert!(saw_usage, "background task should emit RecordEvent::Usage from SSE frames");
+    assert!(
+      saw_usage,
+      "background task should emit RecordEvent::Usage from SSE frames"
+    );
   }
 
   #[tokio::test]

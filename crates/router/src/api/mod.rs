@@ -66,9 +66,7 @@ pub const PROJECT_ID_HEADERS: &[&str] = &["x-opencode-project"];
 
 pub(crate) fn is_router_owned_header(name: &axum::http::HeaderName) -> bool {
   let name = name.as_str();
-  name.starts_with("x-llm-router-")
-    || name == "x-route-mode"
-    || name == "x-behave-as"
+  name.starts_with("x-llm-router-") || name == "x-route-mode" || name == "x-behave-as"
 }
 
 pub(crate) fn first_header<'a>(headers: &'a HeaderMap, names: &[&str]) -> Option<&'a str> {
@@ -229,8 +227,7 @@ pub fn build_state(cfg: &Config, accounts: &[AccountConfig], events: Arc<EventBu
   let http = llm_core::util::http::build_client(&cfg.proxy.to_http_options())?;
   let body_max_bytes = if cfg.db.enabled { cfg.db.body_max_bytes } else { 0 };
   let request_pipeline = build_request_pipeline(pool.clone(), route.clone(), http.clone(), events.clone());
-  let passthrough_pipeline =
-    build_passthrough_pipeline(pool.clone(), route.clone(), http.clone(), events.clone());
+  let passthrough_pipeline = build_passthrough_pipeline(pool.clone(), route.clone(), http.clone(), events.clone());
   let proxy_passthrough_pipeline = build_proxy_passthrough_pipeline(http.clone(), events.clone());
   Ok(AppState {
     pool,
@@ -288,8 +285,8 @@ fn build_passthrough_pipeline(
   events: Arc<EventBus>,
 ) -> Arc<llm_requests::Pipeline> {
   use llm_requests::stages::{
-    DefaultSend, PassthroughBuildHeaders, PassthroughConvertRequest, PassthroughConvertResponse,
-    PassthroughExtract, PoolAccountSelector, PoolResolve,
+    DefaultSend, PassthroughBuildHeaders, PassthroughConvertRequest, PassthroughConvertResponse, PassthroughExtract,
+    PoolAccountSelector, PoolResolve,
   };
   let selector = Arc::new(PoolAccountSelector::new(pool, route));
   let profile = llm_requests::Profile::full(
@@ -316,10 +313,7 @@ fn build_passthrough_pipeline(
 /// [`llm_requests::RunConfig`] passed to `Pipeline::run_with`.
 /// [`ProxyResolve`] and [`ProxySend`] read those keys; the remaining
 /// stages are the same as the standard passthrough variant.
-fn build_proxy_passthrough_pipeline(
-  http: reqwest::Client,
-  events: Arc<EventBus>,
-) -> Arc<llm_requests::Pipeline> {
+fn build_proxy_passthrough_pipeline(http: reqwest::Client, events: Arc<EventBus>) -> Arc<llm_requests::Pipeline> {
   use llm_requests::stages::{
     PassthroughBuildHeaders, PassthroughConvertRequest, PassthroughConvertResponse, PassthroughExtract, ProxyResolve,
     ProxySend,
@@ -491,26 +485,17 @@ mod tests {
 
     for header in REQUEST_ID_HEADERS.iter() {
       let name = HeaderName::try_from(*header).unwrap();
-      assert!(
-        !is_router_owned_header(&name),
-        "{header} should NOT be router-owned"
-      );
+      assert!(!is_router_owned_header(&name), "{header} should NOT be router-owned");
     }
 
     for header in SESSION_ID_HEADERS.iter() {
       let name = HeaderName::try_from(*header).unwrap();
-      assert!(
-        !is_router_owned_header(&name),
-        "{header} should NOT be router-owned"
-      );
+      assert!(!is_router_owned_header(&name), "{header} should NOT be router-owned");
     }
 
     for header in PROJECT_ID_HEADERS.iter() {
       let name = HeaderName::try_from(*header).unwrap();
-      assert!(
-        !is_router_owned_header(&name),
-        "{header} should NOT be router-owned"
-      );
+      assert!(!is_router_owned_header(&name), "{header} should NOT be router-owned");
     }
   }
 }

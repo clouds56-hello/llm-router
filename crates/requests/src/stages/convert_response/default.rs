@@ -89,14 +89,13 @@ impl ConvertResponseStage for DefaultConvertResponse {
     let (body_json, body_bytes) = if upstream_endpoint == inbound_endpoint {
       (upstream_json, body)
     } else {
-      let translated = llm_convert::convert_response(upstream_endpoint, inbound_endpoint, &upstream_json).map_err(
-        |source| {
+      let translated =
+        llm_convert::convert_response(upstream_endpoint, inbound_endpoint, &upstream_json).map_err(|source| {
           PipelineError::permanent(
             crate::event::Stage::ConvertResponse,
             RequestsError::ResponseConversion { source },
           )
-        },
-      )?;
+        })?;
       let bytes = serde_json::to_vec(&translated).map(Bytes::from).map_err(|source| {
         PipelineError::permanent(
           crate::event::Stage::ConvertResponse,
@@ -154,12 +153,14 @@ impl ConvertResponseStage for DefaultConvertResponse {
             if !usage_has_any(&parsed) {
               continue;
             }
-            tap_events.emit(llm_core::event::Event::Requests(llm_core::request_event::RequestEvent {
-              request_id: tap_request_id.clone(),
-              attempt: tap_attempt,
-              ts: llm_core::util::now_unix_ms(),
-              payload: llm_core::request_event::RequestEventPayload::Record(RecordEvent::Usage(parsed)),
-            }));
+            tap_events.emit(llm_core::event::Event::Requests(
+              llm_core::request_event::RequestEvent {
+                request_id: tap_request_id.clone(),
+                attempt: tap_attempt,
+                ts: llm_core::util::now_unix_ms(),
+                payload: llm_core::request_event::RequestEventPayload::Record(RecordEvent::Usage(parsed)),
+              },
+            ));
           }
           ObserverMsg::Done | ObserverMsg::Error(_) => break,
           _ => {}
@@ -181,9 +182,9 @@ mod tests {
   use super::*;
   use crate::event::{EventBus, EventPayload};
   use crate::pipeline::stages::SentResponse;
-  use llm_core::request_event::RecordEvent;
   use futures_util::StreamExt;
   use llm_core::provider::Endpoint;
+  use llm_core::request_event::RecordEvent;
   use llm_headers::HeaderMap;
   use std::sync::Arc;
 

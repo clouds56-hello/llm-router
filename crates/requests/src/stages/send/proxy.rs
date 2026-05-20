@@ -193,8 +193,8 @@ mod tests {
   use super::*;
   use crate::event::EventBus;
   use crate::pipeline::config::RunConfig;
-  use crate::pipeline::stages::{BuiltHeaders, ConvertedRequest, Extracted, Resolved};
   use crate::pipeline::stages::ResolveStage;
+  use crate::pipeline::stages::{BuiltHeaders, ConvertedRequest, Extracted, Resolved};
   use crate::stages::resolve::proxy::ProxyResolve;
   use bytes::Bytes;
   use llm_core::provider::Endpoint;
@@ -245,9 +245,15 @@ mod tests {
 
   fn fake_headers() -> BuiltHeaders {
     let mut h = HeaderMap::new();
-    h.insert(HeaderName::new("authorization"), HeaderValue::from_static("Bearer client-token"));
+    h.insert(
+      HeaderName::new("authorization"),
+      HeaderValue::from_static("Bearer client-token"),
+    );
     h.insert(HeaderName::new("user-agent"), HeaderValue::from_static("test"));
-    BuiltHeaders { headers: h, vars: Default::default() }
+    BuiltHeaders {
+      headers: h,
+      vars: Default::default(),
+    }
   }
 
   #[tokio::test]

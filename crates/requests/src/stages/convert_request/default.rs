@@ -44,9 +44,8 @@ impl ConvertRequestStage for DefaultConvertRequest {
     let mut upstream_body = rewrite_model(&extracted.body_json, resolved.upstream_model.as_str());
 
     if resolved.upstream_endpoint != ctx.endpoint {
-      upstream_body = llm_convert::convert_request(ctx.endpoint, resolved.upstream_endpoint, &upstream_body).map_err(
-        |source| perm(RequestsError::RequestConversion { source }),
-      )?;
+      upstream_body = llm_convert::convert_request(ctx.endpoint, resolved.upstream_endpoint, &upstream_body)
+        .map_err(|source| perm(RequestsError::RequestConversion { source }))?;
     }
 
     if let Some(transformer) = resolved.account_handle.provider.input_transformer() {
@@ -56,8 +55,7 @@ impl ConvertRequestStage for DefaultConvertRequest {
     }
 
     let debug_outbound_body = Bytes::from(
-      serde_json::to_vec(&upstream_body)
-        .map_err(|source| perm(RequestsError::SerializeUpstreamBody { source }))?,
+      serde_json::to_vec(&upstream_body).map_err(|source| perm(RequestsError::SerializeUpstreamBody { source }))?,
     );
 
     let unchanged = upstream_body == *extracted.body_json;

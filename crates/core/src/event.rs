@@ -1,7 +1,7 @@
 use crate::db::Usage;
 use crate::request_event::RequestEvent;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use tokio::sync::{broadcast, oneshot};
 
 /// Top-level event flowing on the in-process broadcast bus.
@@ -123,7 +123,10 @@ impl EventBus {
 
   /// Gracefully shut down the event bus, waiting for the consumer to drain.
   pub async fn shutdown(&self) {
-    tracing::info!("shutting down event bus, waiting for active finalizers to finish... (active={})", self.active_finalizers.load(Ordering::Acquire));
+    tracing::info!(
+      "shutting down event bus, waiting for active finalizers to finish... (active={})",
+      self.active_finalizers.load(Ordering::Acquire)
+    );
     while self.active_finalizers.load(Ordering::Acquire) != 0 {
       tokio::task::yield_now().await;
     }

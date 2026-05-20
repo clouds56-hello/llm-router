@@ -1,14 +1,14 @@
 //! Integration tests for the requests event-driven persistence handler.
 
 use bytes::Bytes;
-use llm_core::event::{Event, EventHandler};
 use llm_core::db::{Usage, UsageDetails};
+use llm_core::event::{Event, EventHandler};
 use llm_core::provider::Endpoint;
-use llm_core::request_event::RecordEvent;
 use llm_core::request_event::stage::{
   BuiltHeadersSummary, ConvertedRequestSummary, ConvertedResponseSummary, ExtractedSummary, ResolvedSummary,
   SentSummary, Stage, StageEvent,
 };
+use llm_core::request_event::RecordEvent;
 use llm_core::request_event::{EndpointLabel, RequestEvent, RequestEventPayload};
 use llm_headers::{HeaderMap, TemplateVars};
 use llm_persistence::RequestEventHandler;
@@ -344,7 +344,10 @@ fn inbound_connection_record_updates_connection_fields() {
   assert_eq!(as_text(&row["mode"]).as_deref(), Some("route"));
   assert_eq!(as_text(&row["method"]).as_deref(), Some("requests"));
   assert_eq!(as_text(&row["inbound_req_method"]).as_deref(), Some("POST"));
-  assert_eq!(as_text(&row["inbound_req_url"]).as_deref(), Some("https://example.test/v1/responses"));
+  assert_eq!(
+    as_text(&row["inbound_req_url"]).as_deref(),
+    Some("https://example.test/v1/responses")
+  );
 }
 
 #[test]
@@ -371,7 +374,10 @@ fn record_without_started_bootstraps_row() {
   assert_eq!(as_text(&row["mode"]).as_deref(), Some("route"));
   assert_eq!(as_text(&row["method"]).as_deref(), Some("requests"));
   assert_eq!(as_text(&row["inbound_req_method"]).as_deref(), Some("POST"));
-  assert_eq!(as_text(&row["inbound_req_url"]).as_deref(), Some("https://example.test/v1/responses"));
+  assert_eq!(
+    as_text(&row["inbound_req_url"]).as_deref(),
+    Some("https://example.test/v1/responses")
+  );
 }
 
 #[test]

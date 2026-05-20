@@ -147,7 +147,8 @@ impl RequestsDb {
   }
 
   pub(crate) fn latency_since_start(&self, request_id: &str, ts_now: i64) -> i64 {
-    self.request_meta
+    self
+      .request_meta
       .get(request_id)
       .map(|m| ts_now - m.started_at_ms)
       .unwrap_or(0)

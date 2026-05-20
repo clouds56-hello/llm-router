@@ -150,9 +150,7 @@ pub async fn proxy_passthrough_via_pipeline_inner(
   // Fallback to the bare intercepted host (not host:port and not the
   // full URL) so the synthetic provider_id stays stable across
   // requests to different paths/ports on the same upstream.
-  let resolved_provider_id = identity
-    .provider_id
-    .unwrap_or_else(|| intercepted_host.to_string());
+  let resolved_provider_id = identity.provider_id.unwrap_or_else(|| intercepted_host.to_string());
 
   // Emit InboundConnection so persistence populates `local_addr`,
   // `peer_addr`, `mode`, `method`, `inbound_req_method`, and
@@ -221,7 +219,12 @@ pub async fn proxy_passthrough_via_pipeline_inner(
 fn resolve_host_with_port(parts: &Parts, intercepted_host: &str, intercepted_port: u16, scheme: &str) -> String {
   let (host, port) = if let Some(auth) = parts.uri.authority() {
     (auth.host().to_string(), auth.port_u16())
-  } else if let Some((h, p)) = parts.headers.get(HOST).and_then(|v| v.to_str().ok()).map(split_host_port) {
+  } else if let Some((h, p)) = parts
+    .headers
+    .get(HOST)
+    .and_then(|v| v.to_str().ok())
+    .map(split_host_port)
+  {
     (h, p)
   } else {
     (intercepted_host.to_string(), Some(intercepted_port))
@@ -245,9 +248,7 @@ fn split_host_port(value: &str) -> (String, Option<u16>) {
     }
   }
   match trimmed.rsplit_once(':') {
-    Some((h, p)) if !h.is_empty() && p.chars().all(|c| c.is_ascii_digit()) => {
-      (h.to_string(), p.parse().ok())
-    }
+    Some((h, p)) if !h.is_empty() && p.chars().all(|c| c.is_ascii_digit()) => (h.to_string(), p.parse().ok()),
     _ => (trimmed.to_string(), None),
   }
 }
@@ -338,18 +339,12 @@ mod tests {
   #[test]
   fn ipv6_host_header_with_port() {
     let p = parts_with("/v1/x", Some("[::1]:8443"));
-    assert_eq!(
-      resolve_host_with_port(&p, "intercepted", 443, "https"),
-      "[::1]:8443"
-    );
+    assert_eq!(resolve_host_with_port(&p, "intercepted", 443, "https"), "[::1]:8443");
   }
 
   #[test]
   fn ipv6_host_header_default_port_stripped() {
     let p = parts_with("/v1/x", Some("[::1]:443"));
-    assert_eq!(
-      resolve_host_with_port(&p, "intercepted", 443, "https"),
-      "[::1]"
-    );
+    assert_eq!(resolve_host_with_port(&p, "intercepted", 443, "https"), "[::1]");
   }
 }

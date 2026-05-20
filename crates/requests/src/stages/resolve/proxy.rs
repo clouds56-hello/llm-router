@@ -47,12 +47,7 @@ impl ResolveStage for ProxyResolve {
   async fn resolve(&self, ctx: &PipelineCtx, extracted: &Extracted) -> Result<Resolved, PipelineError> {
     let host = ctx.config.get_str(keys::HOST).ok_or_else(|| {
       let msg = format!("proxy passthrough pipeline requires `{}` in RunConfig", keys::HOST);
-      PipelineError::permanent(
-        Stage::Resolve,
-        RequestsError::Other {
-          source: msg.into(),
-        },
-      )
+      PipelineError::permanent(Stage::Resolve, RequestsError::Other { source: msg.into() })
     })?;
     let provider_id = ctx.config.get_str(keys::PROVIDER_ID).unwrap_or(host);
     let account_id = ctx.config.get_str(keys::ACCOUNT_ID).unwrap_or("proxy");
@@ -190,9 +185,7 @@ mod tests {
 
   #[tokio::test]
   async fn reads_host_from_config() {
-    let cfg = RunConfig::builder()
-      .with_str(keys::HOST, "api.openai.com")
-      .build();
+    let cfg = RunConfig::builder().with_str(keys::HOST, "api.openai.com").build();
     let res = ProxyResolve.resolve(&ctx_with(cfg), &fake_extracted()).await.unwrap();
     assert_eq!(res.account_id, "proxy");
     assert_eq!(res.provider_id, "api.openai.com");

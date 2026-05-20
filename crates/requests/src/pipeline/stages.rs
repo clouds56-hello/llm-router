@@ -96,39 +96,45 @@ impl AccumHelper {
         }
       }
 
-      events.emit(llm_core::event::Event::Requests(llm_core::request_event::RequestEvent {
-        request_id: request_id.clone(),
-        attempt,
-        ts: llm_core::util::now_unix_ms(),
-        payload: llm_core::request_event::RequestEventPayload::Record(
-          llm_core::request_event::RecordEvent::UpstreamBody {
-            body: Bytes::from(upstream),
-            error: upstream_error,
-          },
-        ),
-      }));
-      events.emit(llm_core::event::Event::Requests(llm_core::request_event::RequestEvent {
-        request_id: request_id.clone(),
-        attempt,
-        ts: llm_core::util::now_unix_ms(),
-        payload: llm_core::request_event::RequestEventPayload::Record(
-          llm_core::request_event::RecordEvent::ConvertedBody {
-            body: Bytes::from(converted),
-            error: converted_error,
-          },
-        ),
-      }));
-      events.emit(llm_core::event::Event::Requests(llm_core::request_event::RequestEvent {
-        request_id,
-        attempt,
-        ts: llm_core::util::now_unix_ms(),
-        payload: llm_core::request_event::RequestEventPayload::Stage(
-          llm_core::request_event::StageEvent::Completed {
-            success: true,
-            attempts,
-          },
-        ),
-      }));
+      events.emit(llm_core::event::Event::Requests(
+        llm_core::request_event::RequestEvent {
+          request_id: request_id.clone(),
+          attempt,
+          ts: llm_core::util::now_unix_ms(),
+          payload: llm_core::request_event::RequestEventPayload::Record(
+            llm_core::request_event::RecordEvent::UpstreamBody {
+              body: Bytes::from(upstream),
+              error: upstream_error,
+            },
+          ),
+        },
+      ));
+      events.emit(llm_core::event::Event::Requests(
+        llm_core::request_event::RequestEvent {
+          request_id: request_id.clone(),
+          attempt,
+          ts: llm_core::util::now_unix_ms(),
+          payload: llm_core::request_event::RequestEventPayload::Record(
+            llm_core::request_event::RecordEvent::ConvertedBody {
+              body: Bytes::from(converted),
+              error: converted_error,
+            },
+          ),
+        },
+      ));
+      events.emit(llm_core::event::Event::Requests(
+        llm_core::request_event::RequestEvent {
+          request_id,
+          attempt,
+          ts: llm_core::util::now_unix_ms(),
+          payload: llm_core::request_event::RequestEventPayload::Stage(
+            llm_core::request_event::StageEvent::Completed {
+              success: true,
+              attempts,
+            },
+          ),
+        },
+      ));
       guard.finish();
     });
     Self { tx }
@@ -376,7 +382,8 @@ impl std::fmt::Debug for ConvertedResponse {
     dbg.field("status", &self.status).field("headers", &self.headers);
     match &self.body {
       ConvertedBody::Buffered { body_bytes, .. } => {
-        dbg.field("kind", &"buffered")
+        dbg
+          .field("kind", &"buffered")
           .field("body_bytes_len", &body_bytes.len());
       }
       ConvertedBody::Stream { .. } => {
@@ -460,11 +467,7 @@ pub trait ConvertResponseStage: Send + Sync {
     sent.stream
   }
 
-  async fn convert_response(
-    &self,
-    ctx: &PipelineCtx,
-    sent: SentResponse,
-  ) -> Result<ConvertedResponse, PipelineError> {
+  async fn convert_response(&self, ctx: &PipelineCtx, sent: SentResponse) -> Result<ConvertedResponse, PipelineError> {
     let is_sse = self.is_sse_response(ctx, &sent);
     let SentResponse {
       status,

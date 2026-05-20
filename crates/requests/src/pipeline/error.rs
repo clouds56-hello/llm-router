@@ -188,12 +188,7 @@ mod tests {
 
   #[test]
   fn displays_stage_and_source_message() {
-    let err = PipelineError::permanent(
-      Stage::Resolve,
-      RequestsError::Other {
-        source: Box::new(Boom),
-      },
-    );
+    let err = PipelineError::permanent(Stage::Resolve, RequestsError::Other { source: Box::new(Boom) });
     assert_eq!(err.to_string(), "[resolve] boom");
     assert!(matches!(err.inner(), RequestsError::Other { .. }));
   }

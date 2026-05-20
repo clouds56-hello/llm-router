@@ -359,14 +359,9 @@ impl ProgressEventHandler {
       RequestEventPayload::Stage(StageEvent::Completed { success, attempts }) => {
         if let Some(state) = self.bars.remove(&composite_id) {
           let latency_ms = state.request.started.elapsed().as_millis() as u64;
-          let final_msg = state.request.render_completed(
-            &composite_id,
-            *success,
-            *attempts,
-            None,
-            latency_ms,
-            None,
-          );
+          let final_msg = state
+            .request
+            .render_completed(&composite_id, *success, *attempts, None, latency_ms, None);
           state.bar.disable_steady_tick();
           let _ = self.multi.println(final_msg);
           state.bar.finish_and_clear();

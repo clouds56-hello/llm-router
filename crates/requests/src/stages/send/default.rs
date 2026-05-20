@@ -177,7 +177,9 @@ impl SendStage for DefaultSend {
 fn classify_provider_error(err: llm_core::provider::Error) -> PipelineError {
   use llm_core::provider::Error as E;
   let recoverable = matches!(&err, E::Http { .. });
-  let source = RequestsError::Provider { source: ProviderError::new(err) };
+  let source = RequestsError::Provider {
+    source: ProviderError::new(err),
+  };
   if recoverable {
     PipelineError::recoverable(Stage::Send, source)
   } else {

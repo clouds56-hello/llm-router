@@ -8,5 +8,7 @@ pub mod translate;
 pub use accumulate::{accumulate, SseAccumulator};
 pub use codec::{encode_done, encode_sse};
 pub use event::SseEvent;
-pub use pipeline::{observer_channel, EventTransformer, ObserverMsg, ObserverReceiver, ObserverSender, SsePipeline, TapKinds};
+pub use pipeline::{
+  observer_channel, EventTransformer, ObserverMsg, ObserverReceiver, ObserverSender, SsePipeline, TapKinds,
+};
 pub use translate::EndpointTranslator;
