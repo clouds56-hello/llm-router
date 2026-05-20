@@ -5,7 +5,7 @@
 //! The `stop` flag distinguishes a *requested* short-circuit (a stage chose
 //! to halt the pipeline without producing a response — e.g. a dry-run Send
 //! stub) from a *real* failure. The runner treats both identically (emits
-//! `Error` + `Completed { success: false }` and short-circuits), but
+//! `Error` + `Completed { success = false }` and short-circuits), but
 //! callers can branch on `err.stop` to render a successful dry-run report
 //! instead of a failure report. State accumulated up to the stop point is
 //! available to subscribers on the [`EventBus`] — each per-stage event
@@ -26,6 +26,11 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub))]
 pub enum RequestsError {
+  #[snafu(display("{source}"))]
+  Resolve {
+    source: llm_accounts::routing::ResolveError,
+  },
+
   #[snafu(display("session expired: {session_id}"))]
   SessionExpired { session_id: SmolStr },
 
@@ -62,15 +67,56 @@ pub enum RequestsError {
   #[snafu(display("reading upstream body: {source}"))]
   ReadingUpstreamBody { source: reqwest::Error },
 
+  #[snafu(display("{source}"))]
+  Provider { source: ProviderError },
+
   #[snafu(display("dry-run profile stopped before contacting upstream"))]
   Stop,
+
+  #[snafu(display("{source}"))]
+  Other { source: BoxError },
+}
+
+/// Chain-formatted wrapper for [`llm_core::provider::Error`]. Reqwest's
+/// top-level `Display` hides the underlying transport cause (DNS failure,
+/// TLS error, connection refused, etc.); this wrapper walks the full
+/// `std::error::Error::source()` chain so the root cause is visible.
+#[derive(Debug)]
+pub struct ProviderError(llm_core::provider::Error);
+
+impl ProviderError {
+  pub fn new(err: llm_core::provider::Error) -> Self {
+    Self(err)
+  }
+
+  pub fn inner(&self) -> &llm_core::provider::Error {
+    &self.0
+  }
+}
+
+impl std::fmt::Display for ProviderError {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    let mut src: &dyn std::error::Error = &self.0;
+    write!(f, "{}", src)?;
+    while let Some(cause) = src.source() {
+      write!(f, ": {cause}")?;
+      src = cause;
+    }
+    Ok(())
+  }
+}
+
+impl std::error::Error for ProviderError {
+  fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+    Some(&self.0)
+  }
 }
 
 #[derive(Debug)]
 pub struct PipelineError {
   pub stage: Stage,
-  source: BoxError,
-  /// `true` iff a retry-style decorator may sensibly re-invoke the stage.
+  inner: RequestsError,
+  /// `true` iff a retry-style decorators may sensibly re-invoke the stage.
   /// Permanent failures (bad request, 4xx, unknown model) set this to
   /// `false`. Always `false` when `stop == true`.
   pub recoverable: bool,
@@ -81,25 +127,19 @@ pub struct PipelineError {
 }
 
 impl PipelineError {
-  pub fn permanent<E>(stage: Stage, source: E) -> Self
-  where
-    E: std::error::Error + Send + Sync + 'static,
-  {
+  pub fn permanent(stage: Stage, inner: RequestsError) -> Self {
     Self {
       stage,
-      source: Box::new(source),
+      inner,
       recoverable: false,
       stop: false,
     }
   }
 
-  pub fn recoverable<E>(stage: Stage, source: E) -> Self
-  where
-    E: std::error::Error + Send + Sync + 'static,
-  {
+  pub fn recoverable(stage: Stage, inner: RequestsError) -> Self {
     Self {
       stage,
-      source: Box::new(source),
+      inner,
       recoverable: true,
       stop: false,
     }
@@ -111,31 +151,30 @@ impl PipelineError {
   pub fn stop(stage: Stage) -> Self {
     Self {
       stage,
-      source: Box::new(RequestsError::Stop),
+      inner: RequestsError::Stop,
       recoverable: false,
       stop: true,
     }
   }
 
-  pub fn source_ref(&self) -> &(dyn std::error::Error + 'static) {
-    self.source.as_ref()
+  pub fn inner(&self) -> &RequestsError {
+    &self.inner
   }
 
   pub fn message(&self) -> std::borrow::Cow<'_, str> {
-    let s = self.source.to_string();
-    std::borrow::Cow::Owned(s)
+    std::borrow::Cow::Owned(self.inner.to_string())
   }
 }
 
 impl std::fmt::Display for PipelineError {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    write!(f, "[{}] {}", self.stage, self.source)
+    write!(f, "[{}] {}", self.stage, self.inner)
   }
 }
 
 impl std::error::Error for PipelineError {
   fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-    Some(self.source_ref())
+    Some(&self.inner)
   }
 }
 
@@ -148,10 +187,14 @@ mod tests {
   struct Boom;
 
   #[test]
-  fn preserves_inner_error_as_source() {
-    let err = PipelineError::permanent(Stage::Resolve, Boom);
-    let source = err.source_ref();
-    assert!(source.downcast_ref::<Boom>().is_some());
+  fn displays_stage_and_source_message() {
+    let err = PipelineError::permanent(
+      Stage::Resolve,
+      RequestsError::Other {
+        source: Box::new(Boom),
+      },
+    );
     assert_eq!(err.to_string(), "[resolve] boom");
+    assert!(matches!(err.inner(), RequestsError::Other { .. }));
   }
 }

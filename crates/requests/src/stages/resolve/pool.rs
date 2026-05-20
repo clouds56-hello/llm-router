@@ -13,7 +13,7 @@
 use super::stage::{AccountSelector, SelectorOutcome};
 use crate::event::Stage;
 use crate::pipeline::ctx::PipelineCtx;
-use crate::pipeline::error::PipelineError;
+use crate::pipeline::error::{PipelineError, RequestsError};
 use crate::pipeline::stages::Extracted;
 use async_trait::async_trait;
 use llm_accounts::{AccountPool, EndpointAcquire, RouteResolver};
@@ -40,7 +40,7 @@ impl AccountSelector for PoolAccountSelector {
     let route = self
       .resolver
       .resolve(extracted.model.as_str(), extracted.route_mode_hint.as_deref())
-      .map_err(|e| PipelineError::permanent(Stage::Resolve, e))?;
+      .map_err(|e| PipelineError::permanent(Stage::Resolve, RequestsError::Resolve { source: e }))?;
 
     match self
       .pool

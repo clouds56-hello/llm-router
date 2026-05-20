@@ -16,7 +16,7 @@
 
 use crate::event::Stage;
 use crate::pipeline::ctx::PipelineCtx;
-use crate::pipeline::error::{PipelineError, RequestsError};
+use crate::pipeline::error::{PipelineError, ProviderError, RequestsError};
 use crate::pipeline::stages::{BuiltHeaders, ConvertedRequest, Extracted, Resolved, SendStage, SentResponse};
 use async_trait::async_trait;
 use llm_core::provider::{new_outbound_capture, Endpoint, RequestCtx};
@@ -177,31 +177,11 @@ impl SendStage for DefaultSend {
 fn classify_provider_error(err: llm_core::provider::Error) -> PipelineError {
   use llm_core::provider::Error as E;
   let recoverable = matches!(&err, E::Http { .. });
+  let source = RequestsError::Provider { source: ProviderError::new(err) };
   if recoverable {
-    PipelineError::recoverable(Stage::Send, ProviderChainError(err))
+    PipelineError::recoverable(Stage::Send, source)
   } else {
-    PipelineError::permanent(Stage::Send, ProviderChainError(err))
-  }
-}
-
-#[derive(Debug)]
-struct ProviderChainError(llm_core::provider::Error);
-
-impl std::fmt::Display for ProviderChainError {
-  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    let mut src: &dyn std::error::Error = &self.0;
-    write!(f, "{}", src)?;
-    while let Some(cause) = src.source() {
-      write!(f, ": {cause}")?;
-      src = cause;
-    }
-    Ok(())
-  }
-}
-
-impl std::error::Error for ProviderChainError {
-  fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-    Some(&self.0)
+    PipelineError::permanent(Stage::Send, source)
   }
 }
 
@@ -315,8 +295,7 @@ mod tests {
       .unwrap_err();
     assert_eq!(err.stage, Stage::Send);
     assert!(err.recoverable);
-    let src = err.source_ref().downcast_ref::<RequestsError>().unwrap();
-    match src {
+    match err.inner() {
       RequestsError::UpstreamStatus { status, .. } => assert_eq!(*status, 503),
       other => panic!("expected UpstreamStatus, got {other:?}"),
     }
@@ -339,8 +318,7 @@ mod tests {
       .unwrap_err();
     assert_eq!(err.stage, Stage::Send);
     assert!(!err.recoverable);
-    let src = err.source_ref().downcast_ref::<RequestsError>().unwrap();
-    match src {
+    match err.inner() {
       RequestsError::UpstreamStatus { status, .. } => assert_eq!(*status, 401),
       other => panic!("expected UpstreamStatus, got {other:?}"),
     }

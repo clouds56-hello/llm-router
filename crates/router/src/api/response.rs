@@ -1,6 +1,5 @@
 //! Adapter helpers for materializing a [`llm_requests::ConvertedResponse`]
-//! into an axum `Response`. Used only by the experimental chat-completions
-//! pipeline POC path gated on `LLM_ROUTER_USE_PIPELINE=chat`.
+//! into an axum `Response` for the router's default `llm-requests` path.
 //!
 //! Mirrors the response-header shape produced by
 //! [`crate::relay::buffered_response`] / [`crate::relay::stream_response`]:
