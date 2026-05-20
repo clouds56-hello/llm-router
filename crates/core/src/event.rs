@@ -1,7 +1,5 @@
-use crate::db::{MessageRecord, SessionSource, Usage};
+use crate::db::Usage;
 use crate::request_event::RequestEvent;
-use bytes::Bytes;
-use llm_headers::HeaderMap;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::{broadcast, oneshot};
@@ -19,9 +17,6 @@ use tokio::sync::{broadcast, oneshot};
 /// inner enum (e.g. `RequestEvent`) which still derives `Clone`.
 #[derive(Debug)]
 pub enum Event {
-  /// Inbound request lifecycle events.
-  #[deprecated(note = "moved to llm_core::request_event::RequestEvent")]
-  LegacyRequest(LegacyRequestEvent),
   /// Account / pool lifecycle events.
   Account(AccountEvent),
   /// Session lifecycle events.
@@ -51,129 +46,6 @@ pub enum Event {
     usage: Usage,
     bytes_streamed: u64,
     chunks: u64,
-  },
-}
-
-/// Inbound request lifecycle. Each variant corresponds to a well-defined
-/// point in the gateway's per-request state machine.
-#[derive(Debug)]
-#[deprecated(note = "moved to llm_core::request_event::RequestEvent")]
-pub enum LegacyRequestEvent {
-  /// Request accepted. Emitted before body decode/parse begins.
-  Started {
-    request_id: String,
-    ts: i64,
-    endpoint: String,
-    session_id: Option<String>,
-    peer_addr: Option<String>,
-    local_addr: Option<String>,
-    method: String,
-    inbound_method: String,
-    url: Option<String>,
-  },
-
-  /// Request headers parsed/classified (before body parse).
-  Headers {
-    request_id: String,
-    ts: i64,
-    endpoint_hint: Option<String>,
-    path: Option<String>,
-    session_id: Option<String>,
-    project_id: Option<String>,
-    header_initiator: Option<String>,
-    local_addr: Option<String>,
-    mode: Option<String>,
-    route_mode_hint: Option<String>,
-    inbound_headers: HeaderMap,
-  },
-
-  /// Request routed to an account, about to send upstream.
-  Parsed {
-    request_id: String,
-    /// Retry attempt number (0 = first attempt).
-    attempt: u32,
-    account_id: String,
-    provider_id: String,
-    model: String,
-    stream: bool,
-    initiator: String,
-    behave_as: Option<String>,
-    /// Post-decompression raw bytes of the inbound request body.
-    /// Empty for requests without a body. Used to populate
-    /// `CallRecord.inbound_req.body` and the `inbound_req_body` DB column.
-    inbound_body: Bytes,
-  },
-
-  /// Upstream response headers received.
-  ///
-  /// Carries the outbound request snapshot (method/url/headers/body) because
-  /// in routed mode it only becomes known after the upstream send completes.
-  /// Proxy passthrough also fills these for consistency.
-  Responded {
-    request_id: String,
-    /// Retry attempt number (0 = first attempt).
-    attempt: u32,
-    /// Upstream HTTP status code (us ← upstream).
-    outbound_status: u16,
-    /// Time from inbound request start until upstream response headers arrived.
-    latency_ms: u64,
-    /// Upstream response headers (the response we received from upstream).
-    outbound_resp_headers: HeaderMap,
-    /// Outbound request method (us → upstream). `None` if capture was unavailable.
-    outbound_req_method: Option<String>,
-    /// Outbound request URL.
-    outbound_req_url: Option<String>,
-    /// Outbound request headers actually sent upstream.
-    outbound_req_headers: Option<HeaderMap>,
-    /// Outbound request body actually sent upstream (post-encoding).
-    outbound_req_body: Option<Bytes>,
-  },
-
-  /// Per-attempt result with full response data.
-  /// Emitted once per attempt (including retries).
-  /// `request_id` is the base ID; `attempt` distinguishes retries.
-  Result {
-    request_id: String,
-    /// Retry attempt number (0 = first attempt).
-    attempt: u32,
-    session_source: SessionSource,
-    latency_ms: u64,
-    /// Inbound HTTP status code (us → client).
-    inbound_status: u16,
-    usage: Usage,
-    request_error: Option<String>,
-    /// Inbound response headers (us → client).
-    inbound_resp_headers: HeaderMap,
-    /// Inbound response body (us → client), possibly truncated.
-    inbound_resp_body: Bytes,
-    /// Outbound response body (upstream → us), possibly truncated.
-    /// Headers were already delivered on `RequestResponded`.
-    outbound_resp_body: Option<Bytes>,
-    messages: Vec<MessageRecord>,
-  },
-
-  /// Overall request completed (terminal outcome for the whole request).
-  /// Emitted exactly once per request, after all attempts.
-  Completed {
-    request_id: String,
-    /// Whether the request ultimately succeeded.
-    success: bool,
-    /// Total number of attempts made (1 = no retries, 2 = one retry, ...).
-    total_attempts: u32,
-    /// Final HTTP status code (None if no successful upstream response was reached).
-    final_status: Option<u16>,
-    /// Total latency from RequestStarted to completion.
-    total_latency_ms: u64,
-    /// Error message if `success == false`.
-    error: Option<String>,
-  },
-
-  /// A single attempt failed and will be retried.
-  Retry {
-    request_id: String,
-    /// The attempt number that just failed.
-    attempt: u32,
-    error: String,
   },
 }
 

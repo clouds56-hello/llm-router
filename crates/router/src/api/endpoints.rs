@@ -29,13 +29,10 @@ async fn handle(
         .and_then(|v| v.to_str().ok())
         .map(str::to_string)
     });
-  // Router-owned JSON endpoints run through llm-requests and skip legacy
+  // Router-owned JSON endpoints run through llm-requests and skip duplicate
   // lifecycle emission. The pipeline emits its own StageEvent/RecordEvent
-  // stream which RequestEventHandler consumes; emitting
-  // LegacyRequestEvent::Started here as well would cause DbEventHandler to
-  // insert a row first, then RequestEventHandler's INSERT on
-  // StageEvent::Started would hit a UNIQUE constraint and orphan
-  // subsequent stage UPDATEs.
+  // stream which RequestEventHandler consumes; emitting a second bootstrap
+  // event here would duplicate the request row before the pipeline begins.
   let mode = state.route.resolve_mode(hx.route_mode_hint.as_deref()).ok();
 
   state.events.emit(CoreEvent::Requests(RequestEvent {

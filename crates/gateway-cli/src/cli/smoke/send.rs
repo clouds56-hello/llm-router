@@ -147,9 +147,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
   // legacy `EventBus`. We reuse that same bus for requests events too — the
   // `build_event_bus` handler list already contains `RequestEventHandler`
   // (when `cfg.db.enabled`), so emitting `Event::Requests(_)` on it persists
-  // the smoke run into `requests/<YYYY-MM-DD>.db`. All legacy handlers
-  // (`DbEventHandler`, progress, archive) match only on legacy `Event::*`
-  // variants and ignore requests events.
+  // the smoke run into `requests/<YYYY-MM-DD>.db`.
   let (events, receiver, handlers, archive_runtime) = crate::server_runtime::build_event_bus(&cfg)?;
   let _event_thread = llm_core::event::spawn_event_loop(receiver, handlers);
   let state = crate::server_runtime::build_state(&cfg, &accounts, events.clone())?;
@@ -221,7 +219,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
   }
 
   // ---- Build the requests profile ----
-  // Reuse the legacy bus so `RequestEventHandler` persists smoke runs.
+  // Reuse the shared bus so `RequestEventHandler` persists smoke runs.
   let bus = events.clone();
   subscribe_event_printer(&bus);
   // Capture per-stage outputs so we can render dry-run / failure reports

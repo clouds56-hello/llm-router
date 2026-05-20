@@ -150,8 +150,9 @@ fn hash_part(part_type: &str, content: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::{CallRecord, HttpSnapshot, SessionSource, Usage};
+  use crate::{CallRecord, HttpSnapshot, Usage};
   use bytes::Bytes;
+  use llm_core::db::SessionSource;
 
   fn rec(session_id: &str, parts: Vec<(String, Bytes)>) -> CallRecord {
     CallRecord {

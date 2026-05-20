@@ -1,6 +1,5 @@
 use crate::config::Config;
 use crate::db::archive::{ArchiveEventHandler, ArchiveRuntime};
-use crate::db::{DbEventHandler, DbPaths};
 use crate::progress::{ArchiveProgressEventHandler, ProgressEventHandler, ProgressLogEventHandler};
 use anyhow::Result;
 use axum::Router;
@@ -15,8 +14,8 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
-/// Build the event bus and its handlers. The DB event handler is included
-/// when usage recording is enabled. A TTY progress handler is attached
+/// Build the event bus and its handlers. The requests-event persistence
+/// handler is included when usage recording is enabled. A TTY progress handler is attached
 /// automatically when stdout is a terminal.
 pub fn build_event_bus(
   cfg: &Config,
@@ -35,12 +34,6 @@ pub fn build_event_bus(
 
   if cfg.db.enabled {
     let paths = cfg.db.resolve_paths()?;
-    let db_handler = DbEventHandler::new(DbPaths {
-      usage_db: paths.usage_db,
-      sessions_db: paths.sessions_db,
-      requests_dir: paths.requests_dir.clone(),
-    })?;
-    handlers.push(Box::new(db_handler));
     let request_handler = llm_persistence::RequestEventHandler::new(paths.requests_dir)?;
     handlers.push(Box::new(request_handler));
   }

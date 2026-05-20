@@ -154,8 +154,8 @@ pub struct RowSummary {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::{HttpSnapshot, SessionSource, Usage};
-  use llm_core::db::CallRecord;
+  use crate::{HttpSnapshot, Usage};
+  use llm_core::db::{CallRecord, SessionSource};
 
   #[test]
   fn fresh_usage_db_records_correlation_ids() {

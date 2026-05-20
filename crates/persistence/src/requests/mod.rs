@@ -6,7 +6,7 @@
 //! `&mut RequestsDb` and use the helpers exposed here.
 //!
 //! Shared helpers (`composite_request_id`, `day_key`, `now_unix`,
-//! `open_day_db`, migration constants) live here so neither sibling
+//! `open_day_db`, migration constants) live here so the handler
 //! re-implements them.
 
 use crate::migrate;
@@ -17,10 +17,8 @@ use time::macros::format_description;
 
 use crate::Result;
 
-pub mod legacy;
 pub mod stages;
 
-pub use legacy::{HeadersUpdate, ParsedUpdate, RequestContext};
 pub use stages::RequestEventHandler;
 
 const CACHE_CAP: usize = 3;

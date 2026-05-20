@@ -12,7 +12,7 @@ use crate::db::archive::{ArchiveEvent, ArchiveEventHandler};
 use console::style;
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use llm_core::db::Usage;
-use llm_core::event::{Event, EventHandler, LegacyRequestEvent};
+use llm_core::event::{Event, EventHandler};
 use llm_core::request_event::{RequestEvent, RequestEventPayload, StageEvent};
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
@@ -194,19 +194,6 @@ struct BarState {
   request: RequestState,
 }
 
-fn endpoint_label(endpoint: &str, url: Option<&str>) -> String {
-  let endpoint = endpoint.trim();
-  if endpoint.is_empty() || endpoint.eq_ignore_ascii_case("unknown") {
-    url
-      .map(str::trim)
-      .filter(|value| !value.is_empty())
-      .unwrap_or("unknown")
-      .to_string()
-  } else {
-    endpoint.to_string()
-  }
-}
-
 fn truncate(s: &str, max: usize) -> &str {
   if s.len() <= max {
     s
@@ -335,99 +322,6 @@ impl Default for ProgressEventHandler {
 }
 
 impl ProgressEventHandler {
-  fn handle_legacy(&mut self, event: &LegacyRequestEvent) {
-    match event {
-      LegacyRequestEvent::Started {
-        request_id, endpoint, ..
-      } => {
-        // Insert above the footer.
-        let bar = self.multi.insert_before(&self.footer, ProgressBar::new_spinner());
-        bar.set_style(self.style.clone());
-        bar.enable_steady_tick(std::time::Duration::from_millis(120));
-        let state = BarState {
-          bar,
-          request: RequestState::new(endpoint_label(endpoint, None)),
-        };
-        self.bars.insert(request_id.clone(), state);
-        self.in_flight = self.in_flight.saturating_add(1);
-        self.refresh(request_id);
-        self.refresh_footer();
-      }
-      LegacyRequestEvent::Parsed {
-        request_id,
-        attempt,
-        account_id,
-        provider_id,
-        model,
-        inbound_body,
-        ..
-      } => {
-        if let Some(state) = self.bars.get_mut(request_id) {
-          state.request.provider = provider_id.clone();
-          state.request.model = model.clone();
-          state.request.account = account_id.clone();
-          state.request.attempt = *attempt;
-          state.request.sent_bytes = inbound_body.len() as u64;
-        }
-        self.refresh(request_id);
-      }
-      LegacyRequestEvent::Retry {
-        request_id, attempt, ..
-      } => {
-        if let Some(state) = self.bars.get_mut(request_id) {
-          // attempt N just failed; next try will be attempt+1.
-          state.request.attempt = attempt + 1;
-          state.request.recv_bytes = 0;
-        }
-        self.refresh(request_id);
-      }
-      LegacyRequestEvent::Result {
-        request_id,
-        inbound_resp_body,
-        usage,
-        ..
-      } => {
-        if let Some(state) = self.bars.get_mut(request_id) {
-          let body_len = inbound_resp_body.len() as u64;
-          if body_len > state.request.recv_bytes {
-            state.request.recv_bytes = body_len;
-          }
-          state.request.usage = usage.clone();
-        }
-      }
-      LegacyRequestEvent::Completed {
-        request_id,
-        success,
-        total_attempts,
-        final_status,
-        total_latency_ms,
-        error,
-      } => {
-        if let Some(state) = self.bars.remove(request_id) {
-          let final_msg = state.request.render_completed(
-            request_id,
-            *success,
-            *total_attempts,
-            *final_status,
-            *total_latency_ms,
-            error.as_deref(),
-          );
-          state.bar.disable_steady_tick();
-          let _ = self.multi.println(final_msg);
-          state.bar.finish_and_clear();
-        }
-        // Update counters.
-        self.in_flight = self.in_flight.saturating_sub(1);
-        self.completed = self.completed.saturating_add(1);
-        if !success {
-          self.errors = self.errors.saturating_add(1);
-        }
-        self.refresh_footer();
-      }
-      _ => {}
-    }
-  }
-
   fn handle_request(&mut self, event: &RequestEvent) {
     let request_id = event.request_id.as_str();
     let composite_id = if event.attempt == 0 {
@@ -492,7 +386,6 @@ impl ProgressEventHandler {
 impl EventHandler for ProgressEventHandler {
   fn handle(&mut self, event: &Event) {
     match event {
-      Event::LegacyRequest(e) => self.handle_legacy(e),
       Event::Requests(e) => self.handle_request(e),
       Event::StreamProgress {
         request_id,
@@ -761,84 +654,6 @@ impl ProgressLogEventHandler {
 }
 
 impl ProgressLogEventHandler {
-  pub fn handle_legacy(&mut self, event: &LegacyRequestEvent) {
-    match event {
-      LegacyRequestEvent::Started {
-        request_id, endpoint, ..
-      } => {
-        self
-          .requests
-          .insert(request_id.clone(), RequestState::new(endpoint_label(endpoint, None)));
-        self.in_flight = self.in_flight.saturating_add(1);
-      }
-      LegacyRequestEvent::Parsed {
-        request_id,
-        attempt,
-        account_id,
-        provider_id,
-        model,
-        inbound_body,
-        ..
-      } => {
-        if let Some(state) = self.requests.get_mut(request_id) {
-          state.provider = provider_id.clone();
-          state.model = model.clone();
-          state.account = account_id.clone();
-          state.attempt = *attempt;
-          state.sent_bytes = inbound_body.len() as u64;
-        }
-      }
-      LegacyRequestEvent::Retry {
-        request_id, attempt, ..
-      } => {
-        if let Some(state) = self.requests.get_mut(request_id) {
-          state.attempt = attempt + 1;
-          state.recv_bytes = 0;
-        }
-      }
-      LegacyRequestEvent::Result {
-        request_id,
-        inbound_resp_body,
-        usage,
-        ..
-      } => {
-        if let Some(state) = self.requests.get_mut(request_id) {
-          let body_len = inbound_resp_body.len() as u64;
-          if body_len > state.recv_bytes {
-            state.recv_bytes = body_len;
-          }
-          state.usage = usage.clone();
-        }
-      }
-      LegacyRequestEvent::Completed {
-        request_id,
-        success,
-        total_attempts,
-        final_status,
-        total_latency_ms,
-        error,
-      } => {
-        if let Some(state) = self.requests.remove(request_id) {
-          let line = state.render_completed(
-            request_id,
-            *success,
-            *total_attempts,
-            *final_status,
-            *total_latency_ms,
-            error.as_deref(),
-          );
-          self.write_line(&line);
-        }
-        self.in_flight = self.in_flight.saturating_sub(1);
-        self.completed = self.completed.saturating_add(1);
-        if !success {
-          self.errors = self.errors.saturating_add(1);
-        }
-      }
-      _ => {}
-    }
-  }
-
   fn handle_request(&mut self, event: &RequestEvent) {
     let request_id = event.request_id.as_str();
     let composite_id = if event.attempt == 0 {
@@ -884,7 +699,6 @@ impl ProgressLogEventHandler {
 impl EventHandler for ProgressLogEventHandler {
   fn handle(&mut self, event: &Event) {
     match event {
-      Event::LegacyRequest(e) => self.handle_legacy(e),
       Event::Requests(e) => self.handle_request(e),
       Event::StreamProgress {
         request_id,

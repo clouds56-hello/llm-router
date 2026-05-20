@@ -18,7 +18,6 @@ use llm_accounts::routing::{route_mode_as_str, RouteResolver};
 use llm_auth::descriptor::RewriteTarget;
 use llm_config::RouteMode;
 use llm_core::event::Event as CoreEvent;
-use llm_core::provider::Endpoint;
 use llm_core::request_event::{EndpointLabel, RecordEvent, RequestEvent, RequestEventPayload, Stage, StageEvent};
 use smol_str::SmolStr;
 use std::net::SocketAddr;
