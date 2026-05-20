@@ -1,10 +1,12 @@
 [package]
 name = "llm-persistence"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 description = "Persistence layer (sqlite writers, migrations, archival) for the llm-router workspace"
-license = "MIT OR Apache-2.0"
-readme = "../../README.md"
+documentation.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
 
 [features]
 default = ["lzma"]
