@@ -1,9 +1,9 @@
 //! Adapter helpers for materializing a [`llm_requests::ConvertedResponse`]
 //! into an axum `Response` for the router's default `llm-requests` path.
 //!
-//! Mirrors the response-header shape produced by
-//! [`crate::relay::buffered_response`] / [`crate::relay::stream_response`]:
-//! upstream headers are NOT forwarded verbatim. Instead a fresh header
+//! The router rebuilds response headers instead of forwarding upstream
+//! headers verbatim. A fresh header map is built containing only what the
+//! client needs (content-type for
 //! map is built containing only what the client needs (content-type for
 //! buffered JSON, SSE headers for streams). This avoids leaking
 //! `content-encoding: gzip` from the upstream while reqwest has already

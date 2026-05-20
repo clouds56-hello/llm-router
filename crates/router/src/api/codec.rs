@@ -1,6 +1,6 @@
 use super::error::ApiError;
-use axum::http::header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, VARY};
-use axum::http::{HeaderMap, HeaderValue};
+use axum::http::header::CONTENT_ENCODING;
+use axum::http::HeaderMap;
 use bytes::Bytes;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
@@ -30,7 +30,6 @@ pub(crate) struct DecodedJsonRequest {
   /// content-encoding was applied, otherwise the inflated payload.
   pub decoded_body: Bytes,
   pub value: Value,
-  pub encoding: Option<ContentEncodingKind>,
 }
 
 pub(crate) fn decode_json_request(headers: &HeaderMap, raw_body: Bytes) -> Result<DecodedJsonRequest, ApiError> {
@@ -42,7 +41,6 @@ pub(crate) fn decode_json_request(headers: &HeaderMap, raw_body: Bytes) -> Resul
     raw_body,
     decoded_body: decoded,
     value,
-    encoding,
   })
 }
 
@@ -94,58 +92,6 @@ pub(crate) fn request_content_encoding(headers: &HeaderMap) -> Result<Option<Con
   }
 }
 
-pub(crate) fn negotiate_response_encoding(headers: &HeaderMap) -> Option<ContentEncodingKind> {
-  let value = headers.get(ACCEPT_ENCODING)?.to_str().ok()?;
-  let mut best: Option<(ContentEncodingKind, f32)> = None;
-  for entry in value.split(',') {
-    let mut parts = entry.split(';').map(str::trim);
-    let token = parts.next()?.to_ascii_lowercase();
-    let mut q = 1.0_f32;
-    for param in parts {
-      if let Some(rest) = param.strip_prefix("q=") {
-        q = rest.parse::<f32>().ok().unwrap_or(0.0);
-      }
-    }
-    if q <= 0.0 {
-      continue;
-    }
-    let Some(encoding) = (match token.as_str() {
-      "gzip" => Some(ContentEncodingKind::Gzip),
-      "zstd" => Some(ContentEncodingKind::Zstd),
-      _ => None,
-    }) else {
-      continue;
-    };
-    match best {
-      None => best = Some((encoding, q)),
-      Some((_, best_q)) if q > best_q => best = Some((encoding, q)),
-      Some((ContentEncodingKind::Gzip, best_q)) if q == best_q && encoding == ContentEncodingKind::Zstd => {
-        best = Some((encoding, q))
-      }
-      _ => {}
-    }
-  }
-  best.map(|(encoding, _)| encoding)
-}
-
-pub(crate) fn maybe_compress_buffered_response(
-  request_headers: &HeaderMap,
-  response_headers: &mut HeaderMap,
-  body: Bytes,
-) -> Result<Bytes, String> {
-  if body.is_empty() || response_headers.contains_key(CONTENT_ENCODING) {
-    return Ok(body);
-  }
-  let Some(encoding) = negotiate_response_encoding(request_headers) else {
-    return Ok(body);
-  };
-  let compressed = encode_body_bytes(body.as_ref(), Some(encoding))?;
-  response_headers.insert(CONTENT_ENCODING, HeaderValue::from_static(encoding.as_str()));
-  response_headers.remove(CONTENT_LENGTH);
-  response_headers.insert(VARY, HeaderValue::from_static("accept-encoding"));
-  Ok(compressed)
-}
-
 fn decode_body_bytes(body: Bytes, encoding: Option<ContentEncodingKind>) -> Result<Bytes, ApiError> {
   match encoding {
     None => Ok(body),
@@ -167,13 +113,7 @@ fn decode_body_bytes(body: Bytes, encoding: Option<ContentEncodingKind>) -> Resu
 mod tests {
   use super::*;
   use axum::response::IntoResponse;
-
-  #[test]
-  fn negotiate_prefers_highest_q_then_zstd() {
-    let mut headers = HeaderMap::new();
-    headers.insert(ACCEPT_ENCODING, HeaderValue::from_static("gzip;q=0.8, zstd;q=0.8"));
-    assert_eq!(negotiate_response_encoding(&headers), Some(ContentEncodingKind::Zstd));
-  }
+  use http::HeaderValue;
 
   #[test]
   fn gzip_round_trip() {
@@ -206,17 +146,4 @@ mod tests {
     );
   }
 
-  #[test]
-  fn compresses_buffered_response_for_supported_accept_encoding() {
-    let mut request_headers = HeaderMap::new();
-    request_headers.insert(ACCEPT_ENCODING, HeaderValue::from_static("gzip"));
-    let mut response_headers = HeaderMap::new();
-    let body = Bytes::from_static(br#"{"ok":true}"#);
-    let compressed = maybe_compress_buffered_response(&request_headers, &mut response_headers, body.clone()).unwrap();
-    assert_ne!(compressed, body);
-    assert_eq!(
-      response_headers.get(CONTENT_ENCODING).and_then(|v| v.to_str().ok()),
-      Some("gzip")
-    );
-  }
 }

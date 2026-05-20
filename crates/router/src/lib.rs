@@ -3,7 +3,6 @@ use anyhow::{anyhow, Result};
 pub mod api;
 pub mod pipeline;
 pub mod proxy;
-pub mod relay;
 
 pub use llm_accounts as accounts;
 pub use llm_config as config;

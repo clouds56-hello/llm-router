@@ -1,44 +1,15 @@
 use crate::api::error::ApiError;
 use crate::api::AppState;
 use crate::pipeline::parse::RequestParser;
-use crate::provider::{new_outbound_capture, Endpoint, RequestCtx};
+use crate::provider::Endpoint;
 use bytes::Bytes;
-use llm_accounts::routing::RouteResolution;
 use llm_accounts::{AccountHandle, EndpointAcquire};
 use llm_config::RouteMode;
-use llm_core::pipeline::{ParsedRequest, RequestMeta, RequestResolver, RequestSender};
+use llm_core::pipeline::{ParsedRequest, RequestMeta};
 use llm_core::provider::TemplateVars;
 use serde_json::Value;
 use std::sync::Arc;
 use tracing::warn;
-
-#[derive(Clone)]
-pub(crate) struct ResolvedRequest {
-  pub(crate) meta: RequestMeta,
-  pub(crate) body: Value,
-  pub(crate) raw_body: Bytes,
-  /// Post-decompression bytes of the inbound request body.
-  pub(crate) decoded_body: Bytes,
-  pub(crate) content_encoding: Option<crate::api::codec::ContentEncodingKind>,
-  pub(crate) route: RouteResolution,
-  pub(crate) account: Arc<AccountHandle>,
-}
-
-pub(super) struct PreparedRequest {
-  pub(super) meta: RequestMeta,
-  pub(super) inbound_body: Value,
-  /// Post-decompression bytes of the inbound request body. Cheap to clone.
-  pub(super) inbound_body_bytes: Bytes,
-  pub(super) upstream_body: Value,
-  pub(super) upstream_wire_body: Bytes,
-  pub(super) debug_outbound_body: Bytes,
-  pub(super) content_encoding: Option<crate::api::codec::ContentEncodingKind>,
-  pub(super) provider_headers: reqwest::header::HeaderMap,
-  pub(super) profile_headers: Option<reqwest::header::HeaderMap>,
-  pub(super) vars: TemplateVars,
-  pub(super) account: Arc<AccountHandle>,
-  pub(super) capture: crate::provider::OutboundCapture,
-}
 
 pub struct DryRunOutput {
   pub account_id: String,
@@ -66,35 +37,22 @@ impl From<DryRunEndpoint> for Endpoint {
   }
 }
 
-pub(super) struct PoolResolver;
-pub(super) struct ProviderSender;
-
-impl RequestResolver for PoolResolver {
-  type State = AppState;
-  type Resolved = ResolvedRequest;
-  type Error = ApiError;
-
-  fn resolve(&self, state: &AppState, parsed: ParsedRequest, attempt: usize) -> Result<ResolvedRequest, ApiError> {
-    resolve_request(state, parsed, attempt)
-  }
+struct PreparedDryRun {
+  meta: RequestMeta,
+  upstream_body: Value,
+  debug_outbound_body: Bytes,
+  content_encoding: Option<crate::api::codec::ContentEncodingKind>,
+  provider_headers: reqwest::header::HeaderMap,
+  profile_headers: Option<reqwest::header::HeaderMap>,
+  vars: TemplateVars,
+  account: Arc<AccountHandle>,
 }
 
-impl RequestSender for ProviderSender {
-  type State = AppState;
-  type Request = PreparedRequest;
-  type Response = reqwest::Response;
-  type Error = crate::provider::error::Error;
-
-  fn send<'a>(
-    &'a self,
-    state: &'a AppState,
-    req: &'a PreparedRequest,
-  ) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::provider::Result<reqwest::Response>> + Send + 'a>> {
-    Box::pin(send_request(state, req))
-  }
-}
-
-fn resolve_request(state: &AppState, parsed: ParsedRequest, attempt: usize) -> Result<ResolvedRequest, ApiError> {
+fn resolve_request(
+  state: &AppState,
+  parsed: ParsedRequest,
+  attempt: usize,
+) -> Result<(RequestMeta, Value, Arc<AccountHandle>, String), ApiError> {
   let route = state
     .route
     .resolve(
@@ -134,103 +92,73 @@ fn resolve_request(state: &AppState, parsed: ParsedRequest, attempt: usize) -> R
   let mut meta = parsed.meta;
   meta.upstream_endpoint = upstream_endpoint;
   meta.upstream_model = route.upstream_model.clone();
-  Ok(ResolvedRequest {
-    meta,
-    body: parsed.body,
-    raw_body: Bytes::new(),
-    decoded_body: Bytes::new(),
-    content_encoding: None,
-    route,
-    account,
-  })
+  Ok((meta, parsed.body, account, route.upstream_model))
 }
 
-pub(super) fn prepare_request(req: ResolvedRequest) -> crate::provider::Result<PreparedRequest> {
-  let mut upstream_body = rewrite_model(&req.body, &req.meta.upstream_model);
-  if req.meta.upstream_endpoint != req.meta.endpoint {
-    upstream_body = crate::convert::convert_request(req.meta.endpoint, req.meta.upstream_endpoint, &upstream_body)
+fn prepare_dry_run(
+  meta: RequestMeta,
+  body: Value,
+  account: Arc<AccountHandle>,
+  raw_body: Bytes,
+  content_encoding: Option<crate::api::codec::ContentEncodingKind>,
+) -> crate::provider::Result<PreparedDryRun> {
+  let mut upstream_body = rewrite_model(&body, &meta.upstream_model);
+  if meta.upstream_endpoint != meta.endpoint {
+    upstream_body = crate::convert::convert_request(meta.endpoint, meta.upstream_endpoint, &upstream_body)
       .map_err(|source| crate::provider::error::Error::Profiles {
         message: format!("request conversion failed: {source}"),
       })?;
   }
-  if let Some(transformer) = req.account.provider.input_transformer() {
-    upstream_body = transformer.transform_input(req.meta.upstream_endpoint, upstream_body)?;
+  if let Some(transformer) = account.provider.input_transformer() {
+    upstream_body = transformer.transform_input(meta.upstream_endpoint, upstream_body)?;
   }
   let debug_outbound_body = Bytes::from(serde_json::to_vec(&upstream_body).unwrap_or_default());
-  let upstream_wire_body = if upstream_body == req.body {
-    req.raw_body.clone()
+  let _upstream_wire_body = if upstream_body == body {
+    raw_body
   } else {
-    crate::api::codec::encode_body_bytes(debug_outbound_body.as_ref(), req.content_encoding)
+    crate::api::codec::encode_body_bytes(debug_outbound_body.as_ref(), content_encoding)
       .map_err(|message| crate::provider::error::Error::Profiles { message })?
   };
-  let inbound_compat: reqwest::header::HeaderMap = req.meta.inbound_headers.clone().into();
+  let inbound_compat: reqwest::header::HeaderMap = meta.inbound_headers.clone().into();
   let provider_headers = provider_headers(&inbound_compat);
   let vars = crate::proxy::header_pipeline::parse_inbound_vars(&inbound_compat);
-  let profile_headers = build_profile_headers(&req, &inbound_compat, &vars);
-  Ok(PreparedRequest {
-    meta: req.meta,
-    inbound_body: req.body,
-    inbound_body_bytes: req.decoded_body,
+  let profile_headers = build_profile_headers(&meta, &account, &inbound_compat, &vars);
+  Ok(PreparedDryRun {
+    meta,
     upstream_body,
-    upstream_wire_body,
     debug_outbound_body,
-    content_encoding: req.content_encoding,
+    content_encoding,
     provider_headers,
     profile_headers,
     vars,
-    account: req.account,
-    capture: new_outbound_capture(),
+    account,
   })
 }
 
-async fn send_request(state: &AppState, req: &PreparedRequest) -> crate::provider::Result<reqwest::Response> {
-  let inbound_lh: llm_headers::HeaderMap = (&req.provider_headers).into();
-  let profile_lh: Option<llm_headers::HeaderMap> = req.profile_headers.as_ref().map(|h| h.into());
-  let ctx = RequestCtx {
-    endpoint: req.meta.upstream_endpoint,
-    http: &state.http,
-    body: &req.upstream_body,
-    body_bytes: Some(&req.upstream_wire_body),
-    content_encoding: req.content_encoding.map(|encoding| encoding.as_str()),
-    stream: req.meta.stream,
-    initiator: req.meta.initiator.as_str(),
-    inbound_headers: &inbound_lh,
-    behave_as: req.meta.behave_as.as_deref(),
-    profile_headers: profile_lh,
-    outbound: Some(req.capture.clone()),
-    vars: req.vars.clone(),
-  };
-  match req.meta.upstream_endpoint {
-    Endpoint::ChatCompletions => req.account.provider.chat(ctx).await,
-    Endpoint::Responses => req.account.provider.responses(ctx).await,
-    Endpoint::Messages => req.account.provider.messages(ctx).await,
-  }
-}
-
 fn build_profile_headers(
-  req: &ResolvedRequest,
+  meta: &RequestMeta,
+  account: &Arc<AccountHandle>,
   inbound: &reqwest::header::HeaderMap,
   vars: &TemplateVars,
 ) -> Option<reqwest::header::HeaderMap> {
-  let persona = selected_persona(req)?;
+  let persona = selected_persona(meta, account)?;
   crate::proxy::header_pipeline::build_headers(crate::proxy::header_pipeline::HeaderPipelineInput {
     profiles: llm_config::profiles::Profiles::global(),
     persona: persona.as_str(),
-    provider_id: req.account.provider.info().id.as_str(),
+    provider_id: account.provider.info().id.as_str(),
     inbound,
-    provider_patch: Some(&account_extra_headers(&req.account.config.load().headers)),
+    provider_patch: Some(&account_extra_headers(&account.config.load().headers)),
     vars,
   })
   .map(|out| out.headers)
 }
 
-fn selected_persona(req: &ResolvedRequest) -> Option<String> {
-  req
-    .meta
+fn selected_persona(meta: &RequestMeta, account: &Arc<AccountHandle>) -> Option<String> {
+  meta
     .behave_as
     .clone()
-    .or_else(|| settings_behave_as(&req.account.config.load().settings))
-    .or_else(|| default_persona(req.account.provider.info().id.as_str()).map(str::to_string))
+    .or_else(|| settings_behave_as(&account.config.load().settings))
+    .or_else(|| default_persona(account.provider.info().id.as_str()).map(str::to_string))
 }
 
 fn settings_behave_as(settings: &toml::Table) -> Option<String> {
@@ -285,7 +213,6 @@ pub fn dry_run_request(
   endpoint: DryRunEndpoint,
   headers: reqwest::header::HeaderMap,
   body: Value,
-  decoded_body: Bytes,
   raw_body: Bytes,
   content_encoding: Option<crate::api::codec::ContentEncodingKind>,
 ) -> Result<DryRunOutput, ApiError> {
@@ -294,11 +221,9 @@ pub fn dry_run_request(
     DryRunEndpoint::Responses => crate::pipeline::ResponsesParser.parse(headers, body),
     DryRunEndpoint::Messages => crate::pipeline::MessagesParser.parse(headers, body),
   };
-  let mut resolved = resolve_request(state, parsed, 0)?;
-  resolved.raw_body = raw_body;
-  resolved.decoded_body = decoded_body;
-  resolved.content_encoding = content_encoding;
-  let prepared = prepare_request(resolved).map_err(|e| ApiError::bad_gateway(e.to_string()))?;
+  let (meta, body, account, _) = resolve_request(state, parsed, 0)?;
+  let prepared = prepare_dry_run(meta, body, account, raw_body, content_encoding)
+    .map_err(|e| ApiError::bad_gateway(e.to_string()))?;
   let mut headers: llm_headers::HeaderMap = prepared.profile_headers.as_ref().map(|h| h.into()).unwrap_or_default();
   let inbound_lh: llm_headers::HeaderMap = (&prepared.provider_headers).into();
   prepared
