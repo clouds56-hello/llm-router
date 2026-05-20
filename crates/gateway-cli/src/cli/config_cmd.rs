@@ -1,4 +1,4 @@
-//! `llm-router config` subcommand — git-style key/value access plus profile
+//! `tokn-router config` subcommand — git-style key/value access plus profile
 //! helpers. Comment-preserving edits via `toml_edit`.
 
 use crate::config::{paths, Config};
@@ -7,8 +7,8 @@ use crate::util::http::build_client;
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Subcommand};
 use inquire::{Confirm, Select, Text};
-use llm_auth::AuthStore;
-use llm_config::RouteMode;
+use tokn_auth::AuthStore;
+use tokn_config::RouteMode;
 use std::path::PathBuf;
 use toml_edit::{value, Array, DocumentMut, Item, Table, Value as EditValue};
 
@@ -376,7 +376,7 @@ async fn cmd_init(path: &std::path::Path, args: InitArgs) -> Result<()> {
   cfg.save(path)?;
   store.save()?;
   println!("Initialized config and upserted {upserted} account(s).");
-  println!("Next: llm-router serve  # or llm-router proxy start");
+  println!("Next: tokn-router serve  # or tokn-router proxy start");
   Ok(())
 }
 
@@ -884,7 +884,7 @@ mod tests {
     assert!(matches!(
       source,
       crate::cli::onboarding::CredentialSource::String {
-        flavor: llm_auth::CredentialFlavor::RefreshToken,
+        flavor: tokn_auth::CredentialFlavor::RefreshToken,
         ..
       }
     ));

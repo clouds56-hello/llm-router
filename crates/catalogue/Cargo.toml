@@ -1,5 +1,5 @@
 [package]
-name = "llm-catalogue"
+name = "tokn-catalogue"
 version.workspace = true
 edition.workspace = true
 description = "Model and provider catalogue loading and mapping utilities for tokn"
@@ -9,7 +9,7 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
-llm-core = { workspace = true }
+tokn-core = { workspace = true }
 directories = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }

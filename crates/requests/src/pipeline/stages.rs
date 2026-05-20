@@ -19,10 +19,10 @@ use crate::utils::codec::ContentEncodingKind;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::{stream, StreamExt, TryStreamExt};
-use llm_accounts::AccountHandle;
-use llm_core::provider::Endpoint;
-use llm_core::ClientId;
-use llm_headers::{HeaderMap, TemplateVars};
+use tokn_accounts::AccountHandle;
+use tokn_core::provider::Endpoint;
+use tokn_core::ClientId;
+use tokn_headers::{HeaderMap, TemplateVars};
 use serde_json::Value;
 use smol_str::SmolStr;
 use std::sync::Arc;
@@ -50,8 +50,8 @@ impl AccumHelper {
     let events = ctx.events.clone();
     let guard = ctx.events.begin_finalizer();
     let (tx, mut rx) = mpsc::unbounded_channel::<AccumMsg>();
-    let usage: Arc<std::sync::Mutex<llm_core::db::Usage>> =
-      Arc::new(std::sync::Mutex::new(llm_core::db::Usage::default()));
+    let usage: Arc<std::sync::Mutex<tokn_core::db::Usage>> =
+      Arc::new(std::sync::Mutex::new(tokn_core::db::Usage::default()));
     let usage_for_task = usage.clone();
     tokio::spawn(async move {
       use tokio::time::{interval, Duration, MissedTickBehavior};
@@ -84,7 +84,7 @@ impl AccumHelper {
           }
           _ = tick.tick() => {
             let snapshot = usage_for_task.lock().map(|u| u.clone()).unwrap_or_default();
-            events.emit(llm_core::event::Event::StreamProgress {
+            events.emit(tokn_core::event::Event::StreamProgress {
               request_id: request_id.to_string(),
               model: model.to_string(),
               endpoint: endpoint_label.clone(),
@@ -96,34 +96,34 @@ impl AccumHelper {
         }
       }
 
-      events.emit(llm_core::event::Event::Requests(llm_core::request_event::RequestEvent {
+      events.emit(tokn_core::event::Event::Requests(tokn_core::request_event::RequestEvent {
         request_id: request_id.clone(),
         attempt,
-        ts: llm_core::util::now_unix_ms(),
-        payload: llm_core::request_event::RequestEventPayload::Record(
-          llm_core::request_event::RecordEvent::UpstreamBody {
+        ts: tokn_core::util::now_unix_ms(),
+        payload: tokn_core::request_event::RequestEventPayload::Record(
+          tokn_core::request_event::RecordEvent::UpstreamBody {
             body: Bytes::from(upstream),
             error: upstream_error,
           },
         ),
       }));
-      events.emit(llm_core::event::Event::Requests(llm_core::request_event::RequestEvent {
+      events.emit(tokn_core::event::Event::Requests(tokn_core::request_event::RequestEvent {
         request_id: request_id.clone(),
         attempt,
-        ts: llm_core::util::now_unix_ms(),
-        payload: llm_core::request_event::RequestEventPayload::Record(
-          llm_core::request_event::RecordEvent::ConvertedBody {
+        ts: tokn_core::util::now_unix_ms(),
+        payload: tokn_core::request_event::RequestEventPayload::Record(
+          tokn_core::request_event::RecordEvent::ConvertedBody {
             body: Bytes::from(converted),
             error: converted_error,
           },
         ),
       }));
-      events.emit(llm_core::event::Event::Requests(llm_core::request_event::RequestEvent {
+      events.emit(tokn_core::event::Event::Requests(tokn_core::request_event::RequestEvent {
         request_id,
         attempt,
-        ts: llm_core::util::now_unix_ms(),
-        payload: llm_core::request_event::RequestEventPayload::Stage(
-          llm_core::request_event::StageEvent::Completed {
+        ts: tokn_core::util::now_unix_ms(),
+        payload: tokn_core::request_event::RequestEventPayload::Stage(
+          tokn_core::request_event::StageEvent::Completed {
             success: true,
             attempts,
           },
@@ -507,7 +507,7 @@ pub trait ConvertResponseStage: Send + Sync {
         SmolStr::new(format!("reading upstream body: {e}")),
       )
     })?;
-    ctx.emit_record(llm_core::request_event::RecordEvent::UpstreamBody {
+    ctx.emit_record(tokn_core::request_event::RecordEvent::UpstreamBody {
       body: raw.clone(),
       error: None,
     });

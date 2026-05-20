@@ -2,7 +2,7 @@ use crate::cli::config_cmd::RouteModeArg;
 use crate::config::Config;
 use anyhow::{Context, Result};
 use clap::Args;
-use llm_config::RouteMode;
+use tokn_config::RouteMode;
 use std::path::PathBuf;
 use tokio::sync::watch;
 
@@ -39,7 +39,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: ServeArgs) -> Result<()> {
     .with_context(|| format!("parse bind addr {host}:{port}"))?;
 
   let (events, receiver, handlers, archive_runtime) = crate::server_runtime::build_event_bus(&cfg)?;
-  let _event_thread = llm_core::event::spawn_event_loop(receiver, handlers);
+  let _event_thread = tokn_core::event::spawn_event_loop(receiver, handlers);
   let server_mode = cfg.server.route_mode;
   let proxy_mode = args
     .proxy_route_mode
@@ -49,9 +49,9 @@ pub async fn run(cfg_path: Option<PathBuf>, args: ServeArgs) -> Result<()> {
   let shared_state = crate::server_runtime::build_state_for_route_mode(&cfg, &accounts, events.clone(), shared_mode)?;
   let n = shared_state.pool.len();
   let app_state = crate::server_runtime::state_with_route_mode(&shared_state, server_mode, &cfg);
-  let app = llm_router::api::router(app_state);
+  let app = tokn_router::api::router(app_state);
 
-  tracing::info!(%addr, accounts = n, route_mode = route_mode_name(server_mode), "llm-router listening");
+  tracing::info!(%addr, accounts = n, route_mode = route_mode_name(server_mode), "tokn-router listening");
 
   let result = if args.with_proxy {
     let proxy_host = cfg.proxy_mode.host.clone();
@@ -59,14 +59,14 @@ pub async fn run(cfg_path: Option<PathBuf>, args: ServeArgs) -> Result<()> {
     let proxy_addr = crate::server_runtime::resolve_bind_addr(&proxy_host, proxy_port, args.allow_remote)
       .with_context(|| format!("parse bind addr {proxy_host}:{proxy_port}"))?;
     let ca_dir = cfg.proxy_mode.resolved_ca_dir()?;
-    let ca = llm_router::proxy::load_or_generate_ca(&ca_dir, false)?;
+    let ca = tokn_router::proxy::load_or_generate_ca(&ca_dir, false)?;
     let ca_fingerprint = ca.fingerprint_sha256();
-    println!("llm-router proxy listening on http://{proxy_addr}");
+    println!("tokn-router proxy listening on http://{proxy_addr}");
     println!("CA: {} (sha256:{ca_fingerprint})", ca.cert_path().display());
     println!("Proxy route mode: {}", route_mode_name(proxy_mode));
 
     let proxy_state = crate::server_runtime::state_with_route_mode(&shared_state, proxy_mode, &cfg);
-    let proxy_options = llm_router::proxy::ProxyOptions {
+    let proxy_options = tokn_router::proxy::ProxyOptions {
       addr: proxy_addr,
       ca_dir,
       intercept_hosts: cfg.proxy_mode.intercept_hosts.clone(),
@@ -76,7 +76,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: ServeArgs) -> Result<()> {
     let shutdown = shutdown_channel();
     tokio::try_join!(
       crate::server_runtime::serve_http(app, addr, wait_for_shutdown(shutdown.clone())),
-      llm_router::proxy::serve(proxy_state, proxy_options, wait_for_shutdown(shutdown)),
+      tokn_router::proxy::serve(proxy_state, proxy_options, wait_for_shutdown(shutdown)),
     )
     .map(|_| ())
   } else {

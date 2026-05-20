@@ -12,8 +12,8 @@
 
 use super::{composite_request_id, RequestsDb};
 use crate::{headers_json, Result};
-use llm_core::event::{Event, EventHandler};
-use llm_core::request_event::{RecordEvent, RequestEventPayload, Stage, StageEvent};
+use tokn_core::event::{Event, EventHandler};
+use tokn_core::request_event::{RecordEvent, RequestEventPayload, Stage, StageEvent};
 use rusqlite::params;
 use std::path::PathBuf;
 
@@ -190,7 +190,7 @@ impl RequestEventHandler {
     stream: bool,
     session_id: Option<&str>,
     initiator: &str,
-    inbound_req_headers: &llm_headers::HeaderMap,
+    inbound_req_headers: &tokn_headers::HeaderMap,
     inbound_req_body: &bytes::Bytes,
   ) -> Result<()> {
     let id = composite_request_id(request_id, attempt);
@@ -255,7 +255,7 @@ impl RequestEventHandler {
     &mut self,
     request_id: &str,
     attempt: u32,
-    outbound_req_headers: &llm_headers::HeaderMap,
+    outbound_req_headers: &tokn_headers::HeaderMap,
   ) -> Result<()> {
     let id = composite_request_id(request_id, attempt);
     let hdr_json = headers_json(outbound_req_headers);
@@ -295,7 +295,7 @@ impl RequestEventHandler {
     attempt: u32,
     ts: i64,
     status: u16,
-    outbound_resp_headers: &llm_headers::HeaderMap,
+    outbound_resp_headers: &tokn_headers::HeaderMap,
   ) -> Result<()> {
     let id = composite_request_id(request_id, attempt);
     let hdr_json = headers_json(outbound_resp_headers);
@@ -324,7 +324,7 @@ impl RequestEventHandler {
     request_id: &str,
     attempt: u32,
     status: u16,
-    inbound_resp_headers: &llm_headers::HeaderMap,
+    inbound_resp_headers: &tokn_headers::HeaderMap,
     inbound_resp_body: &bytes::Bytes,
   ) -> Result<()> {
     let id = composite_request_id(request_id, attempt);
@@ -395,7 +395,7 @@ impl RequestEventHandler {
     attempt: u32,
     method: &str,
     url: &str,
-    headers: &llm_headers::HeaderMap,
+    headers: &tokn_headers::HeaderMap,
     body: &bytes::Bytes,
   ) -> Result<()> {
     let id = composite_request_id(request_id, attempt);
@@ -460,7 +460,7 @@ impl RequestEventHandler {
     Ok(())
   }
 
-  pub fn on_usage(&mut self, request_id: &str, attempt: u32, usage: &llm_core::db::Usage) -> Result<()> {
+  pub fn on_usage(&mut self, request_id: &str, attempt: u32, usage: &tokn_core::db::Usage) -> Result<()> {
     let id = composite_request_id(request_id, attempt);
     let Some(conn) = self.db.conn_for_request(&id) else {
       tracing::warn!(request_id = %id, "requests Usage without prior Started");

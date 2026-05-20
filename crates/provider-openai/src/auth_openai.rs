@@ -3,8 +3,8 @@
 //! authentication lives in [`codex_auth`].
 
 use async_trait::async_trait;
-use llm_auth::{AuthError, ProviderAuth, QuotaSnapshot, RefreshOutcome, Result, VerifyOutcome};
-use llm_core::account::AccountConfig;
+use tokn_auth::{AuthError, ProviderAuth, QuotaSnapshot, RefreshOutcome, Result, VerifyOutcome};
+use tokn_core::account::AccountConfig;
 
 pub struct OpenAiAuth;
 

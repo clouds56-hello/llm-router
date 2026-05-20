@@ -194,7 +194,7 @@
     "version": "0.128.0",
     "x-client-request-id": "019e08b9-1ff4-7232-a3ea-158128e9a516",
     "x-codex-beta-features": "terminal_resize_reflow",
-    "x-codex-turn-metadata": "{\"session_id\":\"019e08b9-1ff4-7232-a3ea-158128e9a516\",\"thread_source\":\"user\",\"turn_id\":\"\",\"workspaces\":{\"./llm-tokei\":{\"associated_remote_urls\":{\"origin\":\"https://github.com/<repo>\"},\"latest_git_commit_hash\":\"52b58cbbed5a67f513058113a6c020fa5c08c17c\",\"has_changes\":false}},\"sandbox\":\"seccomp\"}",
+    "x-codex-turn-metadata": "{\"session_id\":\"019e08b9-1ff4-7232-a3ea-158128e9a516\",\"thread_source\":\"user\",\"turn_id\":\"\",\"workspaces\":{\"./tokn-tokei\":{\"associated_remote_urls\":{\"origin\":\"https://github.com/<repo>\"},\"latest_git_commit_hash\":\"52b58cbbed5a67f513058113a6c020fa5c08c17c\",\"has_changes\":false}},\"sandbox\":\"seccomp\"}",
     "x-codex-window-id": "019e08b9-1ff4-7232-a3ea-158128e9a516:0"
   },
   "chatgpt.com__backend-api_codex_responses__other:codex-tui/0.128.0": {
@@ -213,7 +213,7 @@
     "version": "0.128.0",
     "x-client-request-id": "019e0abf-174f-72e1-849d-3ffafed2e529",
     "x-codex-beta-features": "terminal_resize_reflow",
-    "x-codex-turn-metadata": "{\"session_id\":\"019e0abf-174f-72e1-849d-3ffafed2e529\",\"thread_source\":\"user\",\"turn_id\":\"\",\"workspaces\":{\"./llm-router\":{\"associated_remote_urls\":{\"origin\":\"https://github.com/<repo>\"},\"latest_git_commit_hash\":\"0ae39e1e15689faa95747da17706277b63d5663a\",\"has_changes\":false}},\"sandbox\":\"seccomp\"}",
+    "x-codex-turn-metadata": "{\"session_id\":\"019e0abf-174f-72e1-849d-3ffafed2e529\",\"thread_source\":\"user\",\"turn_id\":\"\",\"workspaces\":{\"./tokn-router\":{\"associated_remote_urls\":{\"origin\":\"https://github.com/<repo>\"},\"latest_git_commit_hash\":\"0ae39e1e15689faa95747da17706277b63d5663a\",\"has_changes\":false}},\"sandbox\":\"seccomp\"}",
     "x-codex-window-id": "019e0abf-174f-72e1-849d-3ffafed2e529:0"
   },
   "chatgpt.com__backend-api_connectors_directory_list__other:codex-tui/0.128.0": {
@@ -461,7 +461,7 @@
     "connection": "keep-alive",
     "content-length": "55972",
     "content-type": "application/json",
-    "host": "llm-router:4141",
+    "host": "tokn-router:4141",
     "sec-fetch-mode": "cors",
     "user-agent": "ncr/JS 5.20.1",
     "x-request-id": "ab47e4e9-9429-42e2-a775-2a575d4b2d8f",
@@ -478,7 +478,7 @@
     "authorization": "<redacted>",
     "content-length": "45434",
     "content-type": "application/json",
-    "host": "llm-router:4141",
+    "host": "tokn-router:4141",
     "originator": "codex_exec",
     "session_id": "019e272c-b95a-74a3-a55c-8c2a6ee99f9b",
     "thread_id": "019e272c-b95a-74a3-a55c-8c2a6ee99f9b",

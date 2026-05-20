@@ -11,9 +11,9 @@
 use crate::db::archive::{ArchiveEvent, ArchiveEventHandler};
 use console::style;
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
-use llm_core::db::Usage;
-use llm_core::event::{Event, EventHandler, LegacyRequestEvent};
-use llm_core::request_event::{RequestEvent, RequestEventPayload, StageEvent};
+use tokn_core::db::Usage;
+use tokn_core::event::{Event, EventHandler, LegacyRequestEvent};
+use tokn_core::request_event::{RequestEvent, RequestEventPayload, StageEvent};
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Write};
@@ -916,5 +916,5 @@ fn progress_log_path(log_dir: &Path) -> PathBuf {
   let date = OffsetDateTime::now_utc()
     .format(format_description!("[year]-[month]-[day]"))
     .unwrap_or_else(|_| "unknown-date".to_string());
-  log_dir.join(format!("llm-router-progress.log.{date}"))
+  log_dir.join(format!("tokn-router-progress.log.{date}"))
 }

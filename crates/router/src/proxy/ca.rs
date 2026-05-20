@@ -58,7 +58,7 @@ fn ca_params() -> CertificateParams {
   let mut params = CertificateParams::default();
   params
     .distinguished_name
-    .push(rcgen::DnType::CommonName, "llm-router local proxy");
+    .push(rcgen::DnType::CommonName, "tokn-router local proxy");
   params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
   params.not_before = OffsetDateTime::now_utc() - TimeDuration::days(1);
   params.not_after = OffsetDateTime::now_utc() + TimeDuration::days(3650);

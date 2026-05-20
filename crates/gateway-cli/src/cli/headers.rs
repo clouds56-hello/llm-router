@@ -1,7 +1,7 @@
 use crate::config::Config;
 use anyhow::{anyhow, Result};
 use clap::Args;
-use llm_auth::AuthStore;
+use tokn_auth::AuthStore;
 use std::path::PathBuf;
 
 #[derive(Args, Debug)]
@@ -15,7 +15,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: HeadersArgs) -> Result<()> {
   let (_cfg, path) = Config::load(cfg_path.as_deref())?;
   let store = AuthStore::load(None, Some(&path))?;
   let headers = match args.account {
-    None => llm_provider_copilot::config::CopilotHeaders::default(),
+    None => tokn_provider_copilot::config::CopilotHeaders::default(),
     Some(id) => {
       let a = store.get(&id).ok_or_else(|| anyhow!("no account with id '{id}'"))?;
       if a.provider != crate::provider::ID_GITHUB_COPILOT {
@@ -27,7 +27,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: HeadersArgs) -> Result<()> {
         return Ok(());
       }
       let value = serde_json::to_value(&a.settings)?;
-      let mut headers = llm_provider_copilot::config::CopilotHeaders::from_value(&value)?;
+      let mut headers = tokn_provider_copilot::config::CopilotHeaders::from_value(&value)?;
       for (k, v) in &a.headers {
         headers.extra_headers.insert(k.clone(), v.clone());
       }

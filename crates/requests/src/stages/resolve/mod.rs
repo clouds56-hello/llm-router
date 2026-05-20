@@ -4,8 +4,8 @@
 //! * [`stage`] — the generic [`PoolResolve`] stage and the
 //!   [`AccountSelector`] trait it consults.
 //! * [`pool`] — [`PoolAccountSelector`], the production [`AccountSelector`]
-//!   implementation backed by [`llm_accounts::AccountPool`] +
-//!   [`llm_accounts::RouteResolver`].
+//!   implementation backed by [`tokn_accounts::AccountPool`] +
+//!   [`tokn_accounts::RouteResolver`].
 
 mod pool;
 mod stage;

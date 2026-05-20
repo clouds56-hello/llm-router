@@ -36,10 +36,10 @@ pub(super) async fn proxy_passthrough(
     .route
     .resolve_mode(hx.route_mode_hint.as_deref())
     .ok()
-    .map(llm_accounts::routing::route_mode_as_str)
+    .map(tokn_accounts::routing::route_mode_as_str)
     .map(str::to_string);
-  state.events.emit(llm_core::event::Event::LegacyRequest(
-    llm_core::event::LegacyRequestEvent::Started {
+  state.events.emit(tokn_core::event::Event::LegacyRequest(
+    tokn_core::event::LegacyRequestEvent::Started {
       request_id: request_id.clone(),
       ts,
       endpoint: path.to_string(),
@@ -51,8 +51,8 @@ pub(super) async fn proxy_passthrough(
       url: Some(url.clone()),
     },
   ));
-  state.events.emit(llm_core::event::Event::LegacyRequest(
-    llm_core::event::LegacyRequestEvent::Headers {
+  state.events.emit(tokn_core::event::Event::LegacyRequest(
+    tokn_core::event::LegacyRequestEvent::Headers {
       request_id: request_id.clone(),
       ts,
       endpoint_hint: None,
@@ -88,8 +88,8 @@ pub(super) async fn proxy_passthrough(
           msg.clone(),
           None,
         ));
-        state.events.emit(llm_core::event::Event::LegacyRequest(
-          llm_core::event::LegacyRequestEvent::Completed {
+        state.events.emit(tokn_core::event::Event::LegacyRequest(
+          tokn_core::event::LegacyRequestEvent::Completed {
             request_id: request_id.clone(),
             success: false,
             total_attempts: 1,
@@ -123,8 +123,8 @@ pub(super) async fn proxy_passthrough(
   let mut completion =
     crate::pipeline::completion::CompletionGuard::new(state.events.clone(), request_id.clone(), started);
   let stream = body_meta.stream;
-  state.events.emit(llm_core::event::Event::LegacyRequest(
-    llm_core::event::LegacyRequestEvent::Parsed {
+  state.events.emit(tokn_core::event::Event::LegacyRequest(
+    tokn_core::event::LegacyRequestEvent::Parsed {
       request_id: request_id.clone(),
       attempt: ctx.attempt,
       account_id: identity.account_id.unwrap_or_else(|| "<unknown>".to_string()),
@@ -157,8 +157,8 @@ pub(super) async fn proxy_passthrough(
     }
   };
   let status = response.status();
-  state.events.emit(llm_core::event::Event::LegacyRequest(
-    llm_core::event::LegacyRequestEvent::Responded {
+  state.events.emit(tokn_core::event::Event::LegacyRequest(
+    tokn_core::event::LegacyRequestEvent::Responded {
       request_id: request_id.clone(),
       attempt: ctx.attempt,
       outbound_status: status.as_u16(),

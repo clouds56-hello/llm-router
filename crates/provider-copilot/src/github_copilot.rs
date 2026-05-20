@@ -6,10 +6,10 @@ use crate::config::{CopilotHeaders, InitiatorMode};
 use crate::util::redact::BehaveAs;
 use crate::util::secret::Secret;
 use async_trait::async_trait;
-use llm_core::account::AccountConfig;
-use llm_core::pipeline::InputTransformer;
-use llm_headers::keys::{ACCEPT, AUTHORIZATION, CONTENT_ENCODING, CONTENT_TYPE};
-use llm_headers::{HeaderMap, HeaderName, HeaderValue};
+use tokn_core::account::AccountConfig;
+use tokn_core::pipeline::InputTransformer;
+use tokn_headers::keys::{ACCEPT, AUTHORIZATION, CONTENT_ENCODING, CONTENT_TYPE};
+use tokn_headers::{HeaderMap, HeaderName, HeaderValue};
 use parking_lot::RwLock;
 use reqwest::Method;
 use serde_json::Value;
@@ -52,10 +52,10 @@ fn copilot_info() -> &'static ProviderInfo {
     // Copilot's `/models` upstream is the source of truth for model
     // *identity*; the catalogue below provides metadata overlay for the
     // ids that models.dev tracks. Unknown ids still pass through
-    // `/v1/models` — they just lack the `x_llm_router` enrichment block.
+    // `/v1/models` — they just lack the `x_tokn_router` enrichment block.
     default_models: crate::catalogue::default_models_for(ID_GITHUB_COPILOT),
     default_endpoints: crate::DEFAULT_ENDPOINTS,
-    model_cache: std::sync::Arc::new(llm_core::provider::ModelCache::default()),
+    model_cache: std::sync::Arc::new(tokn_core::provider::ModelCache::default()),
   })
 }
 
@@ -349,7 +349,7 @@ impl CopilotProvider {
 mod tests {
   use super::*;
   use crate::TemplateVars;
-  use llm_core::account::AccountTier;
+  use tokn_core::account::AccountTier;
 
   fn acct(refresh: Option<&str>) -> AccountConfig {
     AccountConfig {

@@ -1,5 +1,5 @@
 [package]
-name = "llm-config"
+name = "tokn-config"
 version.workspace = true
 edition.workspace = true
 description = "Configuration loading, profiles, and path resolution for tokn"
@@ -9,8 +9,8 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
-llm-core = { workspace = true }
-llm-headers = { workspace = true }
+tokn-core = { workspace = true }
+tokn-headers = { workspace = true }
 anyhow = { workspace = true }
 directories = { workspace = true }
 reqwest = { workspace = true }

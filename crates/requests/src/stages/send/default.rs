@@ -1,7 +1,7 @@
 //! Production [`SendStage`] implementation.
 //!
 //! Bridges the requests stage pipeline to the legacy `Provider` trait
-//! (`llm_core::provider::Provider`). Build a [`llm_core::provider::RequestCtx`]
+//! (`tokn_core::provider::Provider`). Build a [`tokn_core::provider::RequestCtx`]
 //! from the upstream-shaped body (produced by ConvertRequest), persona
 //! headers (produced by BuildHeaders), and a few inbound facts pulled from
 //! `Extracted`; then dispatch on `resolved.upstream_endpoint` to the
@@ -19,9 +19,9 @@ use crate::pipeline::ctx::PipelineCtx;
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::stages::{BuiltHeaders, ConvertedRequest, Extracted, Resolved, SendStage, SentResponse};
 use async_trait::async_trait;
-use llm_core::provider::{new_outbound_capture, Endpoint, RequestCtx};
-use llm_core::request_event::RecordEvent;
-use llm_headers::HeaderMap;
+use tokn_core::provider::{new_outbound_capture, Endpoint, RequestCtx};
+use tokn_core::request_event::RecordEvent;
+use tokn_headers::HeaderMap;
 use smol_str::SmolStr;
 use tracing::{debug, instrument, warn};
 
@@ -59,7 +59,7 @@ impl SendStage for DefaultSend {
     // `vars` in BuildHeaders.
     let inbound_headers = HeaderMap::new();
     // Wire-truth capture slot. Providers populate this from inside
-    // `llm_core::util::http::send` immediately before reqwest dispatch,
+    // `tokn_core::util::http::send` immediately before reqwest dispatch,
     // so the snapshot reflects the actual on-wire request (post auth
     // injection, post Host/Content-Length strip). We later forward it
     // as `Record::UpstreamReq` / `Record::UpstreamResp` events so the
@@ -158,7 +158,7 @@ impl SendStage for DefaultSend {
   }
 }
 
-/// Map an `llm_core::provider::Error` to a [`PipelineError`]. Transport-
+/// Map an `tokn_core::provider::Error` to a [`PipelineError`]. Transport-
 /// level failures (connect, timeout, etc.) are recoverable; everything else
 /// is permanent for this attempt.
 ///
@@ -168,8 +168,8 @@ impl SendStage for DefaultSend {
 /// `dns error: failed to lookup address information`). Without this,
 /// reqwest's top-level `Display` hides everything below it and the user
 /// can't tell DNS failure from TLS failure from refused-connection.
-fn classify_provider_error(err: llm_core::provider::Error) -> PipelineError {
-  use llm_core::provider::Error as E;
+fn classify_provider_error(err: tokn_core::provider::Error) -> PipelineError {
+  use tokn_core::provider::Error as E;
   let recoverable = matches!(&err, E::Http { .. });
   let msg = SmolStr::new(format_with_chain(&err));
   if recoverable {
@@ -210,7 +210,7 @@ mod tests {
   use crate::pipeline::stages::{BuiltHeaders, ConvertedRequest, Extracted, Resolved};
   use crate::test_support::{mock_handle_with_provider, MockProvider};
   use bytes::Bytes;
-  use llm_core::provider::{Endpoint, Result as ProviderResult};
+  use tokn_core::provider::{Endpoint, Result as ProviderResult};
   use serde_json::Value;
   use smol_str::SmolStr;
   use std::sync::Arc;
@@ -229,7 +229,7 @@ mod tests {
       initiator: SmolStr::new("user"),
       header_initiator: None,
       route_mode_hint: None,
-      headers: llm_headers::HeaderMap::new(),
+      headers: tokn_headers::HeaderMap::new(),
       raw_body: Bytes::new(),
       decoded_body: Bytes::new(),
       body_json: Arc::new(Value::Null),
@@ -237,7 +237,7 @@ mod tests {
     }
   }
 
-  fn resolved(handle: Arc<llm_accounts::AccountHandle>) -> Resolved {
+  fn resolved(handle: Arc<tokn_accounts::AccountHandle>) -> Resolved {
     Resolved {
       client_id: None,
       model: SmolStr::new("m"),
@@ -332,7 +332,7 @@ mod tests {
   #[tokio::test]
   async fn provider_error_classified_by_kind() {
     let provider =
-      MockProvider::new("mock").with_chat_error(|| llm_core::provider::Error::Profiles { message: "boom".into() });
+      MockProvider::new("mock").with_chat_error(|| tokn_core::provider::Error::Profiles { message: "boom".into() });
     let handle = mock_handle_with_provider("acct", provider);
     let send = DefaultSend::new(reqwest::Client::new());
     let err = send

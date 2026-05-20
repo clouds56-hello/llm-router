@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 pub const APP_QUALIFIER: &str = "dev";
-pub const APP_ORGANIZATION: &str = "llm-router";
-pub const APP_NAME: &str = "llm-router";
+pub const APP_ORGANIZATION: &str = "tokn-router";
+pub const APP_NAME: &str = "tokn-router";
 
 pub fn project_dirs() -> Option<directories::ProjectDirs> {
   directories::ProjectDirs::from(APP_QUALIFIER, APP_ORGANIZATION, APP_NAME)

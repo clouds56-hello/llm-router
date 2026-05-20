@@ -2,7 +2,7 @@ use crate::cli::config_cmd::RouteModeArg;
 use crate::config::{Config, ProxyConfig};
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
-use llm_config::RouteMode;
+use tokn_config::RouteMode;
 use std::net::SocketAddr;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
@@ -134,17 +134,17 @@ async fn start(cfg_path: Option<PathBuf>, args: StartArgs, passthrough: bool) ->
     .unwrap_or_else(|| cfg.proxy_mode.resolved_ca_dir())?;
 
   let (events, receiver, handlers, archive_runtime) = crate::server_runtime::build_event_bus(&cfg)?;
-  let _event_thread = llm_core::event::spawn_event_loop(receiver, handlers);
+  let _event_thread = tokn_core::event::spawn_event_loop(receiver, handlers);
   let state = crate::server_runtime::build_state_for_route_mode(&cfg, &accounts, events.clone(), route_mode)?;
   let n = state.pool.len();
   let addr: SocketAddr = crate::server_runtime::resolve_bind_addr(&host, port, args.allow_remote)
     .with_context(|| format!("parse bind addr {host}:{port}"))?;
 
-  let ca = llm_router::proxy::load_or_generate_ca(&ca_dir, false)?;
+  let ca = tokn_router::proxy::load_or_generate_ca(&ca_dir, false)?;
   let ca_fingerprint = ca.fingerprint_sha256();
-  println!("llm-router proxy listening on http://{addr}");
+  println!("tokn-router proxy listening on http://{addr}");
   println!("CA: {} (sha256:{ca_fingerprint})", ca.cert_path().display());
-  println!("Trust this CA, then run: eval \"$(llm-gateway proxy env)\"");
+  println!("Trust this CA, then run: eval \"$(tokn-gateway proxy env)\"");
   println!("Route mode: {}", route_mode_name(route_mode));
   if let Some(url) = &cfg.proxy.url {
     println!("Outbound proxy: {url}");
@@ -156,7 +156,7 @@ async fn start(cfg_path: Option<PathBuf>, args: StartArgs, passthrough: bool) ->
   }
   println!("Accounts: {n}");
 
-  let options = llm_router::proxy::ProxyOptions {
+  let options = tokn_router::proxy::ProxyOptions {
     addr,
     ca_dir,
     intercept_hosts: cfg.proxy_mode.intercept_hosts.clone(),
@@ -164,7 +164,7 @@ async fn start(cfg_path: Option<PathBuf>, args: StartArgs, passthrough: bool) ->
     outbound_proxy: cfg.proxy.to_http_options(),
   };
 
-  let result = llm_router::proxy::serve(state, options, async {
+  let result = tokn_router::proxy::serve(state, options, async {
     let _ = tokio::signal::ctrl_c().await;
   })
   .await;
@@ -211,18 +211,18 @@ async fn ca(cfg_path: Option<PathBuf>, args: CaArgs) -> Result<()> {
   let ca_dir = cfg.proxy_mode.resolved_ca_dir()?;
   match args.cmd {
     CaCmd::Path => {
-      let ca = llm_router::proxy::load_or_generate_ca(&ca_dir, false)?;
+      let ca = tokn_router::proxy::load_or_generate_ca(&ca_dir, false)?;
       println!("{}", ca.cert_path().display());
     }
     CaCmd::Show => {
-      let ca = llm_router::proxy::load_or_generate_ca(&ca_dir, false)?;
+      let ca = tokn_router::proxy::load_or_generate_ca(&ca_dir, false)?;
       println!("cert: {}", ca.cert_path().display());
       println!("bundle: {}", ca.ensure_bundle()?.display());
       println!("key: {}", ca.key_path().display());
       println!("sha256: {}", ca.fingerprint_sha256());
     }
     CaCmd::Regenerate => {
-      let ca = llm_router::proxy::load_or_generate_ca(&ca_dir, true)?;
+      let ca = tokn_router::proxy::load_or_generate_ca(&ca_dir, true)?;
       println!("regenerated CA at {}", ca.cert_path().display());
       println!("sha256: {}", ca.fingerprint_sha256());
     }
@@ -251,7 +251,7 @@ fn print_pwsh(env: &ProxyEnv) {
 fn resolved_proxy_env(cfg_path: Option<&Path>) -> Result<ProxyEnv> {
   let (cfg, _) = Config::load(cfg_path)?;
   let ca_dir = cfg.proxy_mode.resolved_ca_dir()?;
-  let ca = llm_router::proxy::load_or_generate_ca(&ca_dir, false)?;
+  let ca = tokn_router::proxy::load_or_generate_ca(&ca_dir, false)?;
   let proxy_url = format!("http://{}:{}", cfg.proxy_mode.host, cfg.proxy_mode.port);
   let cert = ca.cert_path().display().to_string();
   let bundle = ca.ensure_bundle()?.display().to_string();

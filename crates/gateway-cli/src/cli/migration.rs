@@ -1,4 +1,4 @@
-//! `llm-router migration` subcommand.
+//! `tokn-router migration` subcommand.
 //!
 //! Default mode is a dry-run: inspect configured DB files and their `.bak`
 //! snapshots, then print current/latest versions and aggregate row counts.

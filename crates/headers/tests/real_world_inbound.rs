@@ -8,13 +8,13 @@
 //! this test only pins the foundational map's ability to round-trip captured
 //! traffic.
 //!
-//! Fixture source: `~/.local/share/llm-router/requests/*.db`, mined via
+//! Fixture source: `~/.local/share/tokn-router/requests/*.db`, mined via
 //! `tmp/mine_inbound.py` and filtered to drop missing-persona, browser, and
 //! OTel-exporter cells. See [`Phase 1.5 mining notes`] for methodology.
 
 use std::collections::BTreeSet;
 
-use llm_headers::{HeaderMap, HeaderName, HeaderValue};
+use tokn_headers::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::Value;
 
 const FIXTURE_JSON: &str = include_str!("fixtures/inbound_real_world.json");
@@ -122,8 +122,8 @@ fn user_agents_fixture_covers_known_clients() {
 
 #[test]
 fn opencode_schema_parses_real_deepseek_capture() {
-  use llm_headers::schemas::OpencodeHeaders;
-  use llm_headers::HeaderSchema;
+  use tokn_headers::schemas::OpencodeHeaders;
+  use tokn_headers::HeaderSchema;
 
   let cells = load_cells();
   // Pick any opencode-on-deepseek POST cell. Key format from miner is

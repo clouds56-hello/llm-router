@@ -1,9 +1,9 @@
 use crate::util::secret::Secret;
 use async_trait::async_trait;
-use llm_core::account::AccountConfig;
-use llm_core::pipeline::InputTransformer;
-use llm_headers::keys::{ACCEPT, AUTHORIZATION, CONTENT_ENCODING, CONTENT_TYPE};
-use llm_headers::{HeaderMap, HeaderValue};
+use tokn_core::account::AccountConfig;
+use tokn_core::pipeline::InputTransformer;
+use tokn_headers::keys::{ACCEPT, AUTHORIZATION, CONTENT_ENCODING, CONTENT_TYPE};
+use tokn_headers::{HeaderMap, HeaderValue};
 use reqwest::Method;
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -56,7 +56,7 @@ impl DeepSeekProvider {
         auth_kind: AuthKind::StaticApiKey,
         default_models: crate::catalogue::default_models_for(ID_DEEPSEEK),
         default_endpoints: crate::DEFAULT_ENDPOINTS,
-        model_cache: std::sync::Arc::new(llm_core::provider::ModelCache::default()),
+        model_cache: std::sync::Arc::new(tokn_core::provider::ModelCache::default()),
       },
     })
   }
@@ -191,8 +191,8 @@ impl Provider for DeepSeekProvider {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use llm_core::account::AccountTier;
-  use llm_core::provider::Endpoint;
+  use tokn_core::account::AccountTier;
+  use tokn_core::provider::Endpoint;
 
   fn acct(key: Option<&str>) -> AccountConfig {
     AccountConfig {

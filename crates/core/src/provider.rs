@@ -1,8 +1,8 @@
 use crate::account::AccountConfig;
 use async_trait::async_trait;
 use bytes::Bytes;
-use llm_headers::HeaderMap;
-pub use llm_headers::TemplateVars;
+use tokn_headers::HeaderMap;
+pub use tokn_headers::TemplateVars;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashSet;
@@ -187,8 +187,8 @@ impl std::fmt::Display for Endpoint {
 /// Patterns use a tiny `*`-only glob (no character classes, no `?`).
 /// Examples: `"claude-*"`, `"gpt-5*"`, `"o4-mini"`.
 ///
-/// Lives in `llm-core` so both [`ProviderInfo`] and the descriptor type
-/// in `llm-auth` can reference it without a dependency cycle.
+/// Lives in `tokn-core` so both [`ProviderInfo`] and the descriptor type
+/// in `tokn-auth` can reference it without a dependency cycle.
 #[derive(Copy, Clone, Debug)]
 pub struct EndpointRule {
   pub pattern: &'static str,

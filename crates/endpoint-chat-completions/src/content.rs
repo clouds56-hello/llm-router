@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use llm_endpoint_core::Extras;
+use tokn_endpoint_core::Extras;
 
 /// Chat content can be either a plain string or a list of typed parts.
 #[derive(Clone, Debug, Serialize, Deserialize)]

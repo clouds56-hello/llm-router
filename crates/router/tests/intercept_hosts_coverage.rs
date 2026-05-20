@@ -1,18 +1,18 @@
 //! Integration test that lives in the `router` crate so it can reach both
 //! `crate::proxy::INTERCEPT_HOSTS` (router-private) and the moved-out
-//! `llm_accounts::registry`. The body is identical to the test that used to
+//! `tokn_accounts::registry`. The body is identical to the test that used to
 //! live in `crates/router/src/accounts/registry.rs` before the
-//! `llm-accounts` extraction.
+//! `tokn-accounts` extraction.
 
 #[test]
 fn proxy_intercept_hosts_cover_all_descriptor_hosts() {
-  use llm_accounts::registry::Registry;
+  use tokn_accounts::registry::Registry;
   use std::collections::HashSet;
 
   let registry = Registry::builtin();
   // `INTERCEPT_HOSTS` is `pub(crate)` in router; re-export it via a tiny
   // helper to keep the integration test self-contained.
-  let mut hosts: HashSet<&'static str> = llm_router::proxy_intercept_hosts().iter().copied().collect();
+  let mut hosts: HashSet<&'static str> = tokn_router::proxy_intercept_hosts().iter().copied().collect();
   hosts.insert("api.github.com");
   let registry_hosts: HashSet<&'static str> = registry.intercept_hosts().collect();
   assert!(

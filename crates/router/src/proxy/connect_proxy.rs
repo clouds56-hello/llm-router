@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use ipnet::IpNet;
-use llm_core::util::http::HttpClientOptions;
+use tokn_core::util::http::HttpClientOptions;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;

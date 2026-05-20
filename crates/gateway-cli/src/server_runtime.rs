@@ -4,10 +4,10 @@ use crate::db::{DbEventHandler, DbPaths};
 use crate::progress::{ArchiveProgressEventHandler, ProgressEventHandler, ProgressLogEventHandler};
 use anyhow::Result;
 use axum::Router;
-use llm_auth::AuthStore;
-use llm_config::RouteMode;
-use llm_core::account::AccountConfig;
-use llm_core::event::{EventBus, EventHandler};
+use tokn_auth::AuthStore;
+use tokn_config::RouteMode;
+use tokn_core::account::AccountConfig;
+use tokn_core::event::{EventBus, EventHandler};
 use std::future::Future;
 use std::io::IsTerminal;
 use std::net::SocketAddr;
@@ -22,7 +22,7 @@ pub fn build_event_bus(
   cfg: &Config,
 ) -> Result<(
   Arc<EventBus>,
-  broadcast::Receiver<Arc<llm_core::event::Event>>,
+  broadcast::Receiver<Arc<tokn_core::event::Event>>,
   Vec<Box<dyn EventHandler>>,
   Option<ArchiveRuntime>,
 )> {
@@ -41,7 +41,7 @@ pub fn build_event_bus(
       requests_dir: paths.requests_dir.clone(),
     })?;
     handlers.push(Box::new(db_handler));
-    let request_handler = llm_persistence::RequestEventHandler::new(paths.requests_dir)?;
+    let request_handler = tokn_persistence::RequestEventHandler::new(paths.requests_dir)?;
     handlers.push(Box::new(request_handler));
   }
 
@@ -86,8 +86,8 @@ pub fn build_state(
   cfg: &Config,
   accounts: &[AccountConfig],
   events: Arc<EventBus>,
-) -> Result<llm_router::api::AppState> {
-  llm_router::api::build_state(cfg, accounts, events)
+) -> Result<tokn_router::api::AppState> {
+  tokn_router::api::build_state(cfg, accounts, events)
 }
 
 pub fn build_state_for_route_mode(
@@ -95,19 +95,19 @@ pub fn build_state_for_route_mode(
   accounts: &[AccountConfig],
   events: Arc<EventBus>,
   route_mode: RouteMode,
-) -> Result<llm_router::api::AppState> {
+) -> Result<tokn_router::api::AppState> {
   let mut cfg = cfg.clone();
   cfg.server.route_mode = route_mode;
   build_state(&cfg, accounts, events)
 }
 
 pub fn state_with_route_mode(
-  state: &llm_router::api::AppState,
+  state: &tokn_router::api::AppState,
   route_mode: RouteMode,
   cfg: &Config,
-) -> llm_router::api::AppState {
+) -> tokn_router::api::AppState {
   let mut state = state.clone();
-  state.route = Arc::new(llm_router::accounts::routing::RouteResolver::new(
+  state.route = Arc::new(tokn_router::accounts::routing::RouteResolver::new(
     route_mode,
     &cfg.model_families,
   ));
@@ -124,7 +124,7 @@ where
   F: Future<Output = ()> + Send + 'static,
 {
   let listener = tokio::net::TcpListener::bind(addr).await?;
-  tracing::info!(%addr, "llm-router listening");
+  tracing::info!(%addr, "tokn-router listening");
   axum::serve(listener, app).with_graceful_shutdown(shutdown).await?;
   Ok(())
 }

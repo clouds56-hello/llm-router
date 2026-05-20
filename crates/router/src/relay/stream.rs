@@ -6,7 +6,7 @@ use axum::body::Body;
 use axum::http::{HeaderMap, HeaderValue};
 use axum::response::{IntoResponse, Response};
 use bytes::Bytes;
-use llm_convert::sse::{EndpointTranslator, SsePipeline};
+use tokn_convert::sse::{EndpointTranslator, SsePipeline};
 
 use serde_json::Value;
 

@@ -11,7 +11,7 @@
 //! lives in the `Debug`/`Display` impls and at human-facing print sites.
 //!
 //! ```
-//! use llm_core::util::secret::Secret;
+//! use tokn_core::util::secret::Secret;
 //! let s: Secret<String> = "hunter2".to_owned().into();
 //! assert_eq!(format!("{s:?}"), "Secret(***)");
 //! assert_eq!(s.expose(), "hunter2");

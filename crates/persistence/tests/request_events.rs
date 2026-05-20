@@ -1,17 +1,17 @@
 //! Integration tests for the requests event-driven persistence handler.
 
 use bytes::Bytes;
-use llm_core::event::{Event, EventHandler};
-use llm_core::db::{Usage, UsageDetails};
-use llm_core::provider::Endpoint;
-use llm_core::request_event::RecordEvent;
-use llm_core::request_event::stage::{
+use tokn_core::event::{Event, EventHandler};
+use tokn_core::db::{Usage, UsageDetails};
+use tokn_core::provider::Endpoint;
+use tokn_core::request_event::RecordEvent;
+use tokn_core::request_event::stage::{
   BuiltHeadersSummary, ConvertedRequestSummary, ConvertedResponseSummary, ExtractedSummary, ResolvedSummary,
   SentSummary, Stage, StageEvent,
 };
-use llm_core::request_event::{RequestEvent, RequestEventPayload};
-use llm_headers::{HeaderMap, TemplateVars};
-use llm_persistence::RequestEventHandler;
+use tokn_core::request_event::{RequestEvent, RequestEventPayload};
+use tokn_headers::{HeaderMap, TemplateVars};
+use tokn_persistence::RequestEventHandler;
 use rusqlite::{params, Connection};
 use serde_json::Value;
 use smol_str::SmolStr;
@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 fn tempdir() -> PathBuf {
-  let p = std::env::temp_dir().join(format!("llm-router-r2-evt-{}", uuid::Uuid::new_v4()));
+  let p = std::env::temp_dir().join(format!("tokn-router-r2-evt-{}", uuid::Uuid::new_v4()));
   std::fs::create_dir_all(&p).unwrap();
   p
 }
@@ -28,7 +28,7 @@ fn r2(request_id: &str, attempt: u32, payload: StageEvent) -> Event {
   Event::Requests(RequestEvent {
     request_id: SmolStr::new(request_id),
     attempt,
-    ts: llm_core::util::now_unix_ms(),
+    ts: tokn_core::util::now_unix_ms(),
     payload: RequestEventPayload::Stage(payload),
   })
 }
@@ -37,7 +37,7 @@ fn rr(request_id: &str, attempt: u32, payload: RecordEvent) -> Event {
   Event::Requests(RequestEvent {
     request_id: SmolStr::new(request_id),
     attempt,
-    ts: llm_core::util::now_unix_ms(),
+    ts: tokn_core::util::now_unix_ms(),
     payload: RequestEventPayload::Record(payload),
   })
 }

@@ -1,10 +1,10 @@
 //! Persona-driven BuildHeaders stage.
 //!
 //! Composes the outbound HeaderMap from the inbound request using the
-//! [`llm_headers`] persona + overlay registry. The flow is:
+//! [`tokn_headers`] persona + overlay registry. The flow is:
 //!
 //! 1. Derive an effective [`Persona`] for the request — `extracted.client_id`
-//!    wins if set, else [`llm_headers::detect_persona`] inspects the inbound
+//!    wins if set, else [`tokn_headers::detect_persona`] inspects the inbound
 //!    `User-Agent`.
 //! 2. If the effective persona is [`Persona::Custom`], resolve it to a
 //!    concrete persona via two-level fallback:
@@ -28,14 +28,14 @@ use crate::pipeline::ctx::PipelineCtx;
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::stages::{BuildHeadersStage, BuiltHeaders, Extracted, Resolved};
 use async_trait::async_trait;
-use llm_headers::registry::{lookup, OverlayKind, ResolvedSchema};
-use llm_headers::schemas::{CodexOverlay, CopilotOverlay};
-use llm_headers::{HeaderMap, Persona, TemplateVars};
+use tokn_headers::registry::{lookup, OverlayKind, ResolvedSchema};
+use tokn_headers::schemas::{CodexOverlay, CopilotOverlay};
+use tokn_headers::{HeaderMap, Persona, TemplateVars};
 use smol_str::SmolStr;
 use std::collections::HashMap;
 
 /// Inbound header names (lowercase) scanned, in order, to populate
-/// [`TemplateVars::session_id`]. Mirrors `llm_router::api::SESSION_ID_HEADERS`.
+/// [`TemplateVars::session_id`]. Mirrors `tokn_router::api::SESSION_ID_HEADERS`.
 const SESSION_ID_HEADERS: &[&str] = &[
   "x-session-id",
   "x-client-session-id",
@@ -90,13 +90,13 @@ impl PersonaBuildHeaders {
   /// Pick the effective [`Persona`] for this request:
   /// 1. If `extracted.client_id` is set, parse it as a persona (never fails;
   ///    falls back to `Custom`).
-  /// 2. Otherwise, run [`llm_headers::detect_persona`] over the inbound
+  /// 2. Otherwise, run [`tokn_headers::detect_persona`] over the inbound
   ///    headers.
   fn effective_persona(&self, extracted: &Extracted) -> Persona {
     if let Some(cid) = &extracted.client_id {
       return Persona::from_str_lossy(cid.as_str());
     }
-    llm_headers::detect_persona(&extracted.headers)
+    tokn_headers::detect_persona(&extracted.headers)
   }
 
   /// Resolve a `Custom` persona to a concrete one via two-level fallback.
@@ -173,11 +173,11 @@ fn compose_with_schema(
   let persona_map = persona.build_outbound(vars, inbound);
   let overlay_map = schema.overlay.map(|kind| match kind {
     OverlayKind::Copilot => {
-      use llm_headers::HeaderSchema as _;
+      use tokn_headers::HeaderSchema as _;
       CopilotOverlay::build(vars, inbound).dump()
     }
     OverlayKind::Codex => {
-      use llm_headers::HeaderSchema as _;
+      use tokn_headers::HeaderSchema as _;
       CodexOverlay::build(vars, inbound).dump()
     }
   });
@@ -191,8 +191,8 @@ mod tests {
   use crate::pipeline::ctx::PipelineCtx;
   use crate::pipeline::stages::Extracted;
   use bytes::Bytes;
-  use llm_core::provider::Endpoint;
-  use llm_headers::{keys, HeaderValue};
+  use tokn_core::provider::Endpoint;
+  use tokn_headers::{keys, HeaderValue};
   use serde_json::json;
   use std::sync::Arc;
 
@@ -206,7 +206,7 @@ mod tests {
 
   fn extracted(headers: HeaderMap, client_id: Option<&str>) -> Extracted {
     Extracted {
-      client_id: client_id.map(|s| llm_core::ClientId::from(SmolStr::new(s))),
+      client_id: client_id.map(|s| tokn_core::ClientId::from(SmolStr::new(s))),
       model: "gpt-4o".into(),
       stream: false,
       session_id: None,

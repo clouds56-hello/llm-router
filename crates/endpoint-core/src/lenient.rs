@@ -5,7 +5,7 @@ use crate::extras::Extras;
 
 /// Compile-time list of JSON keys belonging to a struct.
 ///
-/// Implemented by `#[derive(llm_endpoint_macros::LenientFields)]` on
+/// Implemented by `#[derive(tokn_endpoint_macros::LenientFields)]` on
 /// each `*RequestParameters` / `*ExtraParameters` struct. Used by
 /// [`peel_lenient`] to know which keys to pluck out of a raw JSON map
 /// before attempting strict deserialization.

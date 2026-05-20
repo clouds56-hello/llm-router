@@ -1,5 +1,5 @@
 [package]
-name = "llm-core"
+name = "tokn-core"
 version.workspace = true
 edition.workspace = true
 description = "Core types, traits, provider contracts, and shared utilities for tokn"
@@ -9,7 +9,7 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
-llm-headers = { workspace = true }
+tokn-headers = { workspace = true }
 async-trait = { workspace = true }
 anyhow = { workspace = true }
 bytes = { workspace = true }

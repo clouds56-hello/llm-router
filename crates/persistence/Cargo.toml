@@ -1,8 +1,8 @@
 [package]
-name = "llm-persistence"
+name = "tokn-persistence"
 version.workspace = true
 edition.workspace = true
-description = "Persistence layer (sqlite writers, migrations, archival) for the llm-router workspace"
+description = "Persistence layer (sqlite writers, migrations, archival) for the tokn-router workspace"
 documentation.workspace = true
 homepage.workspace = true
 repository.workspace = true
@@ -13,8 +13,8 @@ default = ["lzma"]
 lzma = ["dep:lzma-rust2"]
 
 [dependencies]
-llm-core = { workspace = true }
-llm-headers = { workspace = true }
+tokn-core = { workspace = true }
+tokn-headers = { workspace = true }
 bytes = { workspace = true }
 rusqlite = { workspace = true }
 serde_json = { workspace = true }

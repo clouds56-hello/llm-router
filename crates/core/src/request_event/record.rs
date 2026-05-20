@@ -24,7 +24,7 @@
 
 use bytes::Bytes;
 use crate::db::Usage;
-use llm_headers::HeaderMap;
+use tokn_headers::HeaderMap;
 use smol_str::SmolStr;
 
 /// Wire-truth capture from the actual outbound HTTP call (via
@@ -40,7 +40,7 @@ pub enum RecordEvent {
   /// Inbound client->router connection facts captured by the transport
   /// before the pipeline starts. Emitted outside the runner so callers can
   /// supply whatever connection context they have without widening
-  /// [`RawInbound`](llm_requests::RawInbound).
+  /// [`RawInbound`](tokn_requests::RawInbound).
   InboundConnection {
     local_addr: Option<SmolStr>,
     peer_addr: Option<SmolStr>,

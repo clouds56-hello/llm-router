@@ -3,11 +3,11 @@ use crate::api::AppState;
 use crate::pipeline::parse::RequestParser;
 use crate::provider::{new_outbound_capture, Endpoint, RequestCtx};
 use bytes::Bytes;
-use llm_accounts::routing::RouteResolution;
-use llm_accounts::{AccountHandle, EndpointAcquire};
-use llm_config::RouteMode;
-use llm_core::pipeline::{ParsedRequest, RequestMeta, RequestResolver, RequestSender};
-use llm_core::provider::TemplateVars;
+use tokn_accounts::routing::RouteResolution;
+use tokn_accounts::{AccountHandle, EndpointAcquire};
+use tokn_config::RouteMode;
+use tokn_core::pipeline::{ParsedRequest, RequestMeta, RequestResolver, RequestSender};
+use tokn_core::provider::TemplateVars;
 use serde_json::Value;
 use std::sync::Arc;
 use tracing::warn;
@@ -102,8 +102,8 @@ fn resolve_request(state: &AppState, parsed: ParsedRequest, attempt: usize) -> R
       parsed
         .meta
         .inbound_headers
-        .get(&llm_headers::HeaderName::new(
-          llm_accounts::routing::RouteResolver::mode_header(),
+        .get(&tokn_headers::HeaderName::new(
+          tokn_accounts::routing::RouteResolver::mode_header(),
         ))
         .map(|v| v.as_str()),
     )
@@ -184,8 +184,8 @@ pub(super) fn prepare_request(req: ResolvedRequest) -> crate::provider::Result<P
 }
 
 async fn send_request(state: &AppState, req: &PreparedRequest) -> crate::provider::Result<reqwest::Response> {
-  let inbound_lh: llm_headers::HeaderMap = (&req.provider_headers).into();
-  let profile_lh: Option<llm_headers::HeaderMap> = req.profile_headers.as_ref().map(|h| h.into());
+  let inbound_lh: tokn_headers::HeaderMap = (&req.provider_headers).into();
+  let profile_lh: Option<tokn_headers::HeaderMap> = req.profile_headers.as_ref().map(|h| h.into());
   let ctx = RequestCtx {
     endpoint: req.meta.upstream_endpoint,
     http: &state.http,
@@ -214,7 +214,7 @@ fn build_profile_headers(
 ) -> Option<reqwest::header::HeaderMap> {
   let persona = selected_persona(req)?;
   crate::proxy::header_pipeline::build_headers(crate::proxy::header_pipeline::HeaderPipelineInput {
-    profiles: llm_config::profiles::Profiles::global(),
+    profiles: tokn_config::profiles::Profiles::global(),
     persona: persona.as_str(),
     provider_id: req.account.provider.info().id.as_str(),
     inbound,
@@ -258,7 +258,7 @@ fn default_persona(provider_id: &str) -> Option<&'static str> {
 fn account_extra_headers(headers: &std::collections::BTreeMap<String, String>) -> reqwest::header::HeaderMap {
   let mut out = reqwest::header::HeaderMap::new();
   for (name, value) in headers {
-    if llm_config::profiles::is_router_controlled(name) {
+    if tokn_config::profiles::is_router_controlled(name) {
       continue;
     }
     let Ok(name) = reqwest::header::HeaderName::from_bytes(name.as_bytes()) else {
@@ -299,8 +299,8 @@ pub fn dry_run_request(
   resolved.decoded_body = decoded_body;
   resolved.content_encoding = content_encoding;
   let prepared = prepare_request(resolved).map_err(|e| ApiError::bad_gateway(e.to_string()))?;
-  let mut headers: llm_headers::HeaderMap = prepared.profile_headers.as_ref().map(|h| h.into()).unwrap_or_default();
-  let inbound_lh: llm_headers::HeaderMap = (&prepared.provider_headers).into();
+  let mut headers: tokn_headers::HeaderMap = prepared.profile_headers.as_ref().map(|h| h.into()).unwrap_or_default();
+  let inbound_lh: tokn_headers::HeaderMap = (&prepared.provider_headers).into();
   prepared
     .account
     .provider

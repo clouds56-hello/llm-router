@@ -10,8 +10,8 @@ use axum::http::header::{CONTENT_LENGTH, CONTENT_TYPE};
 use axum::http::{HeaderMap, Method};
 use axum::response::Response;
 use bytes::Bytes;
-use llm_convert::sse::SsePipeline;
-use llm_convert::usage::parse_usage_any_json;
+use tokn_convert::sse::SsePipeline;
+use tokn_convert::usage::parse_usage_any_json;
 use serde_json::Value;
 
 pub(crate) fn is_sse_response(headers: &HeaderMap, fallback_stream: bool) -> bool {
@@ -65,8 +65,8 @@ pub(crate) async fn passthrough_buffered_response(
   s.events.emit(event);
 
   // Passthrough is single-attempt; emit the terminal RequestCompleted here.
-  s.events.emit(llm_core::event::Event::LegacyRequest(
-    llm_core::event::LegacyRequestEvent::Completed {
+  s.events.emit(tokn_core::event::Event::LegacyRequest(
+    tokn_core::event::LegacyRequestEvent::Completed {
       request_id: ctx.request_id.clone(),
       success: status.is_success(),
       total_attempts: ctx.attempt + 1,

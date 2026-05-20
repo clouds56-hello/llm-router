@@ -1,5 +1,5 @@
 [package]
-name = "llm-accounts"
+name = "tokn-accounts"
 version.workspace = true
 edition.workspace = true
 description = "Account pooling, affinity, and model route resolution across tokn providers"
@@ -9,13 +9,13 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
-llm-core = { workspace = true }
-llm-auth = { workspace = true }
-llm-config = { workspace = true }
-llm-provider-copilot = { workspace = true }
-llm-provider-deepseek = { workspace = true }
-llm-provider-openai = { workspace = true }
-llm-provider-zai = { workspace = true }
+tokn-core = { workspace = true }
+tokn-auth = { workspace = true }
+tokn-config = { workspace = true }
+tokn-provider-copilot = { workspace = true }
+tokn-provider-deepseek = { workspace = true }
+tokn-provider-openai = { workspace = true }
+tokn-provider-zai = { workspace = true }
 arc-swap = { workspace = true }
 parking_lot = { workspace = true }
 reqwest = { workspace = true }

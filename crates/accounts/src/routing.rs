@@ -1,4 +1,4 @@
-use llm_config::{ModelFamily, RouteMode};
+use tokn_config::{ModelFamily, RouteMode};
 use std::collections::HashMap;
 
 const ROUTE_MODE_HEADER: &str = "x-route-mode";

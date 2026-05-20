@@ -1,4 +1,4 @@
-use llm_core::event::{Event, EventBus, LegacyRequestEvent};
+use tokn_core::event::{Event, EventBus, LegacyRequestEvent};
 use std::sync::Arc;
 use std::time::Instant;
 

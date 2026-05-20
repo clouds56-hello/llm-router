@@ -2,10 +2,10 @@ use clap::Parser;
 use std::error::Error as StdError;
 use std::process::ExitCode;
 
-use llm_config as config;
+use tokn_config as config;
 mod auth_registry;
 mod cli;
-use llm_persistence as db;
+use tokn_persistence as db;
 mod error;
 mod logging;
 mod progress;
@@ -15,7 +15,7 @@ mod util;
 
 #[tokio::main]
 async fn main() -> ExitCode {
-  if let Err(e) = llm_router::install_rustls_crypto_provider() {
+  if let Err(e) = tokn_router::install_rustls_crypto_provider() {
     eprintln!("error: {e}");
     return ExitCode::FAILURE;
   }

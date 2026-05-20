@@ -1,9 +1,9 @@
 use axum::http::HeaderMap;
-use llm_core::account::AccountConfig;
-use llm_core::provider::ID_GITHUB_COPILOT;
+use tokn_core::account::AccountConfig;
+use tokn_core::provider::ID_GITHUB_COPILOT;
 use std::collections::HashMap;
 
-use llm_accounts::registry::Registry;
+use tokn_accounts::registry::Registry;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AccountIdentity {
@@ -70,7 +70,7 @@ impl AccountIdentityResolver {
     }
     self
       .by_fingerprint
-      .get(&llm_core::util::redact::token_fingerprint(secret))
+      .get(&tokn_core::util::redact::token_fingerprint(secret))
   }
 }
 
@@ -99,7 +99,7 @@ fn fallback_account_id_for_secret(secret: &str) -> Option<String> {
   if secret.len() < 32 {
     return None;
   }
-  let fingerprint = llm_core::util::redact::token_fingerprint(secret);
+  let fingerprint = tokn_core::util::redact::token_fingerprint(secret);
   let suffix = fingerprint
     .strip_prefix("fp:")?
     .chars()
@@ -112,7 +112,7 @@ fn fallback_account_id_for_secret(secret: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use llm_core::account::{AccountConfig, AuthType, Secret};
+  use tokn_core::account::{AccountConfig, AuthType, Secret};
 
   fn account(
     id: &str,
@@ -201,7 +201,7 @@ mod tests {
     );
 
     let identity = resolver.resolve(&headers, "https://api.z.ai/api/paas/v4", &registry);
-    let fp = llm_core::util::redact::token_fingerprint(secret);
+    let fp = tokn_core::util::redact::token_fingerprint(secret);
     let want_suffix = &fp[fp.len() - 4..];
     assert_eq!(
       identity.account_id.as_deref(),

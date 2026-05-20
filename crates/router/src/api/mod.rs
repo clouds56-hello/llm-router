@@ -11,13 +11,13 @@ use axum::http::{HeaderMap, HeaderName, Request, Response};
 use axum::middleware::{self, Next};
 use axum::routing::{get, post};
 use axum::Router;
-use llm_accounts::registry::Registry as ProviderRegistry;
-use llm_accounts::routing::RouteResolver;
-use llm_accounts::AccountPool;
-use llm_config::Config;
-use llm_config::RouteMode;
-use llm_core::account::AccountConfig;
-use llm_core::event::EventBus;
+use tokn_accounts::registry::Registry as ProviderRegistry;
+use tokn_accounts::routing::RouteResolver;
+use tokn_accounts::AccountPool;
+use tokn_config::Config;
+use tokn_config::RouteMode;
+use tokn_core::account::AccountConfig;
+use tokn_core::event::EventBus;
 use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::Duration;
@@ -34,10 +34,10 @@ pub struct AppState {
   pub http: reqwest::Client,
   pub events: Arc<EventBus>,
   pub body_max_bytes: usize,
-  /// Optional `llm-requests` pipeline used to handle `chat_completions`
+  /// Optional `tokn-requests` pipeline used to handle `chat_completions`
   /// when the `LLM_ROUTER_USE_PIPELINE=chat` env var is set. POC plumbing
   /// — `None` in default builds, so legacy `handle_endpoint` runs.
-  pub chat_pipeline: Option<Arc<llm_requests::Pipeline>>,
+  pub chat_pipeline: Option<Arc<tokn_requests::Pipeline>>,
 }
 
 /// Header name used for request ids. Honors inbound `x-request-id` if present.
@@ -55,7 +55,7 @@ pub const PROJECT_ID_HEADERS: &[&str] = &["x-opencode-project"];
 
 pub(crate) fn is_router_owned_header(name: &axum::http::HeaderName) -> bool {
   let name = name.as_str();
-  name.starts_with("x-llm-router-")
+  name.starts_with("x-tokn-router-")
     || name == "x-route-mode"
     || name == "x-behave-as"
 }
@@ -221,7 +221,7 @@ pub fn build_state(cfg: &Config, accounts: &[AccountConfig], events: Arc<EventBu
     AccountPool::from_accounts_with(accounts, cfg, move |account| registry.build(account))?
   };
   let route = Arc::new(RouteResolver::new(cfg.server.route_mode, &cfg.model_families));
-  let http = llm_core::util::http::build_client(&cfg.proxy.to_http_options())?;
+  let http = tokn_core::util::http::build_client(&cfg.proxy.to_http_options())?;
   let body_max_bytes = if cfg.db.enabled { cfg.db.body_max_bytes } else { 0 };
   let chat_pipeline = build_chat_pipeline(pool.clone(), route.clone(), http.clone(), events.clone());
   Ok(AppState {
@@ -249,16 +249,16 @@ fn build_chat_pipeline(
   route: Arc<RouteResolver>,
   http: reqwest::Client,
   events: Arc<EventBus>,
-) -> Option<Arc<llm_requests::Pipeline>> {
+) -> Option<Arc<tokn_requests::Pipeline>> {
   if std::env::var("LLM_ROUTER_USE_PIPELINE").as_deref() != Ok("chat") {
     return None;
   }
-  use llm_requests::stages::{
+  use tokn_requests::stages::{
     DefaultConvertRequest, DefaultConvertResponse, DefaultExtract, DefaultSend, PersonaBuildHeaders,
     PoolAccountSelector, PoolResolve,
   };
   let selector = Arc::new(PoolAccountSelector::new(pool, route));
-  let profile = llm_requests::Profile::full(
+  let profile = tokn_requests::Profile::full(
     "chat-poc",
     Arc::new(DefaultExtract),
     Arc::new(PoolResolve::new(selector)),
@@ -267,7 +267,7 @@ fn build_chat_pipeline(
     Arc::new(DefaultSend::new(http)),
     Arc::new(DefaultConvertResponse::new()),
   );
-  Some(Arc::new(llm_requests::Pipeline::new(Arc::new(profile), events)))
+  Some(Arc::new(tokn_requests::Pipeline::new(Arc::new(profile), events)))
 }
 
 #[cfg(test)]
@@ -286,7 +286,7 @@ mod tests {
       id: "acct".into(),
       provider: "zai-coding-plan".into(),
       enabled: true,
-      tier: llm_core::account::AccountTier::Active,
+      tier: tokn_core::account::AccountTier::Active,
       tags: Vec::new(),
       label: None,
       base_url: None,

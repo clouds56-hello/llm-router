@@ -26,32 +26,32 @@ resolver = "2"
 [workspace.package]
 version = "0.1.1-rc.0"
 edition = "2021"
-documentation = "https://docs.rs/llm-router"
-homepage = "https://github.com/agentic-rs/llm-router"
-repository = "https://github.com/agentic-rs/llm-router"
+documentation = "https://docs.rs/tokn-router"
+homepage = "https://github.com/agentic-rs/tokn-router"
+repository = "https://github.com/agentic-rs/tokn-router"
 license = "MIT"
 
 [workspace.dependencies]
 tokn = { version = "0.1.1-rc.0", path = "crates/tokn" }
-llm-core = { version = "0.1.1-rc.0", path = "crates/core" }
-llm-config = { version = "0.1.1-rc.0", path = "crates/config" }
-llm-auth = { version = "0.1.1-rc.0", path = "crates/auth" }
-llm-catalogue = { version = "0.1.1-rc.0", path = "crates/catalogue" }
-llm-convert = { version = "0.1.1-rc.0", path = "crates/convert" }
-llm-endpoint-core = { version = "0.1.1-rc.0", path = "crates/endpoint-core" }
-llm-endpoint-macros = { version = "0.1.1-rc.0", path = "crates/endpoint-macros" }
-llm-endpoint-chat-completions = { version = "0.1.1-rc.0", path = "crates/endpoint-chat-completions" }
-llm-endpoint-responses = { version = "0.1.1-rc.0", path = "crates/endpoint-responses" }
-llm-endpoint-messages = { version = "0.1.1-rc.0", path = "crates/endpoint-messages" }
-llm-headers = { version = "0.1.1-rc.0", path = "crates/headers" }
-llm-router = { version = "0.1.1-rc.0", path = "crates/router" }
-llm-requests = { version = "0.1.1-rc.0", path = "crates/requests" }
-llm-persistence = { version = "0.1.1-rc.0", path = "crates/persistence" }
-llm-accounts = { version = "0.1.1-rc.0", path = "crates/accounts" }
-llm-provider-copilot = { version = "0.1.1-rc.0", path = "crates/provider-copilot" }
-llm-provider-deepseek = { version = "0.1.1-rc.0", path = "crates/provider-deepseek" }
-llm-provider-openai = { version = "0.1.1-rc.0", path = "crates/provider-openai" }
-llm-provider-zai = { version = "0.1.1-rc.0", path = "crates/provider-zai" }
+tokn-core = { version = "0.1.1-rc.0", path = "crates/core" }
+tokn-config = { version = "0.1.1-rc.0", path = "crates/config" }
+tokn-auth = { version = "0.1.1-rc.0", path = "crates/auth" }
+tokn-catalogue = { version = "0.1.1-rc.0", path = "crates/catalogue" }
+tokn-convert = { version = "0.1.1-rc.0", path = "crates/convert" }
+tokn-endpoint-core = { version = "0.1.1-rc.0", path = "crates/endpoint-core" }
+tokn-endpoint-macros = { version = "0.1.1-rc.0", path = "crates/endpoint-macros" }
+tokn-endpoint-chat-completions = { version = "0.1.1-rc.0", path = "crates/endpoint-chat-completions" }
+tokn-endpoint-responses = { version = "0.1.1-rc.0", path = "crates/endpoint-responses" }
+tokn-endpoint-messages = { version = "0.1.1-rc.0", path = "crates/endpoint-messages" }
+tokn-headers = { version = "0.1.1-rc.0", path = "crates/headers" }
+tokn-router = { version = "0.1.1-rc.0", path = "crates/router" }
+tokn-requests = { version = "0.1.1-rc.0", path = "crates/requests" }
+tokn-persistence = { version = "0.1.1-rc.0", path = "crates/persistence" }
+tokn-accounts = { version = "0.1.1-rc.0", path = "crates/accounts" }
+tokn-provider-copilot = { version = "0.1.1-rc.0", path = "crates/provider-copilot" }
+tokn-provider-deepseek = { version = "0.1.1-rc.0", path = "crates/provider-deepseek" }
+tokn-provider-openai = { version = "0.1.1-rc.0", path = "crates/provider-openai" }
+tokn-provider-zai = { version = "0.1.1-rc.0", path = "crates/provider-zai" }
 
 anyhow = "1"
 arc-swap = "1"

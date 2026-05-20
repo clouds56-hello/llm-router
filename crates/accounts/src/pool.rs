@@ -1,9 +1,9 @@
 use super::affinity::{Affinity, Lookup};
 use super::handle::AccountHandle;
 use crate::routing::{RouteResolution, RouteSelector};
-use llm_config::Config;
-use llm_core::account::{AccountConfig, AccountTier};
-use llm_core::provider::{Endpoint, Provider};
+use tokn_config::Config;
+use tokn_core::account::{AccountConfig, AccountTier};
+use tokn_core::provider::{Endpoint, Provider};
 use snafu::{ResultExt, Snafu};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -19,13 +19,13 @@ use tracing::{debug, info};
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum Error {
-  #[snafu(display("no accounts configured. Run `llm-router account add` first."))]
+  #[snafu(display("no accounts configured. Run `tokn-router account add` first."))]
   NoAccounts,
 
   #[snafu(display("failed to build provider for account `{id}`"))]
   BuildAccount {
     id: String,
-    source: llm_core::provider::Error,
+    source: tokn_core::provider::Error,
   },
 }
 
@@ -80,7 +80,7 @@ impl AccountPool {
 
   pub fn from_accounts_with<F>(accounts_in: &[AccountConfig], cfg: &Config, build_provider: F) -> Result<Arc<Self>>
   where
-    F: Fn(Arc<AccountConfig>) -> llm_core::provider::Result<Arc<dyn Provider>>,
+    F: Fn(Arc<AccountConfig>) -> tokn_core::provider::Result<Arc<dyn Provider>>,
   {
     if accounts_in.is_empty() {
       return NoAccountsSnafu.fail();
@@ -492,7 +492,7 @@ fn earliest_cooldown(accounts: &[Arc<AccountHandle>]) -> Option<(Arc<AccountHand
 mod tests {
   use super::*;
   use async_trait::async_trait;
-  use llm_core::provider::{
+  use tokn_core::provider::{
     AuthKind, Capabilities, Interleaved, Limits, Modalities, ModelCache, ModelInfo, ProviderInfo, RequestCtx,
   };
   use serde_json::Value;
@@ -528,11 +528,11 @@ mod tests {
       &self.info
     }
 
-    async fn list_models(&self, _http: &reqwest::Client) -> llm_core::provider::Result<Value> {
+    async fn list_models(&self, _http: &reqwest::Client) -> tokn_core::provider::Result<Value> {
       Ok(serde_json::json!({ "object": "list", "data": [] }))
     }
 
-    async fn chat(&self, _ctx: RequestCtx<'_>) -> llm_core::provider::Result<reqwest::Response> {
+    async fn chat(&self, _ctx: RequestCtx<'_>) -> tokn_core::provider::Result<reqwest::Response> {
       unreachable!()
     }
   }

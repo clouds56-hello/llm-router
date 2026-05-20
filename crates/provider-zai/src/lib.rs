@@ -4,17 +4,17 @@ pub mod quota;
 pub mod transform;
 pub mod zai;
 
-pub use llm_catalogue as catalogue;
-pub use llm_core::provider::{
+pub use tokn_catalogue as catalogue;
+pub use tokn_core::provider::{
   error, AuthKind, Endpoint, HeaderPatchCtx, ModelInfo, Provider, ProviderInfo, RequestCtx, Result, TemplateVars,
   ID_ZAI, ID_ZAI_CODING_PLAN, ID_ZHIPUAI, ID_ZHIPUAI_CODING_PLAN, ZAI_PROVIDERS,
 };
-pub use llm_core::{account as config, provider, util};
+pub use tokn_core::{account as config, provider, util};
 
 pub use zai::*;
 
-use llm_auth::descriptor::{EndpointSpec, ProviderDescriptor};
-use llm_auth::provider::CredentialFlavor;
+use tokn_auth::descriptor::{EndpointSpec, ProviderDescriptor};
+use tokn_auth::provider::CredentialFlavor;
 use std::sync::Arc;
 
 const ZAI_HOSTS: &[&str] = &["api.z.ai"];
@@ -118,12 +118,12 @@ pub fn matches_url(host: &str, path: &str, id: &'static str) -> bool {
   }
 }
 
-pub fn validate(account: &llm_core::account::AccountConfig) -> llm_core::provider::Result<()> {
+pub fn validate(account: &tokn_core::account::AccountConfig) -> tokn_core::provider::Result<()> {
   zai::ZaiProvider::validate_account(account)
 }
 
 pub fn build(
-  account: Arc<llm_core::account::AccountConfig>,
-) -> llm_core::provider::Result<Arc<dyn llm_core::provider::Provider>> {
+  account: Arc<tokn_core::account::AccountConfig>,
+) -> tokn_core::provider::Result<Arc<dyn tokn_core::provider::Provider>> {
   Ok(Arc::new(zai::ZaiProvider::from_account(account)?))
 }

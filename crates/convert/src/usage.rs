@@ -15,7 +15,7 @@
 //!   `input_tokens` excludes cached portions, so we normalize
 //!   `Usage.input_tokens` to the total (input + cache_creation + cache_read).
 
-use llm_core::db::{Usage, UsageDetails};
+use tokn_core::db::{Usage, UsageDetails};
 use serde_json::Value;
 
 /// Extract `Usage` from an upstream response body. Returns an empty `Usage`

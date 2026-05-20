@@ -1,5 +1,5 @@
 [package]
-name = "llm-headers"
+name = "tokn-headers"
 version.workspace = true
 edition.workspace = true
 description = "Header schema, parsing, and persona utilities shared across tokn crates"

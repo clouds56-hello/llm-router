@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use llm_endpoint_core::Extras;
+use tokn_endpoint_core::Extras;
 
 /// One block in a Messages API content array.
 #[derive(Clone, Debug, Serialize, Deserialize)]

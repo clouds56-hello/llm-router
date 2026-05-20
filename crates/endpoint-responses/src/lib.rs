@@ -25,7 +25,7 @@ pub use request::{ResponsesInput, ResponsesRequest, ResponsesToolChoice, Respons
 pub use response::ResponsesResponse;
 pub use usage::ResponsesUsage;
 
-use llm_endpoint_core::{Endpoint, EndpointEvent, EndpointItem, EndpointRequest, EndpointResponse};
+use tokn_endpoint_core::{Endpoint, EndpointEvent, EndpointItem, EndpointRequest, EndpointResponse};
 
 impl EndpointRequest for ResponsesRequest {
   const ENDPOINT: Endpoint = Endpoint::Responses;

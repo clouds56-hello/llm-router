@@ -6,7 +6,7 @@
 //! were captured.
 //!
 //! Run with:
-//!   cargo run --example extras_stats -p llm-convert
+//!   cargo run --example extras_stats -p tokn-convert
 //!
 //! Optional env vars:
 //!   EXTRAS_LIMIT=1000    rows per endpoint (default 1000)
@@ -19,10 +19,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use llm_endpoint_chat_completions::{ChatEvent, ChatRequest, ChatResponse};
-use llm_endpoint_core::ExtraKeys;
-use llm_endpoint_messages::{MessagesEvent, MessagesRequest, MessagesResponse};
-use llm_endpoint_responses::{ResponsesEvent, ResponsesRequest, ResponsesResponse};
+use tokn_endpoint_chat_completions::{ChatEvent, ChatRequest, ChatResponse};
+use tokn_endpoint_core::ExtraKeys;
+use tokn_endpoint_messages::{MessagesEvent, MessagesRequest, MessagesResponse};
+use tokn_endpoint_responses::{ResponsesEvent, ResponsesRequest, ResponsesResponse};
 use rusqlite::{Connection, OpenFlags};
 
 const DEFAULT_LIMIT: usize = 1000;
@@ -76,7 +76,7 @@ fn main() -> Result<()> {
 
   let dir = match std::env::var("EXTRAS_DB_DIR") {
     Ok(s) => PathBuf::from(s),
-    Err(_) => llm_config::paths::default_requests_dir().context("resolve default requests dir")?,
+    Err(_) => tokn_config::paths::default_requests_dir().context("resolve default requests dir")?,
   };
 
   if !dir.exists() {

@@ -1,7 +1,7 @@
 //! Crate-wide error type.
 //!
-//! Each subsystem owns its own `snafu::Snafu` enum (see `llm_router::accounts::Error`,
-//! `db::Error`, `llm_catalogue::loader::Error`, `config::Error`,
+//! Each subsystem owns its own `snafu::Snafu` enum (see `tokn_router::accounts::Error`,
+//! `db::Error`, `tokn_catalogue::loader::Error`, `config::Error`,
 //! `provider::Error`, `cli::Error`). Those compose into the top-level
 //! [`Error`] via `#[snafu(source)]`.
 //!
@@ -12,7 +12,7 @@
 //!    underlying cause is reachable via [`std::error::Error::source`] and
 //!    rendered separately by the CLI reporter / log layer.
 //! 2. **Public surfaces never leak internals.** HTTP error mapping lives in
-//!    `llm-router`; this CLI error type is for process-level reporting only.
+//!    `tokn-router`; this CLI error type is for process-level reporting only.
 //!
 //! Known limitation: upstream HTTP response bodies are still interpolated
 //! verbatim into a few provider-level error messages
@@ -32,13 +32,13 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 #[allow(dead_code)]
 pub enum Error {
   #[snafu(display("pool"), context(false))]
-  Pool { source: llm_router::accounts::Error },
+  Pool { source: tokn_router::accounts::Error },
 
   #[snafu(display("db"), context(false))]
   Db { source: crate::db::Error },
 
   #[snafu(display("catalogue"), context(false))]
-  Catalogue { source: llm_catalogue::loader::Error },
+  Catalogue { source: tokn_catalogue::loader::Error },
 
   #[snafu(display("config"), context(false))]
   Config { source: crate::config::Error },

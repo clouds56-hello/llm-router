@@ -4,9 +4,9 @@ pub mod profiles;
 
 use directories::ProjectDirs;
 pub use error::{Error, Result};
-pub use llm_core::account::{Account, AccountConfig, AccountState, AccountTier, AuthType};
+pub use tokn_core::account::{Account, AccountConfig, AccountState, AccountTier, AuthType};
 
-use llm_core::provider::ID_GITHUB_COPILOT;
+use tokn_core::provider::ID_GITHUB_COPILOT;
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt;
 use std::path::{Path, PathBuf};
@@ -174,8 +174,8 @@ impl Default for DbConfig {
 }
 
 impl DbConfig {
-  pub fn resolve_paths(&self) -> Result<llm_core::db::DbPaths> {
-    Ok(llm_core::db::DbPaths {
+  pub fn resolve_paths(&self) -> Result<tokn_core::db::DbPaths> {
+    Ok(tokn_core::db::DbPaths {
       usage_db: self
         .usage_db_path
         .clone()
@@ -238,8 +238,8 @@ impl ProxyConfig {
     Ok(())
   }
 
-  pub fn to_http_options(&self) -> llm_core::util::http::HttpClientOptions {
-    llm_core::util::http::HttpClientOptions {
+  pub fn to_http_options(&self) -> tokn_core::util::http::HttpClientOptions {
+    tokn_core::util::http::HttpClientOptions {
       url: self.url.clone(),
       no_proxy: self.no_proxy.clone(),
       system: self.system,
@@ -326,7 +326,7 @@ impl Default for LoggingConfig {
 }
 
 fn default_log_level() -> String {
-  "info,llm_router=info".into()
+  "info,tokn_router=info".into()
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -497,7 +497,7 @@ fn is_proxy_host(s: &str) -> bool {
 }
 
 pub fn project_dirs() -> Result<ProjectDirs> {
-  llm_core::util::paths::project_dirs().ok_or(Error::NoProjectDirs)
+  tokn_core::util::paths::project_dirs().ok_or(Error::NoProjectDirs)
 }
 
 fn write_atomic(path: &Path, contents: &str) -> Result<()> {

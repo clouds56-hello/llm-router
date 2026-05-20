@@ -18,10 +18,10 @@ pub use crate::{models, quota, transform};
 
 use crate::util::secret::Secret;
 use async_trait::async_trait;
-use llm_core::account::AccountConfig;
-use llm_core::pipeline::InputTransformer;
-use llm_headers::keys::{ACCEPT, AUTHORIZATION, CONTENT_ENCODING, CONTENT_TYPE};
-use llm_headers::{HeaderMap, HeaderValue};
+use tokn_core::account::AccountConfig;
+use tokn_core::pipeline::InputTransformer;
+use tokn_headers::keys::{ACCEPT, AUTHORIZATION, CONTENT_ENCODING, CONTENT_TYPE};
+use tokn_headers::{HeaderMap, HeaderValue};
 use reqwest::Method;
 use serde_json::Value;
 use tracing::{debug, instrument, warn};
@@ -87,7 +87,7 @@ impl ZaiProvider {
       auth_kind: AuthKind::StaticApiKey,
       default_models: models::catalogue_for(&a.provider),
       default_endpoints: crate::DEFAULT_ENDPOINTS,
-      model_cache: std::sync::Arc::new(llm_core::provider::ModelCache::default()),
+      model_cache: std::sync::Arc::new(tokn_core::provider::ModelCache::default()),
     };
     Ok(Self {
       id: format!("{}:{}", a.provider, a.id),
@@ -278,7 +278,7 @@ mod tests {
       id: "test".into(),
       provider: provider.into(),
       enabled: true,
-      tier: llm_core::account::AccountTier::Active,
+      tier: tokn_core::account::AccountTier::Active,
       tags: Vec::new(),
       label: None,
       base_url: None,

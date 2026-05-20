@@ -1,4 +1,4 @@
-//! Adapter helpers for materializing a [`llm_requests::ConvertedResponse`]
+//! Adapter helpers for materializing a [`tokn_requests::ConvertedResponse`]
 //! into an axum `Response`. Used only by the experimental chat-completions
 //! pipeline POC path gated on `LLM_ROUTER_USE_PIPELINE=chat`.
 //!
@@ -14,7 +14,7 @@
 use axum::body::Body;
 use axum::http::{header, HeaderMap, HeaderValue, Response, StatusCode};
 use axum::response::IntoResponse;
-use llm_requests::pipeline::stages::{ConvertedBody, ConvertedResponse};
+use tokn_requests::pipeline::stages::{ConvertedBody, ConvertedResponse};
 
 /// Convert a [`ConvertedResponse`] into an axum response.
 ///

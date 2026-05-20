@@ -6,7 +6,7 @@ use crate::util::secret::Secret;
 use crate::util::timefmt::{relative_from_now, relative_from_now_ms};
 use anyhow::{anyhow, bail, Result};
 use clap::{Args, Subcommand};
-use llm_auth::AuthStore;
+use tokn_auth::AuthStore;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -142,7 +142,7 @@ async fn list(cfg: &Config, store: &mut AuthStore, args: ListArgs) -> Result<()>
   for (a, q) in store.accounts.iter_mut().zip(quotas.iter()) {
     if let QuotaResult::Ok {
       refreshed:
-        Some(llm_auth::RefreshOutcome::Refreshed {
+        Some(tokn_auth::RefreshOutcome::Refreshed {
           access_token,
           expires_at,
           username,
@@ -207,11 +207,11 @@ enum QuotaResult {
   Skipped,
   None, // not applicable to this provider
   Ok {
-    snap: llm_auth::QuotaSnapshot,
+    snap: tokn_auth::QuotaSnapshot,
     /// Fresh access token returned by a piggy-backed `refresh_credential`
     /// call (Copilot only). Persisted to auth.yaml so the daemon — which
     /// never writes at runtime — starts up with a non-expired cache.
-    refreshed: Option<llm_auth::RefreshOutcome>,
+    refreshed: Option<tokn_auth::RefreshOutcome>,
   },
   Err(String),
 }
@@ -241,8 +241,8 @@ async fn fetch_quota(http: reqwest::Client, account: Account, timeout: Duration)
     Ok((Err(e), _)) => QuotaResult::Err(short_err(&e)),
     Ok((Ok(refresh), quota_res)) => {
       let refreshed = match refresh {
-        llm_auth::RefreshOutcome::Refreshed { .. } => Some(refresh),
-        llm_auth::RefreshOutcome::NotApplicable => None,
+        tokn_auth::RefreshOutcome::Refreshed { .. } => Some(refresh),
+        tokn_auth::RefreshOutcome::NotApplicable => None,
       };
       match quota_res {
         Err(e) => QuotaResult::Err(short_err(&e)),
@@ -282,7 +282,7 @@ fn render_account(a: &Account, q: &QuotaResult) {
   }
 }
 
-fn render_snapshot(snap: &llm_auth::QuotaSnapshot) {
+fn render_snapshot(snap: &tokn_auth::QuotaSnapshot) {
   if let Some(plan) = &snap.plan {
     println!("  plan        : {plan}");
   }
@@ -308,7 +308,7 @@ fn render_snapshot(snap: &llm_auth::QuotaSnapshot) {
   }
 }
 
-fn print_usage_bucket(b: &llm_auth::UsageBucket) {
+fn print_usage_bucket(b: &tokn_auth::UsageBucket) {
   let body = match (b.used, b.total, b.percent_used) {
     (Some(u), Some(t), Some(p)) => format!("{u} / {t} ({p:.1}%)"),
     (Some(u), Some(t), None) if t > 0 => {
@@ -469,14 +469,14 @@ async fn refresh(cfg: &Config, store: &mut AuthStore, id: &str) -> Result<()> {
     .await
     .map_err(|e| anyhow!("refresh failed: {e}"))?
   {
-    llm_auth::RefreshOutcome::NotApplicable => {
+    tokn_auth::RefreshOutcome::NotApplicable => {
       println!(
         "nothing to refresh: provider '{}' uses a static credential",
         account.provider
       );
       Ok(())
     }
-    llm_auth::RefreshOutcome::Refreshed {
+    tokn_auth::RefreshOutcome::Refreshed {
       access_token,
       expires_at,
       username,
@@ -509,7 +509,7 @@ async fn refresh(cfg: &Config, store: &mut AuthStore, id: &str) -> Result<()> {
 
 async fn status(cfg: &Config, store: &mut AuthStore, id: Option<String>) -> Result<()> {
   if store.accounts.is_empty() {
-    println!("(no accounts) — run `llm-router account add` to add one");
+    println!("(no accounts) — run `tokn-router account add` to add one");
     return Ok(());
   }
   let timeout = Duration::from_secs(5);
@@ -525,7 +525,7 @@ async fn status(cfg: &Config, store: &mut AuthStore, id: Option<String>) -> Resu
   for (a, q) in store.accounts.iter_mut().zip(quotas.iter()) {
     if let QuotaResult::Ok {
       refreshed:
-        Some(llm_auth::RefreshOutcome::Refreshed {
+        Some(tokn_auth::RefreshOutcome::Refreshed {
           access_token,
           expires_at,
           username,
@@ -729,7 +729,7 @@ fn lookup_provider(accounts: &[Account], id: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use llm_core::account::AccountTier;
+  use tokn_core::account::AccountTier;
 
   #[test]
   fn fmt_int_groups_thousands() {

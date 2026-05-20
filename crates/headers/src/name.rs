@@ -8,7 +8,7 @@
 //! Construct compile-time constants with [`HeaderName::new_static`]:
 //!
 //! ```
-//! use llm_headers::HeaderName;
+//! use tokn_headers::HeaderName;
 //! const AUTH: HeaderName = HeaderName::new_static("Authorization", "authorization");
 //! assert_eq!(AUTH.original(), "Authorization");
 //! assert_eq!(AUTH.as_str(), "authorization");

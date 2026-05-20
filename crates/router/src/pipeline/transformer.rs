@@ -3,7 +3,7 @@ use crate::api::AppState;
 use crate::relay::{buffered_response, stream_response, ForwardContext};
 use async_trait::async_trait;
 use axum::response::Response;
-use llm_core::pipeline::{OutputTransformer, RequestMeta};
+use tokn_core::pipeline::{OutputTransformer, RequestMeta};
 use serde_json::Value;
 use std::time::Instant;
 

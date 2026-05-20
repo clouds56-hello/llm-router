@@ -2,8 +2,8 @@ use super::provider::endpoints_for_model;
 use super::OutputFormat;
 use anyhow::Result;
 use clap::Args;
-use llm_core::provider::{Capabilities, Cost, Limits, Modalities, ModelInfo};
-use llm_router::accounts::registry::Registry;
+use tokn_core::provider::{Capabilities, Cost, Limits, Modalities, ModelInfo};
+use tokn_router::accounts::registry::Registry;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -125,7 +125,7 @@ fn model_report(model_id: &str) -> ModelReport {
   let matches = registry
     .iter()
     .filter_map(|descriptor| {
-      let model = llm_catalogue::default_models_for(descriptor.id)
+      let model = tokn_catalogue::default_models_for(descriptor.id)
         .into_iter()
         .find(|m| m.id == model_id)?;
       let endpoints = endpoints_for_model(descriptor, &model.id)
@@ -153,7 +153,7 @@ fn all_model_ids() -> Vec<String> {
   let registry = Registry::builtin();
   let mut ids = BTreeSet::new();
   for descriptor in registry.iter() {
-    for model in llm_catalogue::default_models_for(descriptor.id) {
+    for model in tokn_catalogue::default_models_for(descriptor.id) {
       ids.insert(model.id);
     }
   }

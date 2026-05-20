@@ -9,19 +9,19 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
-llm-auth = { workspace = true }
-llm-catalogue = { workspace = true }
-llm-config = { workspace = true }
-llm-convert = { workspace = true }
-llm-core = { workspace = true }
-llm-endpoint-chat-completions = { workspace = true }
-llm-endpoint-core = { workspace = true }
-llm-endpoint-macros = { workspace = true }
-llm-endpoint-messages = { workspace = true }
-llm-endpoint-responses = { workspace = true }
-llm-headers = { workspace = true }
-llm-provider-copilot = { workspace = true }
-llm-provider-deepseek = { workspace = true }
-llm-provider-openai = { workspace = true }
-llm-provider-zai = { workspace = true }
-llm-router = { workspace = true }
+tokn-auth = { workspace = true }
+tokn-catalogue = { workspace = true }
+tokn-config = { workspace = true }
+tokn-convert = { workspace = true }
+tokn-core = { workspace = true }
+tokn-endpoint-chat-completions = { workspace = true }
+tokn-endpoint-core = { workspace = true }
+tokn-endpoint-macros = { workspace = true }
+tokn-endpoint-messages = { workspace = true }
+tokn-endpoint-responses = { workspace = true }
+tokn-headers = { workspace = true }
+tokn-provider-copilot = { workspace = true }
+tokn-provider-deepseek = { workspace = true }
+tokn-provider-openai = { workspace = true }
+tokn-provider-zai = { workspace = true }
+tokn-router = { workspace = true }

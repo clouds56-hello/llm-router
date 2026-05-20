@@ -2,7 +2,7 @@ use crate::api::{first_header, PROJECT_ID_HEADERS, REQUEST_ID_HEADERS, SESSION_I
 use crate::provider::Endpoint;
 use axum::http::header::ACCEPT;
 use axum::http::HeaderMap;
-use llm_core::pipeline::{ParsedRequest, RequestMeta};
+use tokn_core::pipeline::{ParsedRequest, RequestMeta};
 use serde_json::Value;
 
 #[derive(Clone, Debug)]

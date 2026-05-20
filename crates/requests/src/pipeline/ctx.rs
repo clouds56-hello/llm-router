@@ -9,8 +9,8 @@
 //! state we add later (timings, cancellation tokens, etc.).
 
 use crate::event::{CustomEvent, Event, EventBus, EventPayload, RecordEvent, StageEvent};
-use llm_core::event::Event as CoreEvent;
-use llm_core::provider::Endpoint;
+use tokn_core::event::Event as CoreEvent;
+use tokn_core::provider::Endpoint;
 use smol_str::SmolStr;
 use std::sync::Arc;
 
@@ -43,7 +43,7 @@ impl PipelineCtx {
     self.events.emit(CoreEvent::Requests(Event {
       request_id: self.request_id.clone(),
       attempt: self.attempt,
-      ts: llm_core::util::now_unix_ms(),
+      ts: tokn_core::util::now_unix_ms(),
       payload: EventPayload::Stage(payload),
     }));
   }
@@ -56,7 +56,7 @@ impl PipelineCtx {
     self.events.emit(CoreEvent::Requests(Event {
       request_id: self.request_id.clone(),
       attempt: self.attempt,
-      ts: llm_core::util::now_unix_ms(),
+      ts: tokn_core::util::now_unix_ms(),
       payload: EventPayload::Record(payload),
     }));
   }
@@ -66,7 +66,7 @@ impl PipelineCtx {
     self.events.emit(CoreEvent::Requests(Event {
       request_id: self.request_id.clone(),
       attempt: self.attempt,
-      ts: llm_core::util::now_unix_ms(),
+      ts: tokn_core::util::now_unix_ms(),
       payload: EventPayload::Custom(CustomEvent::new(kind, value)),
     }));
   }

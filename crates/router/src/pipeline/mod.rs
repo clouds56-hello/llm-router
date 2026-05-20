@@ -15,10 +15,10 @@ use axum::http::HeaderValue;
 use axum::http::StatusCode;
 use axum::response::Response;
 use bytes::Bytes;
-use llm_core::db::{SessionSource, Usage};
-use llm_core::event::{Event, LegacyRequestEvent};
-use llm_core::pipeline::ParsedRequest;
-use llm_core::pipeline::{OutputTransformer, RequestResolver, RequestSender};
+use tokn_core::db::{SessionSource, Usage};
+use tokn_core::event::{Event, LegacyRequestEvent};
+use tokn_core::pipeline::ParsedRequest;
+use tokn_core::pipeline::{OutputTransformer, RequestResolver, RequestSender};
 use request::{prepare_request, PoolResolver, PreparedRequest, ProviderSender};
 
 pub use request::{dry_run_request, DryRunEndpoint, DryRunOutput};
@@ -127,7 +127,7 @@ fn emit_early_failure(
   request_id: &str,
   attempt: u32,
   started: Instant,
-  parsed_meta: &llm_core::pipeline::RequestMeta,
+  parsed_meta: &tokn_core::pipeline::RequestMeta,
   inbound_body: Bytes,
   api_err: &ApiError,
 ) {
@@ -230,8 +230,8 @@ pub(crate) async fn handle_endpoint(
       }
     };
 
-    state.events.emit(llm_core::event::Event::LegacyRequest(
-      llm_core::event::LegacyRequestEvent::Parsed {
+    state.events.emit(tokn_core::event::Event::LegacyRequest(
+      tokn_core::event::LegacyRequestEvent::Parsed {
         request_id: request_id.clone(),
         attempt: attempt_u32,
         account_id: prepared.account.id(),
@@ -256,8 +256,8 @@ pub(crate) async fn handle_endpoint(
       Err(e) => {
         warn!(parent: &attempt_span, error = %e, "provider request failed");
         prepared.account.mark_failure(state.pool.cooldown_base());
-        state.events.emit(llm_core::event::Event::LegacyRequest(
-          llm_core::event::LegacyRequestEvent::Retry {
+        state.events.emit(tokn_core::event::Event::LegacyRequest(
+          tokn_core::event::LegacyRequestEvent::Retry {
             request_id: request_id.clone(),
             attempt: attempt_u32,
             error: e.to_string(),
@@ -286,8 +286,8 @@ pub(crate) async fn handle_endpoint(
         started,
       );
       prepared.account.invalidate_credentials();
-      state.events.emit(llm_core::event::Event::LegacyRequest(
-        llm_core::event::LegacyRequestEvent::Retry {
+      state.events.emit(tokn_core::event::Event::LegacyRequest(
+        tokn_core::event::LegacyRequestEvent::Retry {
           request_id: request_id.clone(),
           attempt: attempt_u32,
           error: "unauthorized".into(),
@@ -316,8 +316,8 @@ pub(crate) async fn handle_endpoint(
         started,
       );
       prepared.account.mark_failure(state.pool.cooldown_base());
-      state.events.emit(llm_core::event::Event::LegacyRequest(
-        llm_core::event::LegacyRequestEvent::Retry {
+      state.events.emit(tokn_core::event::Event::LegacyRequest(
+        tokn_core::event::LegacyRequestEvent::Retry {
           request_id: request_id.clone(),
           attempt: attempt_u32,
           error: body_text.clone(),
@@ -401,8 +401,8 @@ pub(crate) async fn handle_endpoint(
     } else {
       let resp = transformer.transform_result(state.clone(), upstream).await;
       // Buffered: emit terminal RequestCompleted
-      state.events.emit(llm_core::event::Event::LegacyRequest(
-        llm_core::event::LegacyRequestEvent::Completed {
+      state.events.emit(tokn_core::event::Event::LegacyRequest(
+        tokn_core::event::LegacyRequestEvent::Completed {
           request_id: request_id.clone(),
           success: true,
           total_attempts: attempt_u32 + 1,
@@ -428,8 +428,8 @@ pub(crate) async fn handle_endpoint(
     msg.clone(),
     None,
   ));
-  state.events.emit(llm_core::event::Event::LegacyRequest(
-    llm_core::event::LegacyRequestEvent::Completed {
+  state.events.emit(tokn_core::event::Event::LegacyRequest(
+    tokn_core::event::LegacyRequestEvent::Completed {
       request_id: request_id.clone(),
       success: false,
       total_attempts: (MAX_RETRIES as u32) + 1,
@@ -452,8 +452,8 @@ mod tests {
   use crate::util::secret::Secret;
   use axum::http::HeaderValue;
   use bytes::Bytes;
-  use llm_core::event::EventBus;
-  use llm_core::pipeline::{InputTransformer, RequestMeta};
+  use tokn_core::event::EventBus;
+  use tokn_core::pipeline::{InputTransformer, RequestMeta};
   use serde_json::json;
   use std::sync::Arc;
 
@@ -462,7 +462,7 @@ mod tests {
       id: "acct".into(),
       provider: "zai-coding-plan".into(),
       enabled: true,
-      tier: llm_core::account::AccountTier::Active,
+      tier: tokn_core::account::AccountTier::Active,
       tags: Vec::new(),
       label: None,
       base_url: None,
@@ -613,7 +613,7 @@ mod tests {
         initiator: "user".into(),
         header_initiator: None,
         behave_as: None,
-        inbound_headers: llm_headers::HeaderMap::new(),
+        inbound_headers: tokn_headers::HeaderMap::new(),
       },
       body: json!({
         "model": "glm-4.6",
@@ -793,7 +793,7 @@ mod tests {
       id: "acct".into(),
       provider: "github-copilot".into(),
       enabled: true,
-      tier: llm_core::account::AccountTier::Active,
+      tier: tokn_core::account::AccountTier::Active,
       tags: Vec::new(),
       label: None,
       base_url: None,
@@ -829,7 +829,7 @@ mod tests {
       initiator: "user".into(),
       header_initiator: None,
       behave_as: None,
-      inbound_headers: llm_headers::HeaderMap::new(),
+      inbound_headers: tokn_headers::HeaderMap::new(),
     };
 
     let transformed = transformer

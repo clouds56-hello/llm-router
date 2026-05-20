@@ -1,6 +1,6 @@
 use anyhow::Result;
 use bytes::Bytes;
-use llm_headers::HeaderMap;
+use tokn_headers::HeaderMap;
 use reqwest::Method;
 use serde::de::DeserializeOwned;
 use snafu::ResultExt;
@@ -72,8 +72,8 @@ pub async fn send(
   // Persona builders may inject these from inbound captures or from defaults
   // derived from real-world traffic; that's fine for diagnostics but must
   // not reach the wire.
-  let stripped_host = headers.remove(&llm_headers::keys::HOST);
-  let stripped_clen = headers.remove(&llm_headers::keys::CONTENT_LENGTH);
+  let stripped_host = headers.remove(&tokn_headers::keys::HOST);
+  let stripped_clen = headers.remove(&tokn_headers::keys::CONTENT_LENGTH);
   if stripped_host > 0 || stripped_clen > 0 {
     tracing::trace!(
       what,

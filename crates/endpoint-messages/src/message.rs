@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use llm_endpoint_core::{Extras, Role};
+use tokn_endpoint_core::{Extras, Role};
 
 use crate::content::ContentBlock;
 

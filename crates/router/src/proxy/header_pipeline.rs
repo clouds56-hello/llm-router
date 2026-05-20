@@ -1,4 +1,4 @@
-use llm_config::profiles::{is_router_controlled, normalize_header_name, warn_if_unverified, Profiles, TemplateVars};
+use tokn_config::profiles::{is_router_controlled, normalize_header_name, warn_if_unverified, Profiles, TemplateVars};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 
 #[derive(Debug, Clone)]

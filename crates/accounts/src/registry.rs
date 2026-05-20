@@ -1,6 +1,6 @@
-use llm_auth::descriptor::{ProviderDescriptor, RewriteTarget};
-use llm_core::account::AccountConfig;
-use llm_core::provider::{error, Endpoint, Provider, Result};
+use tokn_auth::descriptor::{ProviderDescriptor, RewriteTarget};
+use tokn_core::account::AccountConfig;
+use tokn_core::provider::{error, Endpoint, Provider, Result};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -109,14 +109,14 @@ impl Registry {
 
 fn builtin_descriptors() -> &'static [&'static ProviderDescriptor] {
   static LIST: &[&ProviderDescriptor] = &[
-    &llm_provider_copilot::DESCRIPTOR,
-    &llm_provider_deepseek::DESCRIPTOR,
-    &llm_provider_openai::DESCRIPTOR_OPENAI,
-    &llm_provider_openai::DESCRIPTOR_CODEX,
-    &llm_provider_zai::DESCRIPTOR_ZAI,
-    &llm_provider_zai::DESCRIPTOR_ZAI_CODING_PLAN,
-    &llm_provider_zai::DESCRIPTOR_ZHIPUAI,
-    &llm_provider_zai::DESCRIPTOR_ZHIPUAI_CODING_PLAN,
+    &tokn_provider_copilot::DESCRIPTOR,
+    &tokn_provider_deepseek::DESCRIPTOR,
+    &tokn_provider_openai::DESCRIPTOR_OPENAI,
+    &tokn_provider_openai::DESCRIPTOR_CODEX,
+    &tokn_provider_zai::DESCRIPTOR_ZAI,
+    &tokn_provider_zai::DESCRIPTOR_ZAI_CODING_PLAN,
+    &tokn_provider_zai::DESCRIPTOR_ZHIPUAI,
+    &tokn_provider_zai::DESCRIPTOR_ZHIPUAI_CODING_PLAN,
   ];
   LIST
 }
@@ -181,8 +181,8 @@ pub fn build_for_account(account: Arc<AccountConfig>) -> Result<Arc<dyn Provider
 #[cfg(test)]
 mod tests {
   use super::*;
-  use llm_auth::descriptor::RewriteTarget;
-  use llm_core::provider::{
+  use tokn_auth::descriptor::RewriteTarget;
+  use tokn_core::provider::{
     Endpoint, ID_CODEX, ID_DEEPSEEK, ID_GITHUB_COPILOT, ID_OPENAI, ID_ZAI, ID_ZAI_CODING_PLAN, ID_ZHIPUAI,
     ID_ZHIPUAI_CODING_PLAN,
   };

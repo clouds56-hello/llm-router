@@ -1,5 +1,5 @@
 [package]
-name = "llm-router"
+name = "tokn-router"
 version.workspace = true
 edition.workspace = true
 description = "Routing, relay, and proxy orchestration across providers for tokn gateway"
@@ -9,18 +9,18 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
-llm-core = { workspace = true }
-llm-accounts = { workspace = true }
-llm-auth = { workspace = true }
-llm-config = { workspace = true }
-llm-catalogue = { workspace = true }
-llm-convert = { workspace = true }
-llm-headers = { workspace = true }
-llm-requests = { workspace = true }
-llm-provider-copilot = { workspace = true }
-llm-provider-deepseek = { workspace = true }
-llm-provider-openai = { workspace = true }
-llm-provider-zai = { workspace = true }
+tokn-core = { workspace = true }
+tokn-accounts = { workspace = true }
+tokn-auth = { workspace = true }
+tokn-config = { workspace = true }
+tokn-catalogue = { workspace = true }
+tokn-convert = { workspace = true }
+tokn-headers = { workspace = true }
+tokn-requests = { workspace = true }
+tokn-provider-copilot = { workspace = true }
+tokn-provider-deepseek = { workspace = true }
+tokn-provider-openai = { workspace = true }
+tokn-provider-zai = { workspace = true }
 anyhow = { workspace = true }
 base64 = "0.22"
 arc-swap = { workspace = true }

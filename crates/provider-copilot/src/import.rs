@@ -15,7 +15,7 @@
 //!
 //! Errors are reported as `String` to keep the public surface free of
 //! crate-local error types — the trait method that wraps these
-//! converts them to [`llm_auth::AuthError`].
+//! converts them to [`tokn_auth::AuthError`].
 
 use std::path::PathBuf;
 use std::process::Command;

@@ -23,10 +23,10 @@
 //! invocation.
 
 use async_trait::async_trait;
-use llm_auth::{
+use tokn_auth::{
   AuthError, DeviceCodeHandle, DeviceFlowOutcome, ProviderAuth, QuotaSnapshot, RefreshOutcome, Result, VerifyOutcome,
 };
-use llm_core::account::AccountConfig;
+use tokn_core::account::AccountConfig;
 use serde::Deserialize;
 use std::time::Duration;
 
@@ -104,7 +104,7 @@ async fn http_form(
   client
     .post(url)
     .header("content-type", "application/x-www-form-urlencoded")
-    .header("user-agent", concat!("llm-router/", env!("CARGO_PKG_VERSION")))
+    .header("user-agent", concat!("tokn-router/", env!("CARGO_PKG_VERSION")))
     .form(&body)
     .send()
     .await
@@ -115,7 +115,7 @@ async fn http_json(client: &reqwest::Client, url: &str, body: serde_json::Value)
   client
     .post(url)
     .header("content-type", "application/json")
-    .header("user-agent", concat!("llm-router/", env!("CARGO_PKG_VERSION")))
+    .header("user-agent", concat!("tokn-router/", env!("CARGO_PKG_VERSION")))
     .json(&body)
     .send()
     .await

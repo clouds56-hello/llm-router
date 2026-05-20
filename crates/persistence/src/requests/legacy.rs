@@ -216,13 +216,13 @@ impl DbEventHandler {
         account_id: String::new(),
         provider_id: String::new(),
         inbound_url: inbound_req.url.clone(),
-        inbound_req_headers: llm_headers::HeaderMap::new(),
+        inbound_req_headers: tokn_headers::HeaderMap::new(),
         inbound_req_body: bytes::Bytes::new(),
         outbound_method: None,
         outbound_url: None,
-        outbound_req_headers: llm_headers::HeaderMap::new(),
+        outbound_req_headers: tokn_headers::HeaderMap::new(),
         outbound_req_body: bytes::Bytes::new(),
-        outbound_resp_headers: llm_headers::HeaderMap::new(),
+        outbound_resp_headers: tokn_headers::HeaderMap::new(),
         outbound_have: false,
         latency_header_ms: None,
         result_written: false,
@@ -291,9 +291,9 @@ impl DbEventHandler {
       inbound_req_body: bytes::Bytes::new(),
       outbound_method: None,
       outbound_url: None,
-      outbound_req_headers: llm_headers::HeaderMap::new(),
+      outbound_req_headers: tokn_headers::HeaderMap::new(),
       outbound_req_body: bytes::Bytes::new(),
-      outbound_resp_headers: llm_headers::HeaderMap::new(),
+      outbound_resp_headers: tokn_headers::HeaderMap::new(),
       outbound_have: false,
       latency_header_ms: None,
       result_written: false,
@@ -390,10 +390,10 @@ impl DbEventHandler {
     attempt: u32,
     latency_header_ms: u64,
     status: u16,
-    outbound_resp_headers: &llm_headers::HeaderMap,
+    outbound_resp_headers: &tokn_headers::HeaderMap,
     outbound_req_method: Option<&str>,
     outbound_req_url: Option<&str>,
-    outbound_req_headers: Option<&llm_headers::HeaderMap>,
+    outbound_req_headers: Option<&tokn_headers::HeaderMap>,
     outbound_req_body: Option<&bytes::Bytes>,
   ) -> Result<()> {
     let request_id = composite_request_id(base_request_id, attempt);
@@ -455,7 +455,7 @@ impl DbEventHandler {
     inbound_status: u16,
     usage: &Usage,
     request_error: Option<&str>,
-    inbound_resp_headers: &llm_headers::HeaderMap,
+    inbound_resp_headers: &tokn_headers::HeaderMap,
     inbound_resp_body: &bytes::Bytes,
     outbound_resp_body: Option<&bytes::Bytes>,
     messages: &[crate::MessageRecord],
@@ -581,7 +581,7 @@ impl DbEventHandler {
           status: final_status,
           req_headers: p.inbound_req_headers.clone(),
           req_body: p.inbound_req_body.clone(),
-          resp_headers: llm_headers::HeaderMap::new(),
+          resp_headers: tokn_headers::HeaderMap::new(),
           resp_body: bytes::Bytes::new(),
         };
         let outbound = if p.outbound_have {
@@ -651,7 +651,7 @@ mod tests {
 
   #[test]
   fn migrates_v1_day_file_and_records_request_error() {
-    let dir = std::env::temp_dir().join(format!("llm-router-req-mig-{}", uuid::Uuid::new_v4()));
+    let dir = std::env::temp_dir().join(format!("tokn-router-req-mig-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
     let ts = 100;
     let path = dir.join(format!("{}.db", day_key(ts)));
@@ -715,7 +715,7 @@ mod tests {
 
   #[test]
   fn headers_updates_existing_started_row() {
-    let root = std::env::temp_dir().join(format!("llm-router-req-headers-{}", uuid::Uuid::new_v4()));
+    let root = std::env::temp_dir().join(format!("tokn-router-req-headers-{}", uuid::Uuid::new_v4()));
     let dir = root.join("requests");
     std::fs::create_dir_all(&dir).unwrap();
     let mut handler = make_handler(root);
@@ -738,7 +738,7 @@ mod tests {
     )
     .unwrap();
 
-    let mut headers = llm_headers::HeaderMap::new();
+    let mut headers = tokn_headers::HeaderMap::new();
     headers.insert("x-test", "1");
     let with_headers = HttpSnapshot {
       method: Some("POST".into()),
@@ -779,7 +779,7 @@ mod tests {
 
   #[test]
   fn result_insert_can_backfill_source_and_method() {
-    let root = std::env::temp_dir().join(format!("llm-router-req-result-{}", uuid::Uuid::new_v4()));
+    let root = std::env::temp_dir().join(format!("tokn-router-req-result-{}", uuid::Uuid::new_v4()));
     let dir = root.join("requests");
     std::fs::create_dir_all(&dir).unwrap();
     let mut handler = make_handler(root);

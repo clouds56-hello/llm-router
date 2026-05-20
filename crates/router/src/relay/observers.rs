@@ -1,8 +1,8 @@
 use super::recording::CompletedEventBuilder;
 use bytes::Bytes;
-use llm_convert::sse::{observer_channel, ObserverMsg, ObserverSender};
-use llm_convert::usage::parse_usage_any_value;
-use llm_core::db::Usage;
+use tokn_convert::sse::{observer_channel, ObserverMsg, ObserverSender};
+use tokn_convert::usage::parse_usage_any_value;
+use tokn_core::db::Usage;
 use std::sync::Arc;
 
 /// Metadata for emitting StreamProgress and the terminal RequestCompleted event.
@@ -17,14 +17,14 @@ pub(super) struct StreamMeta {
   pub started: std::time::Instant,
   pub model: String,
   pub endpoint: String,
-  pub events: Arc<llm_core::event::EventBus>,
+  pub events: Arc<tokn_core::event::EventBus>,
 }
 
 /// Creates an observer channel, spawns the background stream recorder task,
 /// and returns the sender half for feeding into an SsePipeline.
 pub(super) fn spawn_stream_recorder(
   builder: CompletedEventBuilder,
-  events: Arc<llm_core::event::EventBus>,
+  events: Arc<tokn_core::event::EventBus>,
   max_body: usize,
   meta: StreamMeta,
 ) -> ObserverSender {
@@ -37,9 +37,9 @@ pub(super) fn spawn_stream_recorder(
 /// Emits periodic `StreamProgress` events (~500ms).
 /// Shared between pipeline and passthrough streaming paths.
 pub(super) async fn background_stream_recorder(
-  mut rx: llm_convert::sse::ObserverReceiver,
+  mut rx: tokn_convert::sse::ObserverReceiver,
   base_builder: CompletedEventBuilder,
-  events: Arc<llm_core::event::EventBus>,
+  events: Arc<tokn_core::event::EventBus>,
   max_body: usize,
   meta: StreamMeta,
 ) {
@@ -92,7 +92,7 @@ pub(super) async fn background_stream_recorder(
         }
       }
       _ = tick.tick() => {
-        meta.events.emit(llm_core::event::Event::StreamProgress {
+        meta.events.emit(tokn_core::event::Event::StreamProgress {
           request_id: meta.request_id.clone(),
           model: meta.model.clone(),
           endpoint: meta.endpoint.clone(),
@@ -118,8 +118,8 @@ pub(super) async fn background_stream_recorder(
   // Emit terminal RequestCompleted with success / total_attempts / final_status.
   // Streaming is only entered after a successful upstream response (no retries after stream begins),
   // so total_attempts == meta.attempt + 1 and final_status == meta.final_status.
-  events.emit(llm_core::event::Event::LegacyRequest(
-    llm_core::event::LegacyRequestEvent::Completed {
+  events.emit(tokn_core::event::Event::LegacyRequest(
+    tokn_core::event::LegacyRequestEvent::Completed {
       request_id: meta.request_id,
       success: !had_error,
       total_attempts: meta.attempt + 1,
@@ -135,7 +135,7 @@ mod tests {
   use super::*;
   use crate::relay::recording::CompletedEventBuilder;
   use bytes::Bytes;
-  use llm_core::event::{Event, EventBus, EventHandler, LegacyRequestEvent};
+  use tokn_core::event::{Event, EventBus, EventHandler, LegacyRequestEvent};
   use std::sync::{Arc, Mutex};
   use std::time::Instant;
 
@@ -166,7 +166,7 @@ mod tests {
       let rx = bus.subscribe();
       (bus, rx)
     };
-    llm_core::event::spawn_event_loop(receiver, vec![Box::new(CollectingHandler(captured.clone()))]);
+    tokn_core::event::spawn_event_loop(receiver, vec![Box::new(CollectingHandler(captured.clone()))]);
     let events = Arc::new(bus);
 
     let builder = CompletedEventBuilder::new(
@@ -186,7 +186,7 @@ mod tests {
       endpoint: "chat_completions".into(),
       events: events.clone(),
     };
-    let (tx, rx) = llm_convert::sse::observer_channel();
+    let (tx, rx) = tokn_convert::sse::observer_channel();
     let handle = tokio::spawn(background_stream_recorder(rx, builder, events.clone(), 1024, meta));
 
     tx.send(ObserverMsg::From(Bytes::from_static(b"upstream"))).unwrap();

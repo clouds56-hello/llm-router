@@ -5,8 +5,8 @@
 //! and [`Self::probe_quota`] (the existing monitor endpoint).
 
 use async_trait::async_trait;
-use llm_auth::{AuthError, ProviderAuth, QuotaSnapshot, RefreshOutcome, Result, VerifyOutcome};
-use llm_core::account::AccountConfig;
+use tokn_auth::{AuthError, ProviderAuth, QuotaSnapshot, RefreshOutcome, Result, VerifyOutcome};
+use tokn_core::account::AccountConfig;
 
 /// Singleton ZSt impl. Same instance handles every Z.ai alias because the
 /// auth flow is identical; the provider id stored on the account is what
@@ -24,7 +24,7 @@ impl ZaiAuth {
   }
 }
 
-/// Static accessors used by `llm-auth`'s dispatch table. One per alias.
+/// Static accessors used by `tokn-auth`'s dispatch table. One per alias.
 static ZAI_CODING_PLAN: ZaiAuth = ZaiAuth::new("zai-coding-plan");
 static ZAI: ZaiAuth = ZaiAuth::new("zai");
 static ZHIPUAI_CODING_PLAN: ZaiAuth = ZaiAuth::new("zhipuai-coding-plan");
@@ -125,9 +125,9 @@ impl ProviderAuth for ZaiAuth {
     };
 
     // Map every advertised bucket into UsageBucket for richer display.
-    let mut secondary: Vec<llm_auth::UsageBucket> = Vec::new();
+    let mut secondary: Vec<tokn_auth::UsageBucket> = Vec::new();
     if let Some(b) = &raw.five_hour {
-      secondary.push(llm_auth::UsageBucket {
+      secondary.push(tokn_auth::UsageBucket {
         label: "5h tokens".to_string(),
         used: None,
         total: b.total,
@@ -136,7 +136,7 @@ impl ProviderAuth for ZaiAuth {
       });
     }
     if let Some(b) = &raw.weekly {
-      secondary.push(llm_auth::UsageBucket {
+      secondary.push(tokn_auth::UsageBucket {
         label: "weekly tokens".to_string(),
         used: None,
         total: b.total,
@@ -145,7 +145,7 @@ impl ProviderAuth for ZaiAuth {
       });
     }
     if let Some(m) = &raw.mcp_monthly {
-      secondary.push(llm_auth::UsageBucket {
+      secondary.push(tokn_auth::UsageBucket {
         label: "mcp monthly".to_string(),
         used: Some(m.used),
         total: Some(m.total),

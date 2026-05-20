@@ -295,7 +295,7 @@ mod tests {
   }
 
   fn tempdir() -> std::path::PathBuf {
-    let p = std::env::temp_dir().join(format!("llm-router-mig-{}", uuid::Uuid::new_v4()));
+    let p = std::env::temp_dir().join(format!("tokn-router-mig-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&p).unwrap();
     p
   }

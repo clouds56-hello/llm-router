@@ -7,10 +7,10 @@ use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
 use axum::response::Response;
-use llm_core::event::Event as CoreEvent;
-use llm_accounts::routing::route_mode_as_str;
-use llm_core::provider::Endpoint;
-use llm_core::request_event::{RecordEvent, RequestEvent, RequestEventPayload};
+use tokn_core::event::Event as CoreEvent;
+use tokn_accounts::routing::route_mode_as_str;
+use tokn_core::provider::Endpoint;
+use tokn_core::request_event::{RecordEvent, RequestEvent, RequestEventPayload};
 use smol_str::SmolStr;
 use std::time::Instant;
 use tracing::instrument;
@@ -26,7 +26,7 @@ async fn handle(
   let hx = request_header_extract(&inbound);
   let endpoint_hint = parser.endpoint().as_str().to_string();
   let local_addr = inbound
-    .get("x-llm-router-local-addr")
+    .get("x-tokn-router-local-addr")
     .and_then(|v| v.to_str().ok())
     .map(str::to_string)
     .or_else(|| {
@@ -36,7 +36,7 @@ async fn handle(
         .map(str::to_string)
     });
   // POC fast-path: when the env-var-gated chat pipeline is configured and
-  // this request targets /chat/completions, route through llm-requests and
+  // this request targets /chat/completions, route through tokn-requests and
   // skip ALL legacy event emissions (Started/Headers/Completed). The
   // pipeline emits its own StageEvent/RecordEvent stream which
   // RequestEventHandler consumes; emitting LegacyRequestEvent::Started here
@@ -50,7 +50,7 @@ async fn handle(
     state.events.emit(CoreEvent::Requests(RequestEvent {
       request_id: SmolStr::new(&hx.request_id),
       attempt: 0,
-      ts: llm_core::util::now_unix_ms(),
+      ts: tokn_core::util::now_unix_ms(),
       payload: RequestEventPayload::Record(RecordEvent::InboundConnection {
         local_addr: local_addr.clone().map(SmolStr::from),
         peer_addr: None,
@@ -62,7 +62,7 @@ async fn handle(
     }));
     let decoded = super::codec::decode_json_request(&inbound, body)?;
     let pipeline = state.chat_pipeline.clone().expect("checked is_some above");
-    let raw = llm_requests::RawInbound {
+    let raw = tokn_requests::RawInbound {
       endpoint: Endpoint::ChatCompletions,
       headers: (&inbound).into(),
       raw_body: decoded.raw_body.clone(),
@@ -80,8 +80,8 @@ async fn handle(
     .map(route_mode_as_str)
     .map(str::to_string);
 
-  state.events.emit(llm_core::event::Event::LegacyRequest(
-    llm_core::event::LegacyRequestEvent::Started {
+  state.events.emit(tokn_core::event::Event::LegacyRequest(
+    tokn_core::event::LegacyRequestEvent::Started {
       request_id: hx.request_id.clone(),
       ts,
       endpoint: endpoint_hint.clone(),
@@ -93,8 +93,8 @@ async fn handle(
       url: None,
     },
   ));
-  state.events.emit(llm_core::event::Event::LegacyRequest(
-    llm_core::event::LegacyRequestEvent::Headers {
+  state.events.emit(tokn_core::event::Event::LegacyRequest(
+    tokn_core::event::LegacyRequestEvent::Headers {
       request_id: hx.request_id.clone(),
       ts,
       endpoint_hint: Some(endpoint_hint),
@@ -112,8 +112,8 @@ async fn handle(
   let decoded = match super::codec::decode_json_request(&inbound, body) {
     Ok(decoded) => decoded,
     Err(err) => {
-      state.events.emit(llm_core::event::Event::LegacyRequest(
-        llm_core::event::LegacyRequestEvent::Completed {
+      state.events.emit(tokn_core::event::Event::LegacyRequest(
+        tokn_core::event::LegacyRequestEvent::Completed {
           request_id: hx.request_id.clone(),
           success: false,
           total_attempts: 1,
@@ -136,7 +136,7 @@ fn unix_ts() -> i64 {
     .as_secs() as i64
 }
 
-fn request_record_mode(mode: Option<llm_config::RouteMode>) -> &'static str {
+fn request_record_mode(mode: Option<tokn_config::RouteMode>) -> &'static str {
   match mode {
     Some(mode) => route_mode_as_str(mode),
     None => "route",

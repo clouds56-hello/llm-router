@@ -62,7 +62,7 @@ pub type Account = AccountConfig;
 /// `Active` accounts serve traffic in normal flow; `Fallback` accounts are
 /// only acquired by the pool once every `Active` account in the same
 /// provider has been cooled down or otherwise rejected. The CLI exposes
-/// this via `llm-router account switch` (see `gateway-cli`).
+/// this via `tokn-router account switch` (see `gateway-cli`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum AccountTier {

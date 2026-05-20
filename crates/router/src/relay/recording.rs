@@ -1,7 +1,7 @@
 use crate::db::{MessageRecord, PartRecord, SessionSource, Usage};
 use crate::provider::Endpoint;
 use bytes::Bytes;
-use llm_core::event::{Event, LegacyRequestEvent};
+use tokn_core::event::{Event, LegacyRequestEvent};
 use reqwest::header::HeaderMap;
 use serde_json::Value;
 use std::time::Instant;

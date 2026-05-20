@@ -1,4 +1,4 @@
-use llm_endpoint_chat_completions::{ChatChunk, ChatEvent, ChatRequest, ChatResponse};
+use tokn_endpoint_chat_completions::{ChatChunk, ChatEvent, ChatRequest, ChatResponse};
 use serde_json::json;
 
 #[test]

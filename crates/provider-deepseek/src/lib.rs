@@ -1,16 +1,16 @@
 pub mod auth;
 pub mod deepseek;
 
-pub use llm_catalogue as catalogue;
-pub use llm_core::provider::{
+pub use tokn_catalogue as catalogue;
+pub use tokn_core::provider::{
   error, AuthKind, Endpoint, HeaderPatchCtx, Provider, ProviderInfo, RequestCtx, Result, TemplateVars, ID_DEEPSEEK,
 };
-pub use llm_core::{account as config, provider, util};
+pub use tokn_core::{account as config, provider, util};
 
 pub use deepseek::*;
 
-use llm_auth::descriptor::{EndpointSpec, ProviderDescriptor};
-use llm_auth::provider::CredentialFlavor;
+use tokn_auth::descriptor::{EndpointSpec, ProviderDescriptor};
+use tokn_auth::provider::CredentialFlavor;
 use std::sync::Arc;
 
 pub static DEFAULT_ENDPOINTS: &[Endpoint] = &[Endpoint::ChatCompletions, Endpoint::Messages];
@@ -48,12 +48,12 @@ pub fn matches_url(host: &str, _path: &str, _id: &'static str) -> bool {
   DESCRIPTOR.hosts.contains(&host)
 }
 
-pub fn validate(account: &llm_core::account::AccountConfig) -> llm_core::provider::Result<()> {
+pub fn validate(account: &tokn_core::account::AccountConfig) -> tokn_core::provider::Result<()> {
   deepseek::DeepSeekProvider::validate_account(account)
 }
 
 pub fn build(
-  account: Arc<llm_core::account::AccountConfig>,
-) -> llm_core::provider::Result<Arc<dyn llm_core::provider::Provider>> {
+  account: Arc<tokn_core::account::AccountConfig>,
+) -> tokn_core::provider::Result<Arc<dyn tokn_core::provider::Provider>> {
   Ok(Arc::new(deepseek::DeepSeekProvider::from_account(account)?))
 }
