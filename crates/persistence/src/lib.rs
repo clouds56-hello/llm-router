@@ -7,7 +7,7 @@ pub mod usage;
 pub use requests::{read_request_row, RequestEventHandler};
 
 use bytes::Bytes;
-pub use llm_core::db::{CallRecord, DbPaths, HttpSnapshot, MessageRecord, PartRecord};
+pub use llm_core::db::{DbPaths, HttpSnapshot, MessageRecord, PartRecord};
 #[allow(unused_imports)]
 pub(crate) use llm_core::db::{Usage, UsageDetails};
 use snafu::Snafu;

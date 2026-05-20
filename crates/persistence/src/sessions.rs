@@ -1,8 +1,20 @@
-use super::{migrate, CallRecord, MessageRecord, PartRecord, Result};
+use super::{migrate, MessageRecord, PartRecord, Result};
+use llm_core::db::SessionSource;
 use rusqlite::{params, Connection};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 use tracing::{debug, trace};
+
+pub struct SessionRecord<'a> {
+  pub ts: i64,
+  pub session_id: &'a str,
+  pub session_source: SessionSource,
+  pub endpoint: &'a str,
+  pub account_id: &'a str,
+  pub provider_id: &'a str,
+  pub model: &'a str,
+  pub messages: &'a [MessageRecord],
+}
 
 const BOOTSTRAP: &str = include_str!("../migrations/sessions/000_bootstrap.sql");
 const MIGRATIONS: &[migrate::Migration] = &[migrate::Migration {
@@ -39,7 +51,7 @@ impl SessionsDb {
   /// `MessageRecord` becomes one logical "message" (a contiguous group of
   /// `session_parts` rows sharing `message_seq`); each `PartRecord` becomes
   /// one row, with the blob deduplicated in `part_blobs`.
-  pub fn record(&mut self, r: &CallRecord) -> Result<()> {
+  pub fn record(&mut self, r: &SessionRecord<'_>) -> Result<()> {
     if r.messages.is_empty() {
       debug!(session_id = %r.session_id, "sessions.record: no messages, skipping");
       return Ok(());
@@ -83,7 +95,7 @@ impl SessionsDb {
       ],
     )?;
 
-    for m in &r.messages {
+    for m in r.messages {
       append_message(&tx, r, m, &mut next_part_seq, next_message_seq)?;
       next_message_seq += 1;
     }
@@ -102,7 +114,7 @@ fn next_seqs(tx: &rusqlite::Transaction<'_>, session_id: &str) -> Result<(i64, i
 
 fn append_message(
   tx: &rusqlite::Transaction<'_>,
-  r: &CallRecord,
+  r: &SessionRecord<'_>,
   m: &MessageRecord,
   next_part_seq: &mut i64,
   message_seq: i64,
@@ -150,37 +162,10 @@ fn hash_part(part_type: &str, content: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::{CallRecord, HttpSnapshot, Usage};
   use bytes::Bytes;
-  use llm_core::db::SessionSource;
 
-  fn rec(session_id: &str, parts: Vec<(String, Bytes)>) -> CallRecord {
-    CallRecord {
-      ts: 100,
-      session_id: session_id.into(),
-      session_source: SessionSource::Header,
-      user: None,
-      peer_addr: Some("127.0.0.1:4142".into()),
-      local_addr: None,
-      mode: None,
-      behave_as: None,
-      method: Some("POST".into()),
-      request_id: String::new(),
-      request_error: None,
-      project_id: None,
-      endpoint: "chat_completions".into(),
-      account_id: "a".into(),
-      provider_id: "p".into(),
-      model: "m".into(),
-      initiator: "user".into(),
-      status: 200,
-      stream: false,
-      latency_ms: Some(1),
-      latency_header_ms: None,
-      usage: Usage::default(),
-      inbound: HttpSnapshot::default(),
-      outbound: None,
-      messages: vec![MessageRecord {
+  fn rec(parts: Vec<(String, Bytes)>) -> Vec<MessageRecord> {
+    vec![MessageRecord {
         role: "user".into(),
         status: None,
         parts: parts
@@ -190,8 +175,7 @@ mod tests {
             content: c,
           })
           .collect(),
-      }],
-    }
+      }]
   }
 
   #[test]
@@ -200,8 +184,30 @@ mod tests {
     let path = dir.join("sessions.db");
     let mut db = SessionsDb::open(&path).unwrap();
     let part = ("text".to_string(), Bytes::from_static(b"hello"));
-    db.record(&rec("s1", vec![part.clone()])).unwrap();
-    db.record(&rec("s2", vec![part.clone()])).unwrap();
+    let messages1 = rec(vec![part.clone()]);
+    let messages2 = rec(vec![part.clone()]);
+    db.record(&SessionRecord {
+      ts: 100,
+      session_id: "s1",
+      session_source: SessionSource::Header,
+      endpoint: "chat_completions",
+      account_id: "a",
+      provider_id: "p",
+      model: "m",
+      messages: &messages1,
+    })
+    .unwrap();
+    db.record(&SessionRecord {
+      ts: 100,
+      session_id: "s2",
+      session_source: SessionSource::Header,
+      endpoint: "chat_completions",
+      account_id: "a",
+      provider_id: "p",
+      model: "m",
+      messages: &messages2,
+    })
+    .unwrap();
     let blobs: i64 = db
       .conn
       .query_row("SELECT COUNT(*) FROM part_blobs", [], |r| r.get(0))
@@ -219,15 +225,32 @@ mod tests {
     let dir = tempdir();
     let path = dir.join("sessions.db");
     let mut db = SessionsDb::open(&path).unwrap();
-    db.record(&rec(
-      "s1",
-      vec![
-        ("text".into(), Bytes::from_static(b"hello")),
-        ("text".into(), Bytes::from_static(b"world")),
-      ],
-    ))
+    let messages1 = rec(vec![
+      ("text".into(), Bytes::from_static(b"hello")),
+      ("text".into(), Bytes::from_static(b"world")),
+    ]);
+    db.record(&SessionRecord {
+      ts: 100,
+      session_id: "s1",
+      session_source: SessionSource::Header,
+      endpoint: "chat_completions",
+      account_id: "a",
+      provider_id: "p",
+      model: "m",
+      messages: &messages1,
+    })
     .unwrap();
-    db.record(&rec("s1", vec![("text".into(), Bytes::from_static(b"again"))]))
+    let messages2 = rec(vec![("text".into(), Bytes::from_static(b"again"))]);
+    db.record(&SessionRecord {
+      ts: 100,
+      session_id: "s1",
+      session_source: SessionSource::Header,
+      endpoint: "chat_completions",
+      account_id: "a",
+      provider_id: "p",
+      model: "m",
+      messages: &messages2,
+    })
       .unwrap();
     let max_part_seq: i64 = db
       .conn

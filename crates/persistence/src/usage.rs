@@ -1,6 +1,22 @@
-use super::{migrate, CallRecord, Result};
+use super::{migrate, Result, Usage};
 use rusqlite::{params, Connection};
 use std::path::Path;
+
+pub struct UsageRecord<'a> {
+  pub ts: i64,
+  pub session_id: &'a str,
+  pub request_id: &'a str,
+  pub project_id: Option<&'a str>,
+  pub endpoint: &'a str,
+  pub account_id: &'a str,
+  pub provider_id: &'a str,
+  pub model: &'a str,
+  pub initiator: &'a str,
+  pub usage: &'a Usage,
+  pub latency_ms: Option<u64>,
+  pub status: u16,
+  pub stream: bool,
+}
 
 const BOOTSTRAP: &str = include_str!("../migrations/usage/000_bootstrap.sql");
 const MIGRATIONS: &[migrate::Migration] = &[
@@ -52,7 +68,7 @@ impl UsageDb {
     Ok(Self { conn })
   }
 
-  pub fn record(&mut self, r: &CallRecord) -> Result<()> {
+  pub fn record(&mut self, r: &UsageRecord<'_>) -> Result<()> {
     self.conn.execute(
       "INSERT OR REPLACE INTO requests (ts, session_id, request_id, project_id, endpoint, account_id, provider_id, model, initiator, input_tok, output_tok, cached_tok, reasoning_tok, latency_ms, status, stream)
        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
@@ -154,8 +170,7 @@ pub struct RowSummary {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::{HttpSnapshot, Usage};
-  use llm_core::db::{CallRecord, SessionSource};
+  use crate::Usage;
 
   #[test]
   fn fresh_usage_db_records_correlation_ids() {
@@ -164,32 +179,20 @@ mod tests {
     let path = dir.join("usage.db");
     let mut db = UsageDb::open(&path).unwrap();
 
-    db.record(&CallRecord {
+    db.record(&UsageRecord {
       ts: 100,
-      session_id: "session-1".into(),
-      session_source: SessionSource::Header,
-      user: None,
-      peer_addr: Some("127.0.0.1:4142".into()),
-      local_addr: None,
-      mode: None,
-      behave_as: None,
-      method: Some("POST".into()),
-      request_id: "request-1".into(),
-      request_error: None,
-      project_id: Some("project-1".into()),
-      endpoint: "chat_completions".into(),
-      account_id: "account".into(),
-      provider_id: "provider".into(),
-      model: "model".into(),
-      initiator: "user".into(),
+      session_id: "session-1",
+      request_id: "request-1",
+      project_id: Some("project-1"),
+      endpoint: "chat_completions",
+      account_id: "account",
+      provider_id: "provider",
+      model: "model",
+      initiator: "user",
+      usage: &Usage::default(),
+      latency_ms: Some(1),
       status: 200,
       stream: false,
-      latency_ms: Some(1),
-      latency_header_ms: None,
-      usage: Usage::default(),
-      inbound: HttpSnapshot::default(),
-      outbound: None,
-      messages: Vec::new(),
     })
     .unwrap();
 

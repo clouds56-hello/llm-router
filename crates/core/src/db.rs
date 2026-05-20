@@ -39,35 +39,6 @@ pub struct Usage {
 }
 
 #[derive(Debug, Clone)]
-pub struct CallRecord {
-  pub ts: i64,
-  pub session_id: String,
-  pub session_source: SessionSource,
-  pub user: Option<String>,
-  pub peer_addr: Option<String>,
-  pub local_addr: Option<String>,
-  pub mode: Option<String>,
-  pub behave_as: Option<String>,
-  pub method: Option<String>,
-  pub request_id: String,
-  pub request_error: Option<String>,
-  pub project_id: Option<String>,
-  pub endpoint: String,
-  pub account_id: String,
-  pub provider_id: String,
-  pub model: String,
-  pub initiator: String,
-  pub status: u16,
-  pub stream: bool,
-  pub latency_ms: Option<u64>,
-  pub latency_header_ms: Option<u64>,
-  pub usage: Usage,
-  pub inbound: HttpSnapshot,
-  pub outbound: Option<HttpSnapshot>,
-  pub messages: Vec<MessageRecord>,
-}
-
-#[derive(Debug, Clone)]
 pub struct MessageRecord {
   pub role: String,
   pub status: Option<u16>,
