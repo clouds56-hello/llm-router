@@ -1,5 +1,6 @@
 [workspace]
 members = [
+  "crates/tokn",
   "crates/core",
   "crates/config",
   "crates/auth",
@@ -31,6 +32,7 @@ repository = "https://github.com/agentic-rs/llm-router"
 license = "MIT"
 
 [workspace.dependencies]
+tokn = { version = "0.1.1-rc.0", path = "crates/tokn" }
 llm-core = { version = "0.1.1-rc.0", path = "crates/core" }
 llm-config = { version = "0.1.1-rc.0", path = "crates/config" }
 llm-auth = { version = "0.1.1-rc.0", path = "crates/auth" }

@@ -1,0 +1,27 @@
+[package]
+name = "tokn"
+version.workspace = true
+edition.workspace = true
+description = "Unified wrapper crate that re-exports the tokn Rust workspace crates"
+documentation.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+llm-auth = { workspace = true }
+llm-catalogue = { workspace = true }
+llm-config = { workspace = true }
+llm-convert = { workspace = true }
+llm-core = { workspace = true }
+llm-endpoint-chat-completions = { workspace = true }
+llm-endpoint-core = { workspace = true }
+llm-endpoint-macros = { workspace = true }
+llm-endpoint-messages = { workspace = true }
+llm-endpoint-responses = { workspace = true }
+llm-headers = { workspace = true }
+llm-provider-copilot = { workspace = true }
+llm-provider-deepseek = { workspace = true }
+llm-provider-openai = { workspace = true }
+llm-provider-zai = { workspace = true }
+llm-router = { workspace = true }
