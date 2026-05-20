@@ -19,21 +19,5 @@ pub fn is_dirty() -> bool {
 }
 
 pub fn llm_router_user_agent() -> String {
-  component_version("llm-router")
-}
-
-pub fn copilot_user_agent() -> String {
-  component_version("GitHubCopilotChat")
-}
-
-pub fn copilot_editor_version() -> String {
-  component_version("vscode")
-}
-
-pub fn copilot_editor_plugin_version() -> String {
-  component_version("copilot-chat")
-}
-
-pub fn component_version(component: &str) -> String {
-  format!("{component}/{FULL}")
+  format!("llm-router/{FULL}")
 }

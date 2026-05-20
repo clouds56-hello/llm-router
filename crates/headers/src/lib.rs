@@ -33,7 +33,6 @@ pub mod schema;
 pub mod schemas;
 pub mod value;
 pub mod vars;
-pub(crate) mod version;
 
 pub use error::Error;
 pub use map::HeaderMap;

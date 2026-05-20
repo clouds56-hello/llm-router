@@ -16,7 +16,6 @@ use crate::map::HeaderMap;
 use crate::name::HeaderName;
 use crate::schema::{from_inbound_or, opt_from_inbound, optional, put, put_opt, required, HeaderSchema};
 use crate::vars::TemplateVars;
-use crate::version;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 
@@ -71,12 +70,8 @@ impl CopilotOverlay {
   /// canonical Copilot gateway defaults when absent from the inbound map.
   pub fn build(_vars: &TemplateVars, inbound: &HeaderMap) -> Self {
     Self {
-      editor_version: from_inbound_or(inbound, &keys::EDITOR_VERSION, || {
-        version::component_version("vscode").into()
-      }),
-      editor_plugin_version: from_inbound_or(inbound, &keys::EDITOR_PLUGIN_VERSION, || {
-        version::component_version("copilot-chat").into()
-      }),
+      editor_version: from_inbound_or(inbound, &keys::EDITOR_VERSION, || "vscode/1.95.0".into()),
+      editor_plugin_version: from_inbound_or(inbound, &keys::EDITOR_PLUGIN_VERSION, || "copilot-chat/0.23.0".into()),
       integration_id: from_inbound_or(inbound, &keys::COPILOT_INTEGRATION_ID, || "vscode-chat".into()),
       vision_request: opt_from_inbound(inbound, &keys::COPILOT_VISION_REQUEST),
       initiator: opt_from_inbound(inbound, &keys::X_INITIATOR),
@@ -112,8 +107,8 @@ mod tests {
   #[test]
   fn round_trip() {
     let h = CopilotOverlay {
-      editor_version: version::component_version("vscode").into(),
-      editor_plugin_version: version::component_version("copilot-chat").into(),
+      editor_version: "vscode/1.95.0".into(),
+      editor_plugin_version: "copilot-chat/0.23.0".into(),
       integration_id: "vscode-chat".into(),
       vision_request: Some("true".into()),
       initiator: Some("agent".into()),
@@ -130,11 +125,8 @@ mod tests {
   #[test]
   fn build_with_empty_inbound_uses_defaults() {
     let h = CopilotOverlay::build(&TemplateVars::default(), &HeaderMap::new());
-    assert_eq!(h.editor_version.as_str(), version::component_version("vscode"));
-    assert_eq!(
-      h.editor_plugin_version.as_str(),
-      version::component_version("copilot-chat")
-    );
+    assert_eq!(h.editor_version.as_str(), "vscode/1.95.0");
+    assert_eq!(h.editor_plugin_version.as_str(), "copilot-chat/0.23.0");
     assert_eq!(h.integration_id.as_str(), "vscode-chat");
     assert!(h.vision_request.is_none());
     assert!(h.initiator.is_none());
@@ -171,8 +163,8 @@ mod tests {
     map.insert(&keys::X_INITIATOR, "preexisting");
 
     let overlay = CopilotOverlay {
-      editor_version: version::component_version("vscode").into(),
-      editor_plugin_version: version::component_version("copilot-chat").into(),
+      editor_version: "vscode/1.95.0".into(),
+      editor_plugin_version: "copilot-chat/0.23.0".into(),
       integration_id: "vscode-chat".into(),
       vision_request: None,
       initiator: Some("agent".into()),
@@ -180,14 +172,11 @@ mod tests {
     overlay.apply_to(&mut map, &TemplateVars::default());
 
     // Managed fields overridden.
-    assert_eq!(
-      map.get(&keys::EDITOR_VERSION).unwrap().as_str(),
-      version::component_version("vscode")
-    );
+    assert_eq!(map.get(&keys::EDITOR_VERSION).unwrap().as_str(), "vscode/1.95.0");
     assert_eq!(map.get(&keys::COPILOT_INTEGRATION_ID).unwrap().as_str(), "vscode-chat");
     assert_eq!(
       map.get(&keys::EDITOR_PLUGIN_VERSION).unwrap().as_str(),
-      version::component_version("copilot-chat")
+      "copilot-chat/0.23.0"
     );
     // Pre-existing X-Initiator preserved (we only fill if absent).
     assert_eq!(map.get(&keys::X_INITIATOR).unwrap().as_str(), "preexisting");
