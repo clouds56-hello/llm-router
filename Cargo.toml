@@ -1,7 +1,7 @@
 [workspace]
 members = [
   "crates/tokn",
-  "crates/test-support",
+  "crates/mock-server",
   "crates/core",
   "crates/config",
   "crates/auth",
@@ -34,7 +34,7 @@ license = "MIT"
 
 [workspace.dependencies]
 tokn = { version = "0.2.0-rc.0", path = "crates/tokn" }
-llm-mock-server = { version = "0.2.0-rc.0", path = "crates/test-support" }
+llm-mock-server = { version = "0.2.0-rc.0", path = "crates/mock-server" }
 llm-core = { version = "0.2.0-rc.0", path = "crates/core" }
 llm-config = { version = "0.2.0-rc.0", path = "crates/config" }
 llm-auth = { version = "0.2.0-rc.0", path = "crates/auth" }
