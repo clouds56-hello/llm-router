@@ -1,0 +1,18 @@
+[package]
+name = "llm-test-support"
+version.workspace = true
+edition.workspace = true
+description = "Shared test fixtures for llm-router workspace"
+documentation.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+axum = { workspace = true }
+bytes = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+reqwest = { workspace = true }

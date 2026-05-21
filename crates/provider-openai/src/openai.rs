@@ -162,6 +162,7 @@ mod tests {
   use super::*;
   use crate::util::secret::Secret;
   use llm_core::account::AccountTier;
+  use llm_test_support::{HeaderExpectation, MockAuthConfig, MockLlmConfig, MockLlmServer, MockRoute};
 
   fn acct(key: Option<&str>) -> AccountConfig {
     AccountConfig {
@@ -224,5 +225,89 @@ mod tests {
     assert_eq!(openai.info().upstream_url, OPENAI_BASE_URL);
     assert!(openai.supports("", Endpoint::Responses));
     assert!(openai.supports("", Endpoint::ChatCompletions));
+  }
+
+  #[tokio::test]
+  async fn openai_list_models_works_with_mock_server() {
+    let server = MockLlmServer::start(
+      MockLlmConfig {
+        routes: vec![MockRoute::models(["gpt-4o-mini", "gpt-4.1"])],
+        ..Default::default()
+      }
+      .with_auth(MockAuthConfig::bearer(["sk-test"]))
+      .require_header(HeaderExpectation::equals("accept", "application/json"))
+      .require_header(HeaderExpectation::equals("content-type", "application/json")),
+    )
+    .await;
+
+    let mut account = acct(Some("sk-test"));
+    account.base_url = Some(server.base_url().to_string());
+    let provider = OpenAiProvider::from_account(Arc::new(account)).unwrap();
+
+    let models = provider.list_models(&reqwest::Client::new()).await.unwrap();
+    let ids: Vec<&str> = models["data"]
+      .as_array()
+      .unwrap()
+      .iter()
+      .filter_map(|model| model["id"].as_str())
+      .collect();
+
+    assert_eq!(ids, vec!["gpt-4o-mini", "gpt-4.1"]);
+
+    let captured = server.last_request().expect("captured models request");
+    assert_eq!(captured.method, reqwest::Method::GET);
+    assert_eq!(captured.path, "/models");
+    assert_eq!(captured.header("authorization"), Some("Bearer sk-test"));
+  }
+
+  #[tokio::test]
+  async fn openai_chat_works_with_mock_server() {
+    let server = MockLlmServer::start(
+      MockLlmConfig {
+        routes: vec![MockRoute::chat_completions()],
+        ..Default::default()
+      }
+      .with_auth(MockAuthConfig::bearer(["sk-test"]))
+      .require_header(HeaderExpectation::equals("accept", "application/json"))
+      .require_header(HeaderExpectation::equals("content-type", "application/json")),
+    )
+    .await;
+
+    let mut account = acct(Some("sk-test"));
+    account.base_url = Some(server.base_url().to_string());
+    let provider = OpenAiProvider::from_account(Arc::new(account)).unwrap();
+
+    let http = reqwest::Client::new();
+    let body = serde_json::json!({
+      "model": "gpt-4o-mini",
+      "messages": [{"role": "user", "content": "hi"}]
+    });
+    let inbound = HeaderMap::new();
+    let response = provider
+      .chat(RequestCtx {
+        endpoint: Endpoint::ChatCompletions,
+        http: &http,
+        body: &body,
+        body_bytes: None,
+        content_encoding: None,
+        stream: false,
+        initiator: "user",
+        inbound_headers: &inbound,
+        behave_as: None,
+        profile_headers: None,
+        outbound: None,
+        vars: TemplateVars::default(),
+      })
+      .await
+      .unwrap();
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+
+    let captured = server.last_request().expect("captured chat request");
+    assert_eq!(captured.method, reqwest::Method::POST);
+    assert_eq!(captured.path, "/chat/completions");
+    assert_eq!(captured.header("authorization"), Some("Bearer sk-test"));
+    let payload: Value = serde_json::from_slice(&captured.body).unwrap();
+    assert_eq!(payload["model"], "gpt-4o-mini");
   }
 }
