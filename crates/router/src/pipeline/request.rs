@@ -9,8 +9,8 @@ use tokn_accounts::{AccountHandle, EndpointAcquire};
 use tokn_config::RouteMode;
 use tokn_core::pipeline::{ParsedRequest, RequestMeta};
 use tokn_core::provider::TemplateVars;
-use tokn_core::ClientId;
-use tokn_headers::persona::Persona;
+use tokn_core::AgentId;
+use tokn_headers::agent::build_agent_headers;
 use tokn_headers::registry::{lookup, OverlayKind, ResolvedSchema};
 use tokn_headers::schemas::{CodexOverlay, CopilotOverlay};
 use tracing::warn;
@@ -151,21 +151,20 @@ fn build_client_headers(
   inbound: &reqwest::header::HeaderMap,
   vars: &TemplateVars,
 ) -> Option<reqwest::header::HeaderMap> {
-  let client_id = selected_client_id(account)?;
-  let persona = persona_from_client_id(&client_id);
+  let agent_id = selected_agent_id(account)?;
   let provider_id = account.provider.info().id.as_str();
   let inbound_headers: tokn_headers::HeaderMap = inbound.into();
-  let mut headers = match lookup(provider_id, &persona) {
-    Some(schema) => compose_with_schema(&schema, &client_id, vars, &inbound_headers),
-    None => build_outbound(&client_id, vars, &inbound_headers),
+  let mut headers = match lookup(provider_id, agent_id.as_str()) {
+    Some(schema) => compose_with_schema(&schema, vars, &inbound_headers),
+    None => build_agent_headers(agent_id.as_str(), vars, &inbound_headers),
   };
   let patch: tokn_headers::HeaderMap = (&account_extra_headers(&account.config.load().headers)).into();
   headers.merge_replacing(patch);
   Some(headers.into())
 }
 
-fn selected_client_id(account: &Arc<AccountHandle>) -> Option<ClientId> {
-  ClientId::provider_default(account.provider.info().id.as_str())
+fn selected_agent_id(account: &Arc<AccountHandle>) -> Option<AgentId> {
+  AgentId::provider_default(account.provider.info().id.as_str())
 }
 
 fn account_extra_headers(headers: &std::collections::BTreeMap<String, String>) -> reqwest::header::HeaderMap {
@@ -260,32 +259,8 @@ fn is_router_controlled(name: &str) -> bool {
   ROUTER_CONTROLLED_HEADERS.contains(&n.as_str())
 }
 
-fn persona_from_client_id(client_id: &ClientId) -> Persona {
-  match client_id {
-    ClientId::Opencode => Persona::Opencode,
-    ClientId::CodexCli => Persona::CodexCli,
-    ClientId::ClaudeCode => Persona::ClaudeCode,
-    ClientId::Cline => Persona::Cline,
-    ClientId::CopilotCli => Persona::CopilotCli,
-    ClientId::Other(value) => Persona::Custom(value.clone()),
-  }
-}
-
-fn build_outbound(
-  client_id: &ClientId,
-  vars: &TemplateVars,
-  inbound: &tokn_headers::HeaderMap,
-) -> tokn_headers::HeaderMap {
-  persona_from_client_id(client_id).build_outbound(vars, inbound)
-}
-
-fn compose_with_schema(
-  schema: &ResolvedSchema,
-  client_id: &ClientId,
-  vars: &TemplateVars,
-  inbound: &tokn_headers::HeaderMap,
-) -> tokn_headers::HeaderMap {
-  let client_id_map = build_outbound(client_id, vars, inbound);
+fn compose_with_schema(schema: &ResolvedSchema, vars: &TemplateVars, inbound: &tokn_headers::HeaderMap) -> tokn_headers::HeaderMap {
+  let agent_map = schema.agent.build_outbound(vars, inbound);
   let overlay_map = schema.overlay.map(|kind| match kind {
     OverlayKind::Copilot => {
       use tokn_headers::HeaderSchema as _;
@@ -296,7 +271,7 @@ fn compose_with_schema(
       CodexOverlay::build(vars, inbound).dump()
     }
   });
-  ResolvedSchema::compose(client_id_map, overlay_map)
+  ResolvedSchema::compose(agent_map, overlay_map)
 }
 
 fn parse_inbound_vars(inbound: &reqwest::header::HeaderMap) -> TemplateVars {

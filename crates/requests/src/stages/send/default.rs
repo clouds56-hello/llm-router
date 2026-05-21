@@ -222,7 +222,7 @@ mod tests {
 
   fn extracted() -> Extracted {
     Extracted {
-      client_id: None,
+      agent_id: None,
       model: SmolStr::new("m"),
       stream: false,
       session_id: None,
@@ -240,7 +240,7 @@ mod tests {
 
   fn resolved(handle: Arc<tokn_accounts::AccountHandle>) -> Resolved {
     Resolved {
-      client_id: None,
+      agent_id: None,
       model: SmolStr::new("m"),
       upstream_model: SmolStr::new("m"),
       upstream_endpoint: Endpoint::ChatCompletions,

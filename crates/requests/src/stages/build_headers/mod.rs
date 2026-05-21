@@ -3,11 +3,11 @@
 //! - [`NoopBuildHeaders`] returns an empty header set; useful for tests and
 //!   for the `without_send` profile when callers don't care about outbound
 //!   headers.
-//! - [`ClientIdBuildHeaders`] composes the real outbound `HeaderMap` from the
-//!   inbound request via the [`tokn_headers`] client-id + overlay registry.
+//! - [`DefaultBuildHeaders`] composes the real outbound `HeaderMap` from the
+//!   inbound request via the [`tokn_headers`] agent + overlay registry.
 
 pub mod passthrough;
-pub mod persona;
+pub mod default;
 
 use crate::pipeline::ctx::PipelineCtx;
 use crate::pipeline::error::PipelineError;
@@ -15,7 +15,7 @@ use crate::pipeline::stages::{BuildHeadersStage, BuiltHeaders, Extracted, Resolv
 use async_trait::async_trait;
 
 pub use passthrough::PassthroughBuildHeaders;
-pub use persona::ClientIdBuildHeaders;
+pub use default::DefaultBuildHeaders;
 
 /// No-op BuildHeaders stage. Returns an empty header set. Available as a
 /// placeholder for tests and profiles that short-circuit before Send.

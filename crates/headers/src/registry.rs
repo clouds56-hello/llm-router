@@ -1,40 +1,15 @@
-//! Registry mapping `(provider, client_id)` to the typed header schema pair.
+//! Registry mapping `(provider, agent_id)` to the typed header schema pair.
 //!
 //! Each successful lookup yields a [`ResolvedSchema`] describing which header
 //! struct and (optional) overlay struct should be applied. Composition is
 //! overlay-wins via [`HeaderMap::merge_replacing`]: any name set by both the
 //! client-id headers and the overlay takes the overlay's value.
 //!
-//! Unknown personas for a known provider fall back to [`PersonaKind::Opencode`]
+//! Unknown agents for a known provider fall back to [`AgentKind::Opencode`]
 //! as a sensible default base. Unknown providers return [`None`].
 
+use crate::agent::AgentKind;
 use crate::map::HeaderMap;
-use crate::persona::Persona;
-
-/// Closed enum of personas with a typed header schema. Personas outside this
-/// set (i.e. [`Persona::Custom`]) fall back to [`PersonaKind::Opencode`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum PersonaKind {
-  Opencode,
-  CodexCli,
-  ClaudeCode,
-  Cline,
-  CopilotCli,
-}
-
-impl PersonaKind {
-  /// Map a [`Persona`] to its [`PersonaKind`], or `None` for `Custom`.
-  pub fn from_persona(p: &Persona) -> Option<Self> {
-    match p {
-      Persona::Opencode => Some(Self::Opencode),
-      Persona::CodexCli => Some(Self::CodexCli),
-      Persona::ClaudeCode => Some(Self::ClaudeCode),
-      Persona::Cline => Some(Self::Cline),
-      Persona::CopilotCli => Some(Self::CopilotCli),
-      Persona::Custom(_) => None,
-    }
-  }
-}
 
 /// Closed enum of provider transport overlays.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -46,7 +21,7 @@ pub enum OverlayKind {
 /// The schema pair selected for a given `(provider, persona)`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResolvedSchema {
-  pub persona: PersonaKind,
+  pub agent: AgentKind,
   pub overlay: Option<OverlayKind>,
 }
 
@@ -62,23 +37,22 @@ impl ResolvedSchema {
   }
 }
 
-/// Look up the schema pair for a given `(provider, client_id)`. Returns `None`
+/// Look up the schema pair for a given `(provider, agent_id)`. Returns `None`
 /// for unknown providers; for known providers, falls back to
-/// [`PersonaKind::Opencode`] as the base persona when the input persona is
-/// [`Persona::Custom`].
-pub fn lookup(provider: &str, persona: &Persona) -> Option<ResolvedSchema> {
-  let base = PersonaKind::from_persona(persona).unwrap_or(PersonaKind::Opencode);
+/// [`AgentKind::Opencode`] as the base agent when `agent_id` is unknown.
+pub fn lookup(provider: &str, agent_id: &str) -> Option<ResolvedSchema> {
+  let base = AgentKind::from_agent_id(agent_id).unwrap_or(AgentKind::Opencode);
   match provider {
     "openai" => Some(ResolvedSchema {
-      persona: base,
-      overlay: matches!(base, PersonaKind::CodexCli).then_some(OverlayKind::Codex),
+      agent: base,
+      overlay: matches!(base, AgentKind::CodexCli).then_some(OverlayKind::Codex),
     }),
     "copilot" | "github-copilot" => Some(ResolvedSchema {
-      persona: base,
+      agent: base,
       overlay: Some(OverlayKind::Copilot),
     }),
     "deepseek" | "zai" | "zai-coding-plan" | "zhipuai" | "zhipuai-coding-plan" | "codex" => Some(ResolvedSchema {
-      persona: base,
+      agent: base,
       overlay: matches!(provider, "codex").then_some(OverlayKind::Codex),
     }),
     _ => None,
@@ -95,51 +69,50 @@ mod tests {
   #[test]
   fn lookup_known_pairs() {
     assert_eq!(
-      lookup("openai", &Persona::CodexCli),
+      lookup("openai", "codex-cli"),
       Some(ResolvedSchema {
-        persona: PersonaKind::CodexCli,
+        agent: AgentKind::CodexCli,
         overlay: Some(OverlayKind::Codex)
       })
     );
     assert_eq!(
-      lookup("copilot", &Persona::Opencode),
+      lookup("copilot", "opencode"),
       Some(ResolvedSchema {
-        persona: PersonaKind::Opencode,
+        agent: AgentKind::Opencode,
         overlay: Some(OverlayKind::Copilot)
       })
     );
     assert_eq!(
-      lookup("deepseek", &Persona::ClaudeCode),
+      lookup("deepseek", "claude-code"),
       Some(ResolvedSchema {
-        persona: PersonaKind::ClaudeCode,
+        agent: AgentKind::ClaudeCode,
         overlay: None
       })
     );
   }
 
   #[test]
-  fn unknown_persona_falls_back_to_opencode() {
-    let custom = Persona::from_str_lossy("my-tool");
-    let r = lookup("copilot", &custom).unwrap();
-    assert_eq!(r.persona, PersonaKind::Opencode);
+  fn unknown_agent_falls_back_to_opencode() {
+    let r = lookup("copilot", "my-tool").unwrap();
+    assert_eq!(r.agent, AgentKind::Opencode);
     assert_eq!(r.overlay, Some(OverlayKind::Copilot));
   }
 
   #[test]
   fn unknown_provider_returns_none() {
-    assert!(lookup("nonesuch", &Persona::Opencode).is_none());
+    assert!(lookup("nonesuch", "opencode").is_none());
   }
 
   #[test]
   fn openai_with_non_codex_persona_has_no_overlay() {
-    let r = lookup("openai", &Persona::Opencode).unwrap();
+    let r = lookup("openai", "opencode").unwrap();
     assert!(r.overlay.is_none());
   }
 
   #[test]
   fn copilot_cli_resolves_with_copilot_overlay() {
-    let r = lookup("copilot", &Persona::CopilotCli).unwrap();
-    assert_eq!(r.persona, PersonaKind::CopilotCli);
+    let r = lookup("copilot", "copilot-cli").unwrap();
+    assert_eq!(r.agent, AgentKind::CopilotCli);
     assert_eq!(r.overlay, Some(OverlayKind::Copilot));
   }
 

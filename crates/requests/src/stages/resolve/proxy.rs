@@ -63,7 +63,7 @@ impl ResolveStage for ProxyResolve {
     let provider_id = ctx.config.get_str(keys::PROVIDER_ID).unwrap_or(host);
     let account_id = ctx.config.get_str(keys::ACCOUNT_ID).unwrap_or("proxy");
     Ok(Resolved {
-      client_id: extracted.client_id.clone(),
+      agent_id: extracted.agent_id.clone(),
       model: extracted.model.clone(),
       upstream_model: extracted.model.clone(),
       upstream_endpoint: ctx.endpoint,
@@ -96,7 +96,7 @@ impl ResolveStage for ProxyProviderResolve {
       .acquire_for_route(extracted.session_id.as_deref(), &route, ctx.endpoint)
     {
       EndpointAcquire::Account { acct, endpoint } => Ok(Resolved {
-        client_id: extracted.client_id.clone(),
+        agent_id: extracted.agent_id.clone(),
         model: extracted.model.clone(),
         upstream_model: SmolStr::from(route.upstream_model.as_str()),
         upstream_endpoint: endpoint,
@@ -216,7 +216,7 @@ mod tests {
 
   fn fake_extracted() -> Extracted {
     Extracted {
-      client_id: None,
+      agent_id: None,
       model: SmolStr::new("gpt-4"),
       stream: false,
       session_id: None,

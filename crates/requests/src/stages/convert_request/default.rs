@@ -116,7 +116,7 @@ mod tests {
 
   fn extracted_with(body: Value, encoding: Option<ContentEncodingKind>, wire: Bytes) -> Extracted {
     Extracted {
-      client_id: None,
+      agent_id: None,
       model: smol_str::SmolStr::new("input-model"),
       stream: false,
       session_id: None,
@@ -138,7 +138,7 @@ mod tests {
     upstream_model: &str,
   ) -> Resolved {
     Resolved {
-      client_id: None,
+      agent_id: None,
       model: smol_str::SmolStr::new("input-model"),
       upstream_model: smol_str::SmolStr::new(upstream_model),
       upstream_endpoint,

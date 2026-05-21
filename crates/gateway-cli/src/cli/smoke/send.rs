@@ -34,7 +34,7 @@ use tokn_core::request_event::{RecordEvent, RequestEvent, RequestEventPayload};
 use tokn_requests::event::{BuiltHeadersSummary, ConvertedRequestSummary, ResolvedSummary};
 use tokn_requests::pipeline::stages::{ConvertedBody, ConvertedResponse};
 use tokn_requests::stages::{
-  ClientIdBuildHeaders, DefaultConvertRequest, DefaultConvertResponse, DefaultExtract, DefaultSend,
+  DefaultBuildHeaders, DefaultConvertRequest, DefaultConvertResponse, DefaultExtract, DefaultSend,
   PoolAccountSelector, PoolResolve,
 };
 use tokn_requests::{Event, EventBus, EventPayload, PipelineError, PipelineRunner, Profile, RawInbound, StageEvent};
@@ -230,7 +230,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
   let selector = Arc::new(PoolAccountSelector::new(state.pool.clone(), state.route.clone()));
   let extract = Arc::new(DefaultExtract);
   let resolve = Arc::new(PoolResolve::new(selector));
-  let build_headers = Arc::new(ClientIdBuildHeaders::with_provider_defaults());
+  let build_headers = Arc::new(DefaultBuildHeaders::with_provider_defaults());
   let convert_request = Arc::new(DefaultConvertRequest);
 
   let profile = if args.dry_run {
@@ -417,16 +417,16 @@ fn print_event(event: &Event) {
       println!("[started]          endpoint={endpoint}");
     }
     EventPayload::Stage(StageEvent::Extract(e)) => {
-      let cid = e.client_id.as_ref().map(|c| c.as_str()).unwrap_or("(none)");
+      let cid = e.agent_id.as_ref().map(|c| c.as_str()).unwrap_or("(none)");
       println!(
-        "[extract]          model={} stream={} client_id={cid}",
+        "[extract]          model={} stream={} agent_id={cid}",
         e.model, e.stream
       );
     }
     EventPayload::Stage(StageEvent::Resolve(r)) => {
-      let cid = r.client_id.as_ref().map(|c| c.as_str()).unwrap_or("(none)");
+      let cid = r.agent_id.as_ref().map(|c| c.as_str()).unwrap_or("(none)");
       println!(
-        "[resolve]          model={} -> {} account={} provider={} upstream_endpoint={} client_id={cid}",
+        "[resolve]          model={} -> {} account={} provider={} upstream_endpoint={} agent_id={cid}",
         r.model, r.upstream_model, r.account_id, r.provider_id, r.upstream_endpoint
       );
     }

@@ -25,7 +25,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokn_accounts::AccountHandle;
 use tokn_core::provider::Endpoint;
-use tokn_core::ClientId;
+use tokn_core::AgentId;
 use tokn_headers::{HeaderMap, TemplateVars};
 
 #[derive(Clone)]
@@ -205,7 +205,7 @@ pub struct RawInbound {
 /// it on the ctx avoids duplication and ensures a single source of truth.
 #[derive(Debug, Clone)]
 pub struct Extracted {
-  pub client_id: Option<ClientId>,
+  pub agent_id: Option<AgentId>,
   pub model: SmolStr,
   pub stream: bool,
   pub session_id: Option<SmolStr>,
@@ -227,7 +227,7 @@ pub struct Extracted {
 /// Output of [`ResolveStage`]: which account+upstream answers this request.
 #[derive(Clone)]
 pub struct Resolved {
-  pub client_id: Option<ClientId>,
+  pub agent_id: Option<AgentId>,
   pub model: SmolStr,
   pub upstream_model: SmolStr,
   pub upstream_endpoint: Endpoint,
@@ -242,7 +242,7 @@ pub struct Resolved {
 impl std::fmt::Debug for Resolved {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     f.debug_struct("Resolved")
-      .field("client_id", &self.client_id)
+      .field("agent_id", &self.agent_id)
       .field("model", &self.model)
       .field("upstream_model", &self.upstream_model)
       .field("upstream_endpoint", &self.upstream_endpoint)

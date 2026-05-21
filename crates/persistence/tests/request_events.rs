@@ -46,7 +46,7 @@ fn extracted(model: &str, stream: bool, session: Option<&str>, body: &[u8]) -> S
   let mut headers = HeaderMap::new();
   headers.insert("x-test", "1");
   StageEvent::Extract(ExtractedSummary {
-    client_id: None,
+    agent_id: None,
     model: SmolStr::new(model),
     stream,
     session_id: session.map(SmolStr::new),
@@ -63,7 +63,7 @@ fn extracted(model: &str, stream: bool, session: Option<&str>, body: &[u8]) -> S
 
 fn resolved(account: &str, provider: &str) -> StageEvent {
   StageEvent::Resolve(ResolvedSummary {
-    client_id: None,
+    agent_id: None,
     model: SmolStr::new("client-model"),
     upstream_model: SmolStr::new("upstream-model"),
     upstream_endpoint: Endpoint::Responses,

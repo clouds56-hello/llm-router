@@ -82,7 +82,7 @@ impl ExtractStage for DefaultExtract {
     let content_encoding = request_content_encoding(&headers).ok().flatten();
 
     Ok(Extracted {
-      client_id: None,
+      agent_id: None,
       model,
       stream,
       session_id,
@@ -185,7 +185,7 @@ mod tests {
     assert_eq!(ex.model, "gpt-x");
     assert_eq!(ex.initiator, "user");
     assert!(!ex.stream);
-    assert!(ex.client_id.is_none());
+    assert!(ex.agent_id.is_none());
   }
 
   #[tokio::test]
@@ -193,7 +193,7 @@ mod tests {
     let body = serde_json::json!({"model": "m"});
     let headers = header_map(&[("x-behave-as", "  codex  ")]);
     let ex = DefaultExtract.extract(&ctx(), raw(headers, body)).await.unwrap();
-    assert!(ex.client_id.is_none());
+    assert!(ex.agent_id.is_none());
   }
 
   #[tokio::test]
