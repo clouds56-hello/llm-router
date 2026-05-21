@@ -99,8 +99,9 @@ impl ClientIdBuildHeaders {
   fn effective_client_id(&self, extracted: &Extracted, provider_id: &str) -> ClientId {
     extracted
       .client_id
-      .or_else(|| self.client_defaults.get(provider_id).copied())
-      .unwrap_or(self.unknown_client_id_default)
+      .clone()
+      .or_else(|| self.client_defaults.get(provider_id).cloned())
+      .unwrap_or_else(|| self.unknown_client_id_default.clone())
   }
 }
 
@@ -116,9 +117,10 @@ impl BuildHeadersStage for ClientIdBuildHeaders {
     let vars = build_template_vars(inbound);
     let client_id = self.effective_client_id(extracted, resolved.provider_id.as_str());
 
-    let headers = match lookup(resolved.provider_id.as_str(), &persona_from_client_id(client_id)) {
-      Some(schema) => compose_with_schema(&schema, client_id, &vars, inbound),
-      None => build_outbound(client_id, &vars, inbound),
+    let persona = persona_from_client_id(&client_id);
+    let headers = match lookup(resolved.provider_id.as_str(), &persona) {
+      Some(schema) => compose_with_schema(&schema, &client_id, &vars, inbound),
+      None => build_outbound(&client_id, &vars, inbound),
     };
 
     Ok(BuiltHeaders { headers, vars })
@@ -156,7 +158,7 @@ fn build_template_vars(inbound: &HeaderMap) -> TemplateVars {
 /// merges with overlay-wins semantics.
 fn compose_with_schema(
   schema: &ResolvedSchema,
-  client_id: ClientId,
+  client_id: &ClientId,
   vars: &TemplateVars,
   inbound: &HeaderMap,
 ) -> HeaderMap {
@@ -174,17 +176,18 @@ fn compose_with_schema(
   ResolvedSchema::compose(client_id_map, overlay_map)
 }
 
-fn persona_from_client_id(client_id: ClientId) -> Persona {
+fn persona_from_client_id(client_id: &ClientId) -> Persona {
   match client_id {
     ClientId::Opencode => Persona::Opencode,
     ClientId::CodexCli => Persona::CodexCli,
     ClientId::ClaudeCode => Persona::ClaudeCode,
     ClientId::Cline => Persona::Cline,
     ClientId::CopilotCli => Persona::CopilotCli,
+    ClientId::Other(value) => Persona::Custom(value.clone()),
   }
 }
 
-fn build_outbound(client_id: ClientId, vars: &TemplateVars, inbound: &HeaderMap) -> HeaderMap {
+fn build_outbound(client_id: &ClientId, vars: &TemplateVars, inbound: &HeaderMap) -> HeaderMap {
   persona_from_client_id(client_id).build_outbound(vars, inbound)
 }
 

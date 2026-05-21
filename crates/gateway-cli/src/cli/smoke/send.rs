@@ -34,8 +34,8 @@ use tokn_core::request_event::{RecordEvent, RequestEvent, RequestEventPayload};
 use tokn_requests::event::{BuiltHeadersSummary, ConvertedRequestSummary, ResolvedSummary};
 use tokn_requests::pipeline::stages::{ConvertedBody, ConvertedResponse};
 use tokn_requests::stages::{
-  ClientIdBuildHeaders, DefaultConvertRequest, DefaultConvertResponse, DefaultExtract, DefaultSend, PoolAccountSelector,
-  PoolResolve,
+  ClientIdBuildHeaders, DefaultConvertRequest, DefaultConvertResponse, DefaultExtract, DefaultSend,
+  PoolAccountSelector, PoolResolve,
 };
 use tokn_requests::{Event, EventBus, EventPayload, PipelineError, PipelineRunner, Profile, RawInbound, StageEvent};
 use tokn_router::api::AppState;

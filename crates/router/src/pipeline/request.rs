@@ -7,9 +7,9 @@ use serde_json::Value;
 use std::sync::Arc;
 use tokn_accounts::{AccountHandle, EndpointAcquire};
 use tokn_config::RouteMode;
-use tokn_core::ClientId;
 use tokn_core::pipeline::{ParsedRequest, RequestMeta};
 use tokn_core::provider::TemplateVars;
+use tokn_core::ClientId;
 use tokn_headers::persona::Persona;
 use tokn_headers::registry::{lookup, OverlayKind, ResolvedSchema};
 use tokn_headers::schemas::{CodexOverlay, CopilotOverlay};
@@ -152,12 +152,12 @@ fn build_client_headers(
   vars: &TemplateVars,
 ) -> Option<reqwest::header::HeaderMap> {
   let client_id = selected_client_id(account)?;
-  let persona = persona_from_client_id(client_id);
+  let persona = persona_from_client_id(&client_id);
   let provider_id = account.provider.info().id.as_str();
   let inbound_headers: tokn_headers::HeaderMap = inbound.into();
   let mut headers = match lookup(provider_id, &persona) {
-    Some(schema) => compose_with_schema(&schema, client_id, vars, &inbound_headers),
-    None => build_outbound(client_id, vars, &inbound_headers),
+    Some(schema) => compose_with_schema(&schema, &client_id, vars, &inbound_headers),
+    None => build_outbound(&client_id, vars, &inbound_headers),
   };
   let patch: tokn_headers::HeaderMap = (&account_extra_headers(&account.config.load().headers)).into();
   headers.merge_replacing(patch);
@@ -260,23 +260,28 @@ fn is_router_controlled(name: &str) -> bool {
   ROUTER_CONTROLLED_HEADERS.contains(&n.as_str())
 }
 
-fn persona_from_client_id(client_id: ClientId) -> Persona {
+fn persona_from_client_id(client_id: &ClientId) -> Persona {
   match client_id {
     ClientId::Opencode => Persona::Opencode,
     ClientId::CodexCli => Persona::CodexCli,
     ClientId::ClaudeCode => Persona::ClaudeCode,
     ClientId::Cline => Persona::Cline,
     ClientId::CopilotCli => Persona::CopilotCli,
+    ClientId::Other(value) => Persona::Custom(value.clone()),
   }
 }
 
-fn build_outbound(client_id: ClientId, vars: &TemplateVars, inbound: &tokn_headers::HeaderMap) -> tokn_headers::HeaderMap {
+fn build_outbound(
+  client_id: &ClientId,
+  vars: &TemplateVars,
+  inbound: &tokn_headers::HeaderMap,
+) -> tokn_headers::HeaderMap {
   persona_from_client_id(client_id).build_outbound(vars, inbound)
 }
 
 fn compose_with_schema(
   schema: &ResolvedSchema,
-  client_id: ClientId,
+  client_id: &ClientId,
   vars: &TemplateVars,
   inbound: &tokn_headers::HeaderMap,
 ) -> tokn_headers::HeaderMap {

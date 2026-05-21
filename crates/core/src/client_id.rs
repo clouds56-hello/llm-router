@@ -5,31 +5,30 @@
 
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
+use std::convert::Infallible;
 use std::fmt;
 use std::str::FromStr;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(from = "SmolStr", into = "SmolStr")]
 pub enum ClientId {
-  #[serde(rename = "opencode")]
   Opencode,
-  #[serde(rename = "codex-cli")]
   CodexCli,
-  #[serde(rename = "claude-code")]
   ClaudeCode,
-  #[serde(rename = "cline")]
   Cline,
-  #[serde(rename = "copilot-cli")]
   CopilotCli,
+  Other(SmolStr),
 }
 
 impl ClientId {
-  pub fn as_str(self) -> &'static str {
+  pub fn as_str(&self) -> &str {
     match self {
       Self::Opencode => "opencode",
       Self::CodexCli => "codex-cli",
       Self::ClaudeCode => "claude-code",
       Self::Cline => "cline",
       Self::CopilotCli => "copilot-cli",
+      Self::Other(value) => value.as_str(),
     }
   }
 
@@ -56,7 +55,7 @@ impl ClientId {
 
 impl From<&str> for ClientId {
   fn from(s: &str) -> Self {
-    Self::from_slug(s).unwrap_or_else(|| panic!("unknown client_id slug: {s}"))
+    Self::from_slug(s).unwrap_or_else(|| Self::Other(SmolStr::new(s)))
   }
 }
 
@@ -74,21 +73,24 @@ impl From<SmolStr> for ClientId {
 
 impl From<ClientId> for SmolStr {
   fn from(value: ClientId) -> Self {
-    SmolStr::new(value.as_str())
+    match value {
+      ClientId::Other(value) => value,
+      other => SmolStr::new(other.as_str()),
+    }
   }
 }
 
 impl FromStr for ClientId {
-  type Err = String;
+  type Err = Infallible;
 
   fn from_str(s: &str) -> Result<Self, Self::Err> {
-    Self::from_slug(s).ok_or_else(|| format!("unknown client_id slug: {s}"))
+    Ok(Self::from(s))
   }
 }
 
 impl fmt::Display for ClientId {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    f.write_str((*self).as_str())
+    f.write_str(self.as_str())
   }
 }
 
@@ -105,7 +107,7 @@ mod tests {
       ("cline", ClientId::Cline),
       ("copilot-cli", ClientId::CopilotCli),
     ] {
-      assert_eq!(ClientId::from_slug(slug), Some(expected));
+      assert_eq!(ClientId::from_slug(slug), Some(expected.clone()));
       assert_eq!(expected.as_str(), slug);
       assert_eq!(expected.to_string(), slug);
     }
@@ -117,6 +119,22 @@ mod tests {
     assert_eq!(ClientId::from_slug("codex_exec"), Some(ClientId::CodexCli));
     assert_eq!(ClientId::from_slug("claude-cli"), Some(ClientId::ClaudeCode));
     assert_eq!(ClientId::from_slug("copilot"), Some(ClientId::CopilotCli));
+  }
+
+  #[test]
+  fn unknown_slug_falls_back_to_other() {
+    let client_id = ClientId::from("my-bespoke-tool");
+    assert_eq!(client_id, ClientId::Other(SmolStr::new("my-bespoke-tool")));
+    assert_eq!(client_id.as_str(), "my-bespoke-tool");
+  }
+
+  #[test]
+  fn serde_round_trip_other() {
+    let client_id = ClientId::Other(SmolStr::new("custom-tool"));
+    let encoded = serde_json::to_string(&client_id).unwrap();
+    assert_eq!(encoded, "\"custom-tool\"");
+    let decoded: ClientId = serde_json::from_str(&encoded).unwrap();
+    assert_eq!(decoded, client_id);
   }
 
   #[test]

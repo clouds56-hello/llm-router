@@ -28,8 +28,8 @@ use tokn_headers::HeaderMap;
 use tokn_requests::event::{EventPayload, RecordEvent, Stage, StageEvent};
 use tokn_requests::pipeline::stages::ConvertedBody;
 use tokn_requests::stages::{
-  AccountSelector, DefaultConvertRequest, DefaultConvertResponse, DefaultExtract, DefaultSend, NoopBuildHeaders,
-  ClientIdBuildHeaders, NoopConvertRequest, PoolResolve, SelectorOutcome,
+  AccountSelector, ClientIdBuildHeaders, DefaultConvertRequest, DefaultConvertResponse, DefaultExtract, DefaultSend,
+  NoopBuildHeaders, NoopConvertRequest, PoolResolve, SelectorOutcome,
 };
 use tokn_requests::{Event, EventBus, PipelineError, PipelineRunner, Profile, RawInbound, RetryPolicy};
 
