@@ -1,19 +1,19 @@
-//! Client-id-driven BuildHeaders stage.
+//! Default BuildHeaders stage.
 //!
 //! Composes the outbound HeaderMap from the inbound request using the
 //! [`tokn_headers`] schema + overlay registry. The flow is:
 //!
-//! 1. Resolve an effective [`tokn_core::ClientId`] — `extracted.client_id`
+//! 1. Resolve an effective [`tokn_core::AgentId`] — `extracted.agent_id`
 //!    wins if set, else the stage's per-provider default mapping is used, else
 //!    a stage-wide fallback.
 //! 2. Build [`TemplateVars`] from the inbound `HeaderMap` (the same scan
 //!    behavior as the legacy router's `api::first_header`).
 //! 3. Ask the [`registry::lookup`] for the schema pair:
-//!    - `Some(schema)` → build the client-id headers and, if
+//!    - `Some(schema)` → build the agent headers and, if
 //!      `schema.overlay` is `Some`, build the overlay's typed struct via
 //!      `OverlayKind`-specific dispatch and `.dump()` it; compose with
 //!      [`ResolvedSchema::compose`].
-//!    - `None` (unknown provider) → fall back to a client-id-only map; no
+//!    - `None` (unknown provider) → fall back to an agent-only map; no
 //!      overlay.
 //!
 //! Output: [`BuiltHeaders { headers, vars }`]. `vars` is retained so later
@@ -26,8 +26,8 @@ use crate::pipeline::stages::{BuildHeadersStage, BuiltHeaders, Extracted, Resolv
 use async_trait::async_trait;
 use smol_str::SmolStr;
 use std::collections::HashMap;
-use tokn_core::ClientId;
-use tokn_headers::persona::Persona;
+use tokn_core::AgentId;
+use tokn_headers::agent::build_agent_headers;
 use tokn_headers::registry::{lookup, OverlayKind, ResolvedSchema};
 use tokn_headers::schemas::{CodexOverlay, CopilotOverlay};
 use tokn_headers::{HeaderMap, TemplateVars};
@@ -58,28 +58,28 @@ const INTERACTION_ID_HEADERS: &[&str] = &["x-interaction-id"];
 /// [`TemplateVars::account_id`].
 const ACCOUNT_ID_HEADERS: &[&str] = &["chatgpt-account-id"];
 
-/// Client-id-driven BuildHeaders stage. See module docs for the resolution
+/// Default BuildHeaders stage. See module docs for the resolution
 /// algorithm.
-pub struct ClientIdBuildHeaders {
-  /// Per-provider fallback client id. Indexed by `provider_id`.
-  client_defaults: HashMap<SmolStr, ClientId>,
-  /// Stage-wide fallback client id used when no explicit or provider default
+pub struct DefaultBuildHeaders {
+  /// Per-provider fallback agent id. Indexed by `provider_id`.
+  agent_defaults: HashMap<SmolStr, AgentId>,
+  /// Stage-wide fallback agent id used when no explicit or provider default
   /// exists.
-  unknown_client_id_default: ClientId,
+  unknown_agent_id_default: AgentId,
 }
 
-impl ClientIdBuildHeaders {
-  pub fn new(client_defaults: HashMap<SmolStr, ClientId>, unknown_client_id_default: ClientId) -> Self {
+impl DefaultBuildHeaders {
+  pub fn new(agent_defaults: HashMap<SmolStr, AgentId>, unknown_agent_id_default: AgentId) -> Self {
     Self {
-      client_defaults,
-      unknown_client_id_default,
+      agent_defaults,
+      unknown_agent_id_default,
     }
   }
 
   /// Convenience constructor with built-in provider defaults and an Opencode
   /// fallback for unknown providers.
   pub fn with_provider_defaults() -> Self {
-    let mut client_defaults = HashMap::new();
+    let mut agent_defaults = HashMap::new();
     for provider_id in [
       "openai",
       "deepseek",
@@ -88,25 +88,25 @@ impl ClientIdBuildHeaders {
       "zhipuai",
       "zhipuai-coding-plan",
     ] {
-      client_defaults.insert(SmolStr::new(provider_id), ClientId::Opencode);
+      agent_defaults.insert(SmolStr::new(provider_id), AgentId::Opencode);
     }
-    client_defaults.insert(SmolStr::new("codex"), ClientId::CodexCli);
-    client_defaults.insert(SmolStr::new("copilot"), ClientId::CopilotCli);
-    client_defaults.insert(SmolStr::new("github-copilot"), ClientId::CopilotCli);
-    Self::new(client_defaults, ClientId::Opencode)
+    agent_defaults.insert(SmolStr::new("codex"), AgentId::CodexCli);
+    agent_defaults.insert(SmolStr::new("copilot"), AgentId::CopilotCli);
+    agent_defaults.insert(SmolStr::new("github-copilot"), AgentId::CopilotCli);
+    Self::new(agent_defaults, AgentId::Opencode)
   }
 
-  fn effective_client_id(&self, extracted: &Extracted, provider_id: &str) -> ClientId {
+  fn effective_agent_id(&self, extracted: &Extracted, provider_id: &str) -> AgentId {
     extracted
-      .client_id
+      .agent_id
       .clone()
-      .or_else(|| self.client_defaults.get(provider_id).cloned())
-      .unwrap_or_else(|| self.unknown_client_id_default.clone())
+      .or_else(|| self.agent_defaults.get(provider_id).cloned())
+      .unwrap_or_else(|| self.unknown_agent_id_default.clone())
   }
 }
 
 #[async_trait]
-impl BuildHeadersStage for ClientIdBuildHeaders {
+impl BuildHeadersStage for DefaultBuildHeaders {
   async fn build_headers(
     &self,
     _ctx: &PipelineCtx,
@@ -115,12 +115,11 @@ impl BuildHeadersStage for ClientIdBuildHeaders {
   ) -> Result<BuiltHeaders, PipelineError> {
     let inbound = &extracted.headers;
     let vars = build_template_vars(inbound);
-    let client_id = self.effective_client_id(extracted, resolved.provider_id.as_str());
+    let agent_id = self.effective_agent_id(extracted, resolved.provider_id.as_str());
 
-    let persona = persona_from_client_id(&client_id);
-    let headers = match lookup(resolved.provider_id.as_str(), &persona) {
-      Some(schema) => compose_with_schema(&schema, &client_id, &vars, inbound),
-      None => build_outbound(&client_id, &vars, inbound),
+    let headers = match lookup(resolved.provider_id.as_str(), agent_id.as_str()) {
+      Some(schema) => compose_with_schema(&schema, &vars, inbound),
+      None => build_agent_headers(agent_id.as_str(), &vars, inbound),
     };
 
     Ok(BuiltHeaders { headers, vars })
@@ -153,16 +152,11 @@ fn build_template_vars(inbound: &HeaderMap) -> TemplateVars {
   }
 }
 
-/// Build the client-id half and, if the schema names an overlay, build the
+/// Build the agent half and, if the schema names an overlay, build the
 /// overlay's typed struct and `.dump()` it. Then [`ResolvedSchema::compose`]
 /// merges with overlay-wins semantics.
-fn compose_with_schema(
-  schema: &ResolvedSchema,
-  client_id: &ClientId,
-  vars: &TemplateVars,
-  inbound: &HeaderMap,
-) -> HeaderMap {
-  let client_id_map = build_outbound(client_id, vars, inbound);
+fn compose_with_schema(schema: &ResolvedSchema, vars: &TemplateVars, inbound: &HeaderMap) -> HeaderMap {
+  let agent_map = schema.agent.build_outbound(vars, inbound);
   let overlay_map = schema.overlay.map(|kind| match kind {
     OverlayKind::Copilot => {
       use tokn_headers::HeaderSchema as _;
@@ -173,22 +167,7 @@ fn compose_with_schema(
       CodexOverlay::build(vars, inbound).dump()
     }
   });
-  ResolvedSchema::compose(client_id_map, overlay_map)
-}
-
-fn persona_from_client_id(client_id: &ClientId) -> Persona {
-  match client_id {
-    ClientId::Opencode => Persona::Opencode,
-    ClientId::CodexCli => Persona::CodexCli,
-    ClientId::ClaudeCode => Persona::ClaudeCode,
-    ClientId::Cline => Persona::Cline,
-    ClientId::CopilotCli => Persona::CopilotCli,
-    ClientId::Other(value) => Persona::Custom(value.clone()),
-  }
-}
-
-fn build_outbound(client_id: &ClientId, vars: &TemplateVars, inbound: &HeaderMap) -> HeaderMap {
-  persona_from_client_id(client_id).build_outbound(vars, inbound)
+  ResolvedSchema::compose(agent_map, overlay_map)
 }
 
 #[cfg(test)]
@@ -209,9 +188,9 @@ mod tests {
     m
   }
 
-  fn extracted(headers: HeaderMap, client_id: Option<ClientId>) -> Extracted {
+  fn extracted(headers: HeaderMap, agent_id: Option<AgentId>) -> Extracted {
     Extracted {
-      client_id,
+      agent_id,
       model: "gpt-4o".into(),
       stream: false,
       session_id: None,
@@ -229,7 +208,7 @@ mod tests {
 
   fn resolved(provider_id: &str) -> Resolved {
     Resolved {
-      client_id: None,
+      agent_id: None,
       model: "gpt-4o".into(),
       upstream_model: "gpt-4o".into(),
       upstream_endpoint: Endpoint::ChatCompletions,
@@ -245,7 +224,7 @@ mod tests {
 
   #[tokio::test]
   async fn provider_default_with_overlay_composes_both() {
-    let stage = ClientIdBuildHeaders::with_provider_defaults();
+    let stage = DefaultBuildHeaders::with_provider_defaults();
     let out = stage
       .build_headers(&ctx(), &extracted(HeaderMap::new(), None), &resolved("copilot"))
       .await
@@ -255,21 +234,21 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn provider_default_without_overlay_uses_client_id_only() {
-    let stage = ClientIdBuildHeaders::with_provider_defaults();
+  async fn provider_default_without_overlay_uses_agent_id_only() {
+    let stage = DefaultBuildHeaders::with_provider_defaults();
     let out = stage
       .build_headers(&ctx(), &extracted(HeaderMap::new(), None), &resolved("deepseek"))
       .await
       .unwrap();
-    assert!(!out.headers.is_empty(), "client_id map should be non-empty");
+    assert!(!out.headers.is_empty(), "agent header map should be non-empty");
     assert!(!out.headers.contains_key(&keys::COPILOT_INTEGRATION_ID));
   }
 
   #[tokio::test]
-  async fn missing_client_id_falls_back_to_custom_provider_default() {
+  async fn missing_agent_id_falls_back_to_custom_provider_default() {
     let mut defaults = HashMap::new();
-    defaults.insert(SmolStr::new("copilot"), ClientId::CopilotCli);
-    let stage = ClientIdBuildHeaders::new(defaults, ClientId::Opencode);
+    defaults.insert(SmolStr::new("copilot"), AgentId::CopilotCli);
+    let stage = DefaultBuildHeaders::new(defaults, AgentId::Opencode);
     let out = stage
       .build_headers(&ctx(), &extracted(HeaderMap::new(), None), &resolved("copilot"))
       .await
@@ -278,8 +257,8 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn missing_client_id_falls_back_to_global_default() {
-    let stage = ClientIdBuildHeaders::new(HashMap::new(), ClientId::Opencode);
+  async fn missing_agent_id_falls_back_to_global_default() {
+    let stage = DefaultBuildHeaders::new(HashMap::new(), AgentId::Opencode);
     let out = stage
       .build_headers(&ctx(), &extracted(HeaderMap::new(), None), &resolved("nonesuch"))
       .await
@@ -288,19 +267,19 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn explicit_client_id_overrides_provider_default() {
-    let stage = ClientIdBuildHeaders::with_provider_defaults();
+  async fn explicit_agent_id_overrides_provider_default() {
+    let stage = DefaultBuildHeaders::with_provider_defaults();
     let out = stage
       .build_headers(
         &ctx(),
-        &extracted(HeaderMap::new(), Some(ClientId::CodexCli)),
+        &extracted(HeaderMap::new(), Some(AgentId::CodexCli)),
         &resolved("openai"),
       )
       .await
       .unwrap();
     assert!(
       out.headers.contains_key(&keys::ORIGINATOR),
-      "Codex overlay's `originator` header missing — explicit client_id was ignored"
+      "Codex overlay's `originator` header missing — explicit agent_id was ignored"
     );
   }
 
@@ -312,7 +291,7 @@ mod tests {
       ("x-opencode-project", "/home/me/proj"),
       ("chatgpt-account-id", "acct_42"),
     ]);
-    let stage = ClientIdBuildHeaders::with_provider_defaults();
+    let stage = DefaultBuildHeaders::with_provider_defaults();
     let out = stage
       .build_headers(&ctx(), &extracted(headers, None), &resolved("deepseek"))
       .await

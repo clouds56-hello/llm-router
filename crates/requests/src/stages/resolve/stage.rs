@@ -63,7 +63,7 @@ impl<S: AccountSelector + 'static> ResolveStage for PoolResolve<S> {
         upstream_model,
         account_handle,
       } => Ok(Resolved {
-        client_id: extracted.client_id.clone(),
+        agent_id: extracted.agent_id.clone(),
         model: extracted.model.clone(),
         upstream_model,
         upstream_endpoint,
@@ -120,7 +120,7 @@ mod tests {
 
   fn fake_extracted() -> Extracted {
     Extracted {
-      client_id: None,
+      agent_id: None,
       model: SmolStr::new("input-model"),
       stream: false,
       session_id: None,

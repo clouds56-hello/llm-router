@@ -28,7 +28,7 @@ use tokn_headers::HeaderMap;
 use tokn_requests::event::{EventPayload, RecordEvent, Stage, StageEvent};
 use tokn_requests::pipeline::stages::ConvertedBody;
 use tokn_requests::stages::{
-  AccountSelector, ClientIdBuildHeaders, DefaultConvertRequest, DefaultConvertResponse, DefaultExtract, DefaultSend,
+  AccountSelector, DefaultBuildHeaders, DefaultConvertRequest, DefaultConvertResponse, DefaultExtract, DefaultSend,
   NoopBuildHeaders, NoopConvertRequest, PoolResolve, SelectorOutcome,
 };
 use tokn_requests::{Event, EventBus, PipelineError, PipelineRunner, Profile, RawInbound, RetryPolicy};
@@ -277,7 +277,7 @@ async fn pre_send_happy_path_emits_expected_event_sequence() {
       r.upstream_model.clone(),
       r.provider_id.clone(),
       r.account_id.clone(),
-      r.client_id.clone(),
+      r.agent_id.clone(),
     )),
     _ => None,
   });
@@ -456,7 +456,7 @@ async fn full_pipeline_buffered_happy_path() {
     "smoke-full",
     Arc::new(DefaultExtract),
     Arc::new(PoolResolve::new(selector)),
-    Arc::new(ClientIdBuildHeaders::with_provider_defaults()),
+    Arc::new(DefaultBuildHeaders::with_provider_defaults()),
     Arc::new(DefaultConvertRequest),
     Arc::new(DefaultSend::new(reqwest::Client::new())),
     Arc::new(DefaultConvertResponse::new()),
@@ -679,7 +679,7 @@ async fn pipeline_send_failure_preserves_partial_outcome() {
     "smoke-fail",
     Arc::new(DefaultExtract),
     Arc::new(PoolResolve::new(selector)),
-    Arc::new(ClientIdBuildHeaders::with_provider_defaults()),
+    Arc::new(DefaultBuildHeaders::with_provider_defaults()),
     Arc::new(DefaultConvertRequest),
     Arc::new(DefaultSend::new(reqwest::Client::new())),
     Arc::new(DefaultConvertResponse::new()),
@@ -802,7 +802,7 @@ async fn pipeline_retries_recoverable_send_failures_and_succeeds() {
     "smoke-retry-success",
     Arc::new(DefaultExtract),
     Arc::new(PoolResolve::new(selector)),
-    Arc::new(ClientIdBuildHeaders::with_provider_defaults()),
+    Arc::new(DefaultBuildHeaders::with_provider_defaults()),
     Arc::new(DefaultConvertRequest),
     Arc::new(DefaultSend::new(reqwest::Client::new())),
     Arc::new(DefaultConvertResponse::new()),
@@ -881,7 +881,7 @@ async fn pipeline_stops_after_retry_budget_exhausted() {
     "smoke-retry-exhausted",
     Arc::new(DefaultExtract),
     Arc::new(PoolResolve::new(selector)),
-    Arc::new(ClientIdBuildHeaders::with_provider_defaults()),
+    Arc::new(DefaultBuildHeaders::with_provider_defaults()),
     Arc::new(DefaultConvertRequest),
     Arc::new(DefaultSend::new(reqwest::Client::new())),
     Arc::new(DefaultConvertResponse::new()),
@@ -932,7 +932,7 @@ async fn pipeline_does_not_retry_permanent_send_failures() {
     "smoke-retry-permanent",
     Arc::new(DefaultExtract),
     Arc::new(PoolResolve::new(selector)),
-    Arc::new(ClientIdBuildHeaders::with_provider_defaults()),
+    Arc::new(DefaultBuildHeaders::with_provider_defaults()),
     Arc::new(DefaultConvertRequest),
     Arc::new(DefaultSend::new(reqwest::Client::new())),
     Arc::new(DefaultConvertResponse::new()),

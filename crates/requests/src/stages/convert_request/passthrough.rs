@@ -54,7 +54,7 @@ mod tests {
 
   fn extracted(raw: Bytes, decoded: Bytes) -> Extracted {
     Extracted {
-      client_id: None,
+      agent_id: None,
       model: SmolStr::new("m"),
       stream: false,
       session_id: None,
@@ -72,7 +72,7 @@ mod tests {
 
   fn resolved() -> Resolved {
     Resolved {
-      client_id: None,
+      agent_id: None,
       model: SmolStr::new("m"),
       upstream_model: SmolStr::new("m"),
       upstream_endpoint: Endpoint::ChatCompletions,

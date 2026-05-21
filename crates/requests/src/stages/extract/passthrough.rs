@@ -93,7 +93,7 @@ impl ExtractStage for PassthroughExtract {
     let content_encoding = request_content_encoding(&headers).ok().flatten();
 
     Ok(Extracted {
-      client_id: None,
+      agent_id: None,
       model,
       stream,
       session_id,
@@ -223,7 +223,7 @@ mod tests {
     assert_eq!(ex.session_id.as_deref(), Some("sess-1"));
     assert_eq!(ex.project_id.as_deref(), Some("/p"));
     assert_eq!(ex.route_mode_hint.as_deref(), Some("passthrough"));
-    assert!(ex.client_id.is_none());
+    assert!(ex.agent_id.is_none());
     assert_eq!(ex.initiator, "agent");
     assert_eq!(ex.header_initiator.as_deref(), Some("agent"));
   }

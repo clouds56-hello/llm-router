@@ -17,7 +17,7 @@
 //! `SentResponse`, `ConvertedResponse`); requests provides `From` impls.
 
 use crate::provider::Endpoint;
-use crate::ClientId;
+use crate::AgentId;
 use bytes::Bytes;
 use serde::Serialize;
 use serde_json::Value;
@@ -119,7 +119,7 @@ impl std::fmt::Display for Stage {
 /// the requests-internal `content_encoding` enum (kept inside requests only).
 #[derive(Debug, Clone)]
 pub struct ExtractedSummary {
-  pub client_id: Option<ClientId>,
+  pub agent_id: Option<AgentId>,
   pub model: SmolStr,
   pub stream: bool,
   pub session_id: Option<SmolStr>,
@@ -138,7 +138,7 @@ pub struct ExtractedSummary {
 /// tokn-accounts).
 #[derive(Debug, Clone)]
 pub struct ResolvedSummary {
-  pub client_id: Option<ClientId>,
+  pub agent_id: Option<AgentId>,
   pub model: SmolStr,
   pub upstream_model: SmolStr,
   pub upstream_endpoint: Endpoint,

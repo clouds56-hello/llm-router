@@ -14,7 +14,7 @@ use tokn_core::request_event::{
 impl From<&Extracted> for ExtractedSummary {
   fn from(e: &Extracted) -> Self {
     Self {
-      client_id: e.client_id.clone(),
+      agent_id: e.agent_id.clone(),
       model: e.model.clone(),
       stream: e.stream,
       session_id: e.session_id.clone(),
@@ -33,7 +33,7 @@ impl From<&Extracted> for ExtractedSummary {
 impl From<&Resolved> for ResolvedSummary {
   fn from(r: &Resolved) -> Self {
     Self {
-      client_id: r.client_id.clone(),
+      agent_id: r.agent_id.clone(),
       model: r.model.clone(),
       upstream_model: r.upstream_model.clone(),
       upstream_endpoint: r.upstream_endpoint,

@@ -13,19 +13,20 @@
 //! * [`HeaderSchema`] — a trait implemented by typed (provider, client) header
 //!   structs to round-trip between their typed form and a [`HeaderMap`].
 //! * [`schemas`] — concrete client/overlay structs implementing [`HeaderSchema`].
-//! * [`registry`] — runtime lookup of (`PersonaKind`, `OverlayKind`) for a given
-//!   `(provider_id, client_id)` pair.
+//! * [`agent`] — agent-specific outbound header builders.
+//! * [`registry`] — runtime lookup of (`AgentKind`, `OverlayKind`) for a given
+//!   `(provider_id, agent_id)` pair.
 //!
 //! Phase 1 is purely additive: nothing in the workspace depends on this crate
 //! yet. Phase 2 will swap [`HeaderMap`] in for `reqwest::header::HeaderMap`
 //! workspace-wide; Phase 3 will route provider header construction through the
 //! schema registry.
 
+pub mod agent;
 pub mod error;
 pub mod keys;
 pub mod map;
 pub mod name;
-pub mod persona;
 pub mod registry;
 pub mod reqwest_compat;
 pub mod schema;

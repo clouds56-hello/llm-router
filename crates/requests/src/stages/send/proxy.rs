@@ -258,7 +258,7 @@ mod tests {
 
   fn fake_extracted() -> Extracted {
     Extracted {
-      client_id: None,
+      agent_id: None,
       model: SmolStr::new("gpt-4"),
       stream: false,
       session_id: None,
@@ -305,7 +305,7 @@ mod tests {
   async fn missing_host_is_permanent_error() {
     let ctx = ctx_with(RunConfig::default());
     let resolved = Resolved {
-      client_id: None,
+      agent_id: None,
       model: SmolStr::new("m"),
       upstream_model: SmolStr::new("m"),
       upstream_endpoint: Endpoint::ChatCompletions,
@@ -367,7 +367,7 @@ mod tests {
         .build(),
     );
     let resolved = Resolved {
-      client_id: None,
+      agent_id: None,
       model: SmolStr::new("gpt-4"),
       upstream_model: SmolStr::new("gpt-4"),
       upstream_endpoint: Endpoint::ChatCompletions,
