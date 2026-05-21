@@ -23,7 +23,6 @@ pub struct RequestMeta {
   pub initiator: String,
   /// Raw initiator from x-initiator header, if valid.
   pub header_initiator: Option<String>,
-  pub behave_as: Option<String>,
   pub inbound_headers: HeaderMap,
 }
 

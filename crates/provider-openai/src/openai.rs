@@ -293,7 +293,6 @@ mod tests {
         stream: false,
         initiator: "user",
         inbound_headers: &inbound,
-        behave_as: None,
         profile_headers: None,
         outbound: None,
         vars: TemplateVars::default(),

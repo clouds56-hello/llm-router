@@ -84,7 +84,6 @@ user_agent             = "GitHubCopilotChat/0.20.0"
 copilot_integration_id = "vscode-chat"
 openai_intent          = "conversation-panel"
 initiator_mode         = "auto"
-# behave_as = "opencode"
 ```
 
 The downstream client may also send `X-Initiator: user|agent` per request,
@@ -181,7 +180,7 @@ pipeline, but each listener can keep its own default route mode via
 
 | id | auth | notes |
 |---|---|---|
-| `github-copilot` (default) | GitHub OAuth device flow → short-lived API token | identity headers + persona overlay; auto-classified `X-Initiator` |
+| `github-copilot` (default) | GitHub OAuth device flow → short-lived API token | identity headers; auto-classified `X-Initiator` |
 | `zai-coding-plan` / `zai` / `zhipuai-coding-plan` / `zhipuai` | static API key (`Authorization: Bearer ...`) | Four provider ids sharing one implementation; OpenAI-compatible upstream; auto-injects `thinking: { type: "enabled", clear_thinking: false }` for reasoning models |
 
 The four Z.ai provider ids share one backend implementation, but each id is
@@ -210,48 +209,6 @@ ZAI_API_KEY=sk-... tokn-router import --from env --provider zai --id work
 `/v1/models` returns the upstream OpenAI-shape entries unchanged; each entry
 gains an `x_tokn_router` block with the resolved provider id, display name,
 auth kind, and (when known) static capabilities/cost/limit metadata.
-
-### Personas (`behave_as`)
-
-Profiles live in an embedded `profiles.toml`; extend or override them with
-`~/.config/tokn-router/profiles.toml` (`tokn-router config edit-profiles`). A
-persona describes client identity headers plus which inbound headers may be
-forwarded.
-
-```toml
-[opencode]
-verified = true
-forward = ["x-initiator", "x-session-affinity"]
-deny = ["cookie"]
-
-[opencode.default]
-user-agent = "opencode/1.14.28 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.13"
-x-session-affinity = "<session_id>"
-
-[opencode.github-copilot]
-openai-intent = "conversation-edits"
-```
-
-`<scope>` is `default` (always merged), a provider id like `github-copilot`
-(merged when sending to that provider), or `general` (fallback when no
-provider-specific scope matches). `forward` is a case-insensitive allow-list of
-inbound headers; `deny` is applied after `forward`. Router-controlled headers
-(`authorization`, `content-type`, `accept`, `host`, `content-length`, etc.) are
-always ignored in profiles and set by provider code.
-
-Template values are rendered from static environment values (`<os>`, `<arch>`,
-`<os-pretty>`, `<hostname>`, `<tokn-router-version>`) and inbound-only request
-values (`<session_id>`, `<request_id>`, `<project_cwd>`, `<interaction_id>`,
-`<account_id>`). If an inbound-only value is missing, that header is omitted;
-tokn-router does not synthesize those ids.
-
-Built-in personas: `copilot`, `opencode`, `codex`, `copilot-cli`, and
-`openclaw`.
-
-Set an account persona with `settings.behave_as` under that account. The
-downstream client may also send `X-Behave-As: <persona>` per request, which
-overrides the account setting. Use `tokn-router smoke --dry-run` to inspect the
-rendered outbound headers and body without sending the request.
 
 ## License
 

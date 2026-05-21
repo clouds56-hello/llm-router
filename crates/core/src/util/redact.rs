@@ -5,14 +5,10 @@
 //! without revealing the secret itself:
 //!
 //! - [`token_fingerprint`] — first 8 hex chars of SHA-256, prefix-tagged.
-//! - [`BehaveAs`] — `Display` adapter for `Option<&str>` persona fields that
-//!   prints the bare name or `none` instead of `Some("…")`/`None`.
 //!
 //! A header-preview helper was deliberately omitted: per project policy we
 //! never log inbound or upstream headers, request bodies, or response bodies
 //! — even truncated, even at trace.
-
-use std::fmt;
 
 /// Return `sha256[..8]` of `secret` as a lowercase hex string with a
 /// stable prefix so log greppers can spot fingerprints at a glance.
@@ -21,19 +17,6 @@ use std::fmt;
 /// useful for verifying that token caching / rotation actually rotated.
 pub fn token_fingerprint(secret: &str) -> String {
   crate::util::secret::fingerprint_str(secret)
-}
-
-/// `Display` adapter for an optional persona name. Renders the name verbatim
-/// or the literal `none` so log records stay grep-friendly.
-pub struct BehaveAs<'a>(pub Option<&'a str>);
-
-impl fmt::Display for BehaveAs<'_> {
-  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    match self.0 {
-      Some(s) if !s.is_empty() => f.write_str(s),
-      _ => f.write_str("none"),
-    }
-  }
 }
 
 #[cfg(test)]
@@ -54,12 +37,5 @@ mod tests {
   #[test]
   fn fingerprint_tags_empty() {
     assert_eq!(token_fingerprint(""), "fp:<empty>");
-  }
-
-  #[test]
-  fn behave_as_display() {
-    assert_eq!(format!("{}", BehaveAs(None)), "none");
-    assert_eq!(format!("{}", BehaveAs(Some(""))), "none");
-    assert_eq!(format!("{}", BehaveAs(Some("opencode"))), "opencode");
   }
 }

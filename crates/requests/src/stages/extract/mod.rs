@@ -3,10 +3,8 @@
 //!
 //! Behavior is a clean reimplementation of the legacy
 //! `crates/router/src/pipeline/parse.rs::{request_header_extract,
-//! request_body_extract, RequestParser::parse}`, with two visible changes:
-//!
-//! * `behave_as: Option<String>` is replaced by `client_id: Option<ClientId>`.
-//! * All small strings are [`SmolStr`].
+//! request_body_extract, RequestParser::parse}`, with all small strings stored
+//! as [`SmolStr`].
 //!
 //! Header name lists are duplicated here intentionally to keep requests free
 //! of any dependency on the legacy `crates/router` crate. PR2 will move the
@@ -23,7 +21,6 @@ use async_trait::async_trait;
 use serde_json::Value;
 use smol_str::SmolStr;
 use std::sync::Arc;
-use tokn_core::ClientId;
 use tokn_headers::HeaderMap;
 
 const SESSION_ID_HEADERS: &[&str] = &[
@@ -77,11 +74,6 @@ impl ExtractStage for DefaultExtract {
       .filter(|s| !s.is_empty())
       .map(SmolStr::new);
 
-    let client_id = header_str(&headers, "x-behave-as")
-      .map(str::trim)
-      .filter(|s| !s.is_empty())
-      .map(ClientId::from);
-
     // Parsing failures here are recoverable for the codec layer
     // (which would have failed loudly at the transport boundary
     // before we got here) but not for ConvertRequest. We treat a
@@ -90,7 +82,7 @@ impl ExtractStage for DefaultExtract {
     let content_encoding = request_content_encoding(&headers).ok().flatten();
 
     Ok(Extracted {
-      client_id,
+      client_id: None,
       model,
       stream,
       session_id,
@@ -197,17 +189,9 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn x_behave_as_becomes_client_id() {
+  async fn x_behave_as_is_ignored() {
     let body = serde_json::json!({"model": "m"});
     let headers = header_map(&[("x-behave-as", "  codex  ")]);
-    let ex = DefaultExtract.extract(&ctx(), raw(headers, body)).await.unwrap();
-    assert_eq!(ex.client_id, Some(ClientId::from("codex")));
-  }
-
-  #[tokio::test]
-  async fn empty_behave_as_yields_none() {
-    let body = serde_json::json!({"model": "m"});
-    let headers = header_map(&[("x-behave-as", "   ")]);
     let ex = DefaultExtract.extract(&ctx(), raw(headers, body)).await.unwrap();
     assert!(ex.client_id.is_none());
   }

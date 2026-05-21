@@ -18,7 +18,6 @@ mod tests {
     headers.insert("x-session-id", HeaderValue::from_static("session-1"));
     headers.insert("x-request-id", HeaderValue::from_static("request-1"));
     headers.insert("x-opencode-project", HeaderValue::from_static("project-1"));
-    headers.insert("x-behave-as", HeaderValue::from_static("architect"));
     let body = json!({
       "model": "gpt-4.1",
       "stream": true,
@@ -35,7 +34,6 @@ mod tests {
     assert_eq!(parsed.meta.session_id.as_deref(), Some("session-1"));
     assert_eq!(parsed.meta.request_id.as_deref(), Some("request-1"));
     assert_eq!(parsed.meta.project_id.as_deref(), Some("project-1"));
-    assert_eq!(parsed.meta.behave_as.as_deref(), Some("architect"));
     assert_eq!(parsed.meta.initiator, "user");
     assert_eq!(parsed.body, body);
     assert_eq!(

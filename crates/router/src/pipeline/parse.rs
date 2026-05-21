@@ -78,11 +78,6 @@ pub(crate) trait RequestParser: Send + Sync {
     let session_id = first_header(&headers, SESSION_ID_HEADERS).map(str::to_string);
     let request_id = first_header(&headers, REQUEST_ID_HEADERS).map(str::to_string);
     let project_id = first_header(&headers, PROJECT_ID_HEADERS).map(str::to_string);
-    let behave_as = headers
-      .get("x-behave-as")
-      .and_then(|v| v.to_str().ok())
-      .map(|s| s.trim().to_string())
-      .filter(|s| !s.is_empty());
 
     ParsedRequest {
       meta: RequestMeta {
@@ -97,7 +92,6 @@ pub(crate) trait RequestParser: Send + Sync {
         project_id,
         initiator: body_meta.initiator,
         header_initiator: body_meta.header_initiator,
-        behave_as,
         inbound_headers: (&headers).into(),
       },
       body,

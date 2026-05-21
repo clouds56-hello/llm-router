@@ -20,8 +20,6 @@ pub struct ClineHeaders {
   pub user_agent: SmolStr,
   #[serde(rename = "X-Session-Id")]
   pub session_id: Option<SmolStr>,
-  #[serde(rename = "X-Behave-As")]
-  pub behave_as: Option<SmolStr>,
 }
 
 impl HeaderSchema for ClineHeaders {
@@ -29,18 +27,16 @@ impl HeaderSchema for ClineHeaders {
     Ok(Self {
       user_agent: required(map, &keys::USER_AGENT)?,
       session_id: optional(map, &keys::X_SESSION_ID),
-      behave_as: optional(map, &keys::X_BEHAVE_AS),
     })
   }
   fn dump(&self) -> HeaderMap {
     let mut m = HeaderMap::new();
     put(&mut m, &keys::USER_AGENT, &self.user_agent);
     put_opt(&mut m, &keys::X_SESSION_ID, &self.session_id);
-    put_opt(&mut m, &keys::X_BEHAVE_AS, &self.behave_as);
     m
   }
   fn known_names() -> &'static [&'static HeaderName] {
-    static NAMES: [&HeaderName; 3] = [&keys::USER_AGENT, &keys::X_SESSION_ID, &keys::X_BEHAVE_AS];
+    static NAMES: [&HeaderName; 2] = [&keys::USER_AGENT, &keys::X_SESSION_ID];
     &NAMES
   }
 }
@@ -55,7 +51,6 @@ impl ClineHeaders {
         .session_id
         .clone()
         .or_else(|| opt_from_inbound(inbound, &keys::X_SESSION_ID)),
-      behave_as: opt_from_inbound(inbound, &keys::X_BEHAVE_AS),
     }
   }
 }
@@ -69,7 +64,6 @@ mod tests {
     let h = ClineHeaders {
       user_agent: "cline/3.0.0".into(),
       session_id: Some("ses_cli".into()),
-      behave_as: Some("agent".into()),
     };
     assert_eq!(ClineHeaders::parse(&h.dump()).unwrap(), h);
   }
@@ -79,17 +73,14 @@ mod tests {
     let h = ClineHeaders::build(&TemplateVars::default(), &HeaderMap::new());
     assert_eq!(h.user_agent.as_str(), "cline/3.0.0");
     assert!(h.session_id.is_none());
-    assert!(h.behave_as.is_none());
   }
 
   #[test]
   fn build_passes_through_inbound() {
     let mut inbound = HeaderMap::new();
     inbound.insert(&keys::USER_AGENT, "cline/9.9");
-    inbound.insert(&keys::X_BEHAVE_AS, "agent");
     let h = ClineHeaders::build(&TemplateVars::default(), &inbound);
     assert_eq!(h.user_agent.as_str(), "cline/9.9");
-    assert_eq!(h.behave_as.as_deref(), Some("agent"));
   }
 
   #[test]

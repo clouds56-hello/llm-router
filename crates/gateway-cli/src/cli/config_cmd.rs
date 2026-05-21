@@ -783,12 +783,12 @@ mod tests {
     let mut d = doc("[[accounts]]\nid = \"work\"\n");
     insert(
       &mut d,
-      &["accounts".into(), "work".into(), "behave_as".into()],
-      value("opencode"),
+      &["accounts".into(), "work".into(), "label".into()],
+      value("Work"),
     )
     .unwrap();
     let s = d.to_string();
-    assert!(s.contains("behave_as = \"opencode\""));
+    assert!(s.contains("label = \"Work\""));
   }
 
   #[test]

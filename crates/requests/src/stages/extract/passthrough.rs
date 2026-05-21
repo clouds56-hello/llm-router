@@ -12,7 +12,7 @@
 //! value. The full body bytes remain in `raw_body` / `decoded_body` and
 //! `body_json` is set to `Value::Null` to signal "do not consult".
 //!
-//! Header extraction (session, project, route mode, behave-as, etc.)
+//! Header extraction (session, project, route mode, initiator, etc.)
 //! mirrors `DefaultExtract` since BuildHeaders and Send both depend on
 //! those values.
 
@@ -25,7 +25,6 @@ use serde::Deserialize;
 use serde_json::Value;
 use smol_str::SmolStr;
 use std::sync::Arc;
-use tokn_core::ClientId;
 use tokn_headers::HeaderMap;
 
 const SESSION_ID_HEADERS: &[&str] = &[
@@ -91,15 +90,10 @@ impl ExtractStage for PassthroughExtract {
       .filter(|s| !s.is_empty())
       .map(SmolStr::new);
 
-    let client_id = header_str(&headers, "x-behave-as")
-      .map(str::trim)
-      .filter(|s| !s.is_empty())
-      .map(ClientId::from);
-
     let content_encoding = request_content_encoding(&headers).ok().flatten();
 
     Ok(Extracted {
-      client_id,
+      client_id: None,
       model,
       stream,
       session_id,
@@ -229,7 +223,7 @@ mod tests {
     assert_eq!(ex.session_id.as_deref(), Some("sess-1"));
     assert_eq!(ex.project_id.as_deref(), Some("/p"));
     assert_eq!(ex.route_mode_hint.as_deref(), Some("passthrough"));
-    assert_eq!(ex.client_id, Some(ClientId::from("codex")));
+    assert!(ex.client_id.is_none());
     assert_eq!(ex.initiator, "agent");
     assert_eq!(ex.header_initiator.as_deref(), Some("agent"));
   }

@@ -74,7 +74,6 @@ impl SendStage for DefaultSend {
       stream: extracted.stream,
       initiator,
       inbound_headers: &inbound_headers,
-      behave_as: None,
       profile_headers: Some(headers.headers.clone()),
       outbound: Some(capture.clone()),
       vars: headers.vars.clone(),

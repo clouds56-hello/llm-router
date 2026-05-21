@@ -161,20 +161,8 @@ fn build_profile_headers(
 }
 
 fn selected_persona(meta: &RequestMeta, account: &Arc<AccountHandle>) -> Option<String> {
-  meta
-    .behave_as
-    .clone()
-    .or_else(|| settings_behave_as(&account.config.load().settings))
-    .or_else(|| default_persona(account.provider.info().id.as_str()).map(str::to_string))
-}
-
-fn settings_behave_as(settings: &toml::Table) -> Option<String> {
-  settings
-    .get("behave_as")
-    .and_then(|v| v.as_str())
-    .map(str::trim)
-    .filter(|s| !s.is_empty())
-    .map(ToOwned::to_owned)
+  let _ = meta;
+  default_persona(account.provider.info().id.as_str()).map(str::to_string)
 }
 
 fn default_persona(provider_id: &str) -> Option<&'static str> {
@@ -267,4 +255,76 @@ fn provider_headers(headers: &reqwest::header::HeaderMap) -> reqwest::header::He
     .filter(|(name, _)| !crate::api::is_router_owned_header(name))
     .map(|(name, value)| (name.clone(), value.clone()))
     .collect()
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::api::build_state;
+  use crate::config::{Account as AccountCfg, Config};
+  use crate::util::secret::Secret;
+  use std::sync::Arc;
+  use tokn_core::account::AccountConfig;
+  use tokn_core::event::EventBus;
+
+  fn openai_account() -> AccountCfg {
+    AccountCfg {
+      id: "acct".into(),
+      provider: crate::provider::ID_OPENAI.into(),
+      enabled: true,
+      tier: tokn_core::account::AccountTier::Active,
+      tags: Vec::new(),
+      label: None,
+      base_url: None,
+      headers: Default::default(),
+      auth_type: None,
+      username: None,
+      api_key: Some(Secret::new("sk-test".into())),
+      api_key_expires_at: None,
+      access_token: None,
+      access_token_expires_at: None,
+      id_token: None,
+      refresh_token: None,
+      provider_account_id: None,
+      extra: Default::default(),
+      refresh_url: None,
+      last_refresh: None,
+      settings: toml::Table::new(),
+    }
+  }
+
+  fn core_account(cfg: AccountCfg) -> AccountConfig {
+    let raw = toml::to_string(&cfg).unwrap();
+    toml::from_str(&raw).unwrap()
+  }
+
+  #[test]
+  fn dry_run_ignores_account_behave_as_setting() {
+    let cfg = Config::default();
+    let mut account = openai_account();
+    account
+      .settings
+      .insert("behave_as".into(), toml::Value::String("codex".into()));
+    let state = build_state(&cfg, &[core_account(account)], Arc::new(EventBus::noop())).unwrap();
+
+    let out = dry_run_request(
+      &state,
+      DryRunEndpoint::ChatCompletions,
+      reqwest::header::HeaderMap::new(),
+      serde_json::json!({
+        "model": "gpt-4.1",
+        "messages": [{"role": "user", "content": "hi"}]
+      }),
+      Bytes::from_static(br#"{"model":"gpt-4.1","messages":[{"role":"user","content":"hi"}]}"#),
+      None,
+    )
+    .unwrap();
+
+    let user_agent = out.headers.get("user-agent").and_then(|value| value.to_str().ok());
+    assert_eq!(
+      user_agent,
+      Some("opencode/1.14.28 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.13")
+    );
+    assert!(out.headers.get("originator").is_none());
+  }
 }

@@ -1,7 +1,7 @@
 //! Logical identifier for the *client* whose behavior an upstream call should
 //! impersonate. Carried end-to-end through the pipeline so downstream stages
-//! (header shaping, provider selection) can branch on it without re-parsing
-//! the inbound `x-behave-as` header.
+//! (header shaping, provider selection) can branch on it without reparsing
+//! inbound traffic.
 //!
 //! The newtype wraps [`SmolStr`] so common values (e.g. `"codex"`, `"copilot"`)
 //! stay inline and cloning stays cheap.

@@ -114,7 +114,6 @@ fn inject_mode(mode: &str, headers: &mut HeaderMap) -> Result<(), ApiError> {
     model = tracing::field::Empty,
     stream = tracing::field::Empty,
     initiator = tracing::field::Empty,
-    behave_as = tracing::field::Empty,
   ),
 )]
 pub async fn chat_completions(
@@ -133,7 +132,6 @@ pub async fn chat_completions(
     model = tracing::field::Empty,
     stream = tracing::field::Empty,
     initiator = tracing::field::Empty,
-    behave_as = tracing::field::Empty,
   ),
 )]
 pub async fn responses(State(state): State<AppState>, inbound: HeaderMap, body: Bytes) -> Result<Response, ApiError> {
@@ -148,7 +146,6 @@ pub async fn responses(State(state): State<AppState>, inbound: HeaderMap, body: 
     model = tracing::field::Empty,
     stream = tracing::field::Empty,
     initiator = tracing::field::Empty,
-    behave_as = tracing::field::Empty,
   ),
 )]
 pub async fn messages(State(state): State<AppState>, inbound: HeaderMap, body: Bytes) -> Result<Response, ApiError> {

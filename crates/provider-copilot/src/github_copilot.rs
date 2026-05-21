@@ -3,7 +3,6 @@
 pub use crate::{headers, models, oauth, token, user};
 
 use crate::config::{CopilotHeaders, InitiatorMode};
-use crate::util::redact::BehaveAs;
 use crate::util::secret::Secret;
 use async_trait::async_trait;
 use parking_lot::RwLock;
@@ -275,7 +274,6 @@ impl CopilotProvider {
       what,
       path,
       stream = ctx.stream,
-      behave_as = %BehaveAs(ctx.behave_as),
       initiator = tracing::field::Empty,
     ),
   )]

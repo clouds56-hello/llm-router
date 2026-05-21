@@ -401,7 +401,6 @@ mod tests {
       stream: false,
       initiator: "user",
       inbound_headers: &inbound,
-      behave_as: None,
       profile_headers: None,
       outbound: Some(capture.clone()),
       vars: TemplateVars::default(),
