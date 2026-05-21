@@ -30,6 +30,9 @@ pub(crate) const INTERCEPT_HOSTS: &[&str] = &[
   "chatgpt.com",
   // "ab.chatgpt.com",
   "api.deepseek.com",
+  "localhost",
+  "127.0.0.1",
+  "::1",
 ];
 
 /// Hosts the proxy intercepts even though no provider claims them.

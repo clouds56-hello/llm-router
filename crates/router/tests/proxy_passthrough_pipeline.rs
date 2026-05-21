@@ -12,8 +12,8 @@
 //! * `PassthroughConvertRequest` (verbatim body bytes).
 //! * `ProxySend` (dispatch to `{scheme}://{host}{path}`).
 //! * `PassthroughConvertResponse` (buffered response forwarding).
-//! * `AccountIdentityResolver` integration (provider_id falls back to
-//!   the intercepted host when no fingerprint match).
+//! * `AccountIdentityResolver` integration (provider_id is inferred from
+//!   known provider URLs when possible).
 //! * `RecordEvent::UpstreamReq` emission with the right url + headers.
 
 use axum::body::to_bytes;
@@ -82,9 +82,9 @@ async fn proxy_passthrough_pipeline_forwards_request_and_preserves_client_auth()
     let _ = req_tx.send(buf);
   });
 
-  // Build router state in passthrough mode with zero accounts. The
-  // proxy passthrough pipeline does no account resolution; identity
-  // fallback for provider_id will be the intercepted host.
+  // Build router state in passthrough mode with zero accounts. Identity
+  // still tags known provider URLs for request attribution; localhost
+  // OpenAI-compatible paths are registered as llama.cpp.
   let mut cfg = Config::default();
   cfg.server.route_mode = RouteMode::Passthrough;
   let events = Arc::new(EventBus::new(256));
@@ -243,13 +243,13 @@ async fn proxy_passthrough_pipeline_forwards_request_and_preserves_client_auth()
     );
   }
 
-  // StageEvent::Resolve: provider_id falls back to bare intercepted
-  // host (no accounts configured → no fingerprint match). account_id
+  // StageEvent::Resolve: provider_id is inferred from the localhost
+  // OpenAI-compatible path registered by the llama.cpp provider. account_id
   // is the bearer-token fingerprint synthesised by
   // `AccountIdentityResolver` for the long `Authorization` header in
   // this test (≥32 chars triggers the `account_fp_<suffix>` fallback).
   if let RequestEventPayload::Stage(StageEvent::Resolve(r)) = &events[p_resolve].payload {
-    assert_eq!(r.provider_id.as_str(), intercepted_host);
+    assert_eq!(r.provider_id.as_str(), tokn_core::provider::ID_LLAMA_CPP);
     assert!(
       r.account_id.as_str().starts_with("account_fp_"),
       "expected synthetic fingerprint account_id, got {:?}",
@@ -570,7 +570,7 @@ async fn proxy_switch_rejects_unrecognized_provider_url() {
 
   let req = Request::builder()
     .method(Method::POST)
-    .uri("/v1/chat/completions")
+    .uri("/not-a-provider")
     .header("content-type", "application/json")
     .body(())
     .unwrap();
