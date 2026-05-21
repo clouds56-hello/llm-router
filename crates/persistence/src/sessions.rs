@@ -20,7 +20,7 @@ const BOOTSTRAP: &str = include_str!("../schemas/snapshot/sessions/v0.1.1.sql");
 const MIGRATIONS: &[migrate::Migration] = &[migrate::Migration {
   version: 1,
   name: "initial",
-  sql: include_str!("../schemas/migrations/sessions/0001_v0.0.0.sql"),
+  sql: include_str!("../schemas/snapshot/sessions/v0.0.0.sql"),
 }];
 
 pub fn latest_version() -> u32 {

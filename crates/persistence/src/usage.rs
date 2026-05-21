@@ -23,7 +23,7 @@ const MIGRATIONS: &[migrate::Migration] = &[
   migrate::Migration {
     version: 1,
     name: "initial",
-    sql: include_str!("../schemas/migrations/usage/0001_v0.0.0.sql"),
+    sql: include_str!("../schemas/snapshot/usage/v0.0.0.sql"),
   },
   migrate::Migration {
     version: 2,
