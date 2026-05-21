@@ -21,6 +21,8 @@ use llm_core::event::EventBus;
 use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::Duration;
+
+const PIPELINE_RETRY_POLICY: llm_requests::RetryPolicy = llm_requests::RetryPolicy::new(2, Duration::from_millis(100));
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::trace::TraceLayer;
 use tracing::{Level, Span};
@@ -274,7 +276,11 @@ fn build_request_pipeline(
     Arc::new(DefaultSend::new(http)),
     Arc::new(DefaultConvertResponse::new()),
   );
-  Arc::new(llm_requests::Pipeline::new(Arc::new(profile), events))
+  Arc::new(llm_requests::Pipeline::new_with_retry(
+    Arc::new(profile),
+    events,
+    PIPELINE_RETRY_POLICY,
+  ))
 }
 
 /// Construct the passthrough `llm-requests` pipeline. Forwards the
@@ -305,7 +311,11 @@ fn build_passthrough_pipeline(
     Arc::new(DefaultSend::new(http)),
     Arc::new(PassthroughConvertResponse::new()),
   );
-  Arc::new(llm_requests::Pipeline::new(Arc::new(profile), events))
+  Arc::new(llm_requests::Pipeline::new_with_retry(
+    Arc::new(profile),
+    events,
+    PIPELINE_RETRY_POLICY,
+  ))
 }
 
 /// Construct the proxy-passthrough `llm-requests` pipeline used by the
@@ -334,7 +344,11 @@ fn build_proxy_passthrough_pipeline(http: reqwest::Client, events: Arc<EventBus>
     Arc::new(ProxySend::new(http)),
     Arc::new(PassthroughConvertResponse::new()),
   );
-  Arc::new(llm_requests::Pipeline::new(Arc::new(profile), events))
+  Arc::new(llm_requests::Pipeline::new_with_retry(
+    Arc::new(profile),
+    events,
+    PIPELINE_RETRY_POLICY,
+  ))
 }
 
 fn build_proxy_switch_pipeline(

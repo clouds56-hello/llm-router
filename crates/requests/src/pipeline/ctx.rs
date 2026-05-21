@@ -37,7 +37,7 @@ pub struct PipelineCtx {
 
 impl PipelineCtx {
   pub fn new(request_id: impl Into<SmolStr>, endpoint: Endpoint, events: Arc<EventBus>) -> Self {
-    Self::new_with_config(request_id, endpoint, events, Arc::new(RunConfig::default()))
+    Self::new_with_attempt_and_config(request_id, 0, endpoint, events, Arc::new(RunConfig::default()))
   }
 
   pub fn new_with_config(
@@ -46,9 +46,19 @@ impl PipelineCtx {
     events: Arc<EventBus>,
     config: Arc<RunConfig>,
   ) -> Self {
+    Self::new_with_attempt_and_config(request_id, 0, endpoint, events, config)
+  }
+
+  pub fn new_with_attempt_and_config(
+    request_id: impl Into<SmolStr>,
+    attempt: u32,
+    endpoint: Endpoint,
+    events: Arc<EventBus>,
+    config: Arc<RunConfig>,
+  ) -> Self {
     Self {
       request_id: request_id.into(),
-      attempt: 0,
+      attempt,
       endpoint,
       events,
       config,

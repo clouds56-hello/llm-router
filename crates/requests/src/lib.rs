@@ -27,7 +27,7 @@ pub(crate) mod test_support;
 
 pub use event::{CustomEvent, Event, EventBus, EventPayload, Stage, StageEvent};
 pub use pipeline::{
-  ctx::PipelineCtx, error::PipelineError, stages as stage_traits, Pipeline, PipelineRunner, RawInbound, RunConfig,
-  RunConfigBuilder,
+  ctx::PipelineCtx, error::PipelineError, stages as stage_traits, Pipeline, PipelineRunner, RawInbound, RetryPolicy,
+  RunConfig, RunConfigBuilder,
 };
 pub use profile::Profile;

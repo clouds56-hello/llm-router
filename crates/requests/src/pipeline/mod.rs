@@ -45,6 +45,7 @@ pub use stages::{
   ExtractStage, Extracted, RawInbound, ResolveStage, Resolved, SendStage, SentResponse,
 };
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Alias for clarity at call sites — the same type as [`PipelineRunner`].
 pub type Pipeline = PipelineRunner;
@@ -52,11 +53,47 @@ pub type Pipeline = PipelineRunner;
 pub struct PipelineRunner {
   pub profile: Arc<Profile>,
   pub events: Arc<EventBus>,
+  retry_policy: RetryPolicy,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RetryPolicy {
+  pub max_retries: u32,
+  pub initial_backoff: Duration,
+}
+
+impl RetryPolicy {
+  pub const fn new(max_retries: u32, initial_backoff: Duration) -> Self {
+    Self {
+      max_retries,
+      initial_backoff,
+    }
+  }
+
+  fn should_retry(&self, attempt: u32, err: &PipelineError) -> bool {
+    attempt < self.max_retries && err.stage == crate::event::Stage::Send && err.recoverable && !err.stop
+  }
+
+  fn backoff_for(&self, attempt: u32) -> Duration {
+    if self.initial_backoff.is_zero() {
+      return Duration::ZERO;
+    }
+    let multiplier = 1u32.checked_shl(attempt.min(31)).unwrap_or(u32::MAX);
+    self.initial_backoff.saturating_mul(multiplier)
+  }
 }
 
 impl PipelineRunner {
   pub fn new(profile: Arc<Profile>, events: Arc<EventBus>) -> Self {
-    Self { profile, events }
+    Self::new_with_retry(profile, events, RetryPolicy::default())
+  }
+
+  pub fn new_with_retry(profile: Arc<Profile>, events: Arc<EventBus>, retry_policy: RetryPolicy) -> Self {
+    Self {
+      profile,
+      events,
+      retry_policy,
+    }
   }
 
   /// Drive the pipeline through all six stages. Returns the final
@@ -79,7 +116,35 @@ impl PipelineRunner {
   /// transport-level hints down to custom Resolve / Send stages.
   pub async fn run_with(&self, raw: RawInbound, config: RunConfig) -> Result<ConvertedResponse, PipelineError> {
     let request_id = raw.request_id.clone().unwrap_or_else(|| SmolStr::new(uuid_like()));
-    let ctx = PipelineCtx::new_with_config(request_id, raw.endpoint, self.events.clone(), Arc::new(config));
+    let config = Arc::new(config);
+    let mut attempt = 0;
+
+    loop {
+      match self
+        .run_attempt(raw.clone(), config.clone(), request_id.clone(), attempt)
+        .await
+      {
+        Ok(response) => return Ok(response),
+        Err(err) if self.retry_policy.should_retry(attempt, &err) => {
+          let backoff = self.retry_policy.backoff_for(attempt);
+          if !backoff.is_zero() {
+            tokio::time::sleep(backoff).await;
+          }
+          attempt += 1;
+        }
+        Err(err) => return Err(err),
+      }
+    }
+  }
+
+  async fn run_attempt(
+    &self,
+    raw: RawInbound,
+    config: Arc<RunConfig>,
+    request_id: SmolStr,
+    attempt: u32,
+  ) -> Result<ConvertedResponse, PipelineError> {
+    let ctx = PipelineCtx::new_with_attempt_and_config(request_id, attempt, raw.endpoint, self.events.clone(), config);
     ctx.emit_stage(StageEvent::Started {
       endpoint: raw.endpoint.into(),
     });

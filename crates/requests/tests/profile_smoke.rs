@@ -25,10 +25,13 @@ use llm_requests::stages::{
   AccountSelector, DefaultConvertRequest, DefaultConvertResponse, DefaultExtract, DefaultSend, NoopBuildHeaders,
   NoopConvertRequest, PersonaBuildHeaders, PoolResolve, SelectorOutcome,
 };
-use llm_requests::{Event, EventBus, PipelineError, PipelineRunner, Profile, RawInbound};
+use llm_requests::{Event, EventBus, PipelineError, PipelineRunner, Profile, RawInbound, RetryPolicy};
 use serde_json::Value;
 use smol_str::SmolStr;
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 /// Minimal `Provider` used only to satisfy the new typed
 /// `AccountHandle` requirement on `SelectorOutcome::Selected`.
@@ -175,6 +178,31 @@ async fn drain_until_completed(log: &Arc<Mutex<Vec<Event>>>) -> std::sync::Mutex
     tokio::time::sleep(std::time::Duration::from_millis(1)).await;
   }
   panic!("timed out waiting for Completed event");
+}
+
+async fn drain_until_completed_attempts(
+  log: &Arc<Mutex<Vec<Event>>>,
+  expected_attempts: u32,
+) -> std::sync::MutexGuard<'_, Vec<Event>> {
+  for _ in 0..1000 {
+    {
+      let guard = log.lock().unwrap();
+      let done = guard.iter().any(|e| {
+        matches!(
+          &e.payload,
+          EventPayload::Stage(StageEvent::Completed {
+            attempts,
+            ..
+          }) if *attempts == expected_attempts
+        )
+      });
+      if done {
+        return guard;
+      }
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+  }
+  panic!("timed out waiting for Completed event with attempts={expected_attempts}");
 }
 
 fn known_kinds(events: &[Event]) -> Vec<&'static str> {
@@ -562,6 +590,86 @@ fn failing_handle(provider_id: &str, account_id: &str) -> Arc<AccountHandle> {
   Arc::new(AccountHandle::new(Arc::new(cfg), Arc::new(provider)))
 }
 
+enum ScriptedResponse {
+  Http { status: u16, body: &'static str },
+}
+
+struct SequencedProvider {
+  info: ProviderInfo,
+  responses: Mutex<VecDeque<ScriptedResponse>>,
+  calls: AtomicUsize,
+}
+
+#[async_trait]
+impl Provider for SequencedProvider {
+  fn id(&self) -> &str {
+    &self.info.id
+  }
+
+  fn info(&self) -> &ProviderInfo {
+    &self.info
+  }
+
+  async fn list_models(&self, _http: &reqwest::Client) -> ProviderResult<Value> {
+    Ok(Value::Null)
+  }
+
+  async fn chat(&self, _ctx: RequestCtx<'_>) -> ProviderResult<reqwest::Response> {
+    self.calls.fetch_add(1, Ordering::Relaxed);
+    let next = self
+      .responses
+      .lock()
+      .unwrap()
+      .pop_front()
+      .expect("scripted provider should have a queued response");
+    match next {
+      ScriptedResponse::Http { status, body } => Ok(ok_response(status, body)),
+    }
+  }
+}
+
+fn sequenced_handle(provider_id: &str, account_id: &str, responses: Vec<ScriptedResponse>) -> Arc<AccountHandle> {
+  let info = ProviderInfo {
+    id: provider_id.into(),
+    aliases: &[],
+    display_name: "sequenced",
+    upstream_url: String::new(),
+    auth_kind: AuthKind::StaticApiKey,
+    default_models: vec![],
+    default_endpoints: &[Endpoint::ChatCompletions],
+    model_cache: Arc::new(ModelCache::default()),
+  };
+  let cfg = AccountConfig {
+    id: account_id.to_string(),
+    provider: provider_id.to_string(),
+    enabled: true,
+    tier: Default::default(),
+    tags: Vec::new(),
+    label: None,
+    base_url: None,
+    headers: Default::default(),
+    auth_type: None,
+    username: None,
+    api_key: None,
+    api_key_expires_at: None,
+    access_token: None,
+    access_token_expires_at: None,
+    id_token: None,
+    refresh_token: None,
+    provider_account_id: None,
+    extra: Default::default(),
+    refresh_url: None,
+    last_refresh: None,
+    settings: Default::default(),
+  };
+  let provider = SequencedProvider {
+    info,
+    responses: Mutex::new(responses.into()),
+    calls: AtomicUsize::new(0),
+  };
+  Arc::new(AccountHandle::new(Arc::new(cfg), Arc::new(provider)))
+}
+
 #[tokio::test]
 async fn pipeline_send_failure_preserves_partial_outcome() {
   let (bus, log) = capture_bus();
@@ -647,4 +755,183 @@ async fn pipeline_send_failure_preserves_partial_outcome() {
     _ => None,
   });
   assert_eq!(completed_success, Some(false));
+}
+
+#[tokio::test]
+async fn pipeline_retries_recoverable_send_failures_and_succeeds() {
+  let (bus, log) = capture_bus();
+
+  let handle = sequenced_handle(
+    "zai-coding-plan",
+    "acct-1",
+    vec![
+      ScriptedResponse::Http {
+        status: 503,
+        body: "retry me",
+      },
+      ScriptedResponse::Http {
+        status: 200,
+        body: r#"{"id":"resp-retry","choices":[{"message":{"role":"assistant","content":"ok"}}]}"#,
+      },
+    ],
+  );
+  let selector = Arc::new(CannedSelector { handle });
+
+  let profile = Arc::new(Profile::full(
+    "smoke-retry-success",
+    Arc::new(DefaultExtract),
+    Arc::new(PoolResolve::new(selector)),
+    Arc::new(PersonaBuildHeaders::with_opencode_default()),
+    Arc::new(DefaultConvertRequest),
+    Arc::new(DefaultSend::new(reqwest::Client::new())),
+    Arc::new(DefaultConvertResponse::new()),
+  ));
+  let runner = PipelineRunner::new_with_retry(profile, bus, RetryPolicy::new(2, Duration::from_millis(1)));
+
+  let converted = runner
+    .run(raw_chat("glm-4"))
+    .await
+    .expect("second attempt should succeed");
+  let events = drain_until_completed_attempts(&log, 2).await;
+  let error_attempts: Vec<u32> = events
+    .iter()
+    .filter_map(|e| match &e.payload {
+      EventPayload::Stage(StageEvent::Error {
+        stage: Stage::Send,
+        recoverable,
+        ..
+      }) if *recoverable => Some(e.attempt),
+      _ => None,
+    })
+    .collect();
+  assert_eq!(error_attempts, vec![0]);
+
+  let completed = events
+    .iter()
+    .filter_map(|e| match &e.payload {
+      EventPayload::Stage(StageEvent::Completed { success, attempts }) => Some((e.attempt, *success, *attempts)),
+      _ => None,
+    })
+    .collect::<Vec<_>>();
+  let started_attempts: Vec<u32> = events
+    .iter()
+    .filter_map(|e| match &e.payload {
+      EventPayload::Stage(StageEvent::Started { .. }) => Some(e.attempt),
+      _ => None,
+    })
+    .collect();
+  assert_eq!(started_attempts, vec![0, 1]);
+  assert_eq!(completed, vec![(0, false, 1), (1, true, 2)]);
+
+  match converted.body {
+    ConvertedBody::Buffered { body_json, .. } => {
+      let body_json = body_json.unwrap();
+      assert_eq!(body_json["id"], "resp-retry");
+    }
+    other => panic!("expected Buffered, got {other:?}"),
+  }
+}
+
+#[tokio::test]
+async fn pipeline_stops_after_retry_budget_exhausted() {
+  let (bus, log) = capture_bus();
+
+  let handle = sequenced_handle(
+    "zai-coding-plan",
+    "acct-1",
+    vec![
+      ScriptedResponse::Http {
+        status: 503,
+        body: "one",
+      },
+      ScriptedResponse::Http {
+        status: 503,
+        body: "two",
+      },
+      ScriptedResponse::Http {
+        status: 503,
+        body: "three",
+      },
+    ],
+  );
+  let selector = Arc::new(CannedSelector { handle });
+
+  let profile = Arc::new(Profile::full(
+    "smoke-retry-exhausted",
+    Arc::new(DefaultExtract),
+    Arc::new(PoolResolve::new(selector)),
+    Arc::new(PersonaBuildHeaders::with_opencode_default()),
+    Arc::new(DefaultConvertRequest),
+    Arc::new(DefaultSend::new(reqwest::Client::new())),
+    Arc::new(DefaultConvertResponse::new()),
+  ));
+  let runner = PipelineRunner::new_with_retry(profile, bus, RetryPolicy::new(2, Duration::from_millis(1)));
+
+  let err = runner
+    .run(raw_chat("glm-4"))
+    .await
+    .expect_err("retry budget should exhaust");
+  assert_eq!(err.stage, Stage::Send);
+  assert!(err.recoverable);
+
+  let events = drain_until_completed_attempts(&log, 3).await;
+  let completed = events
+    .iter()
+    .filter_map(|e| match &e.payload {
+      EventPayload::Stage(StageEvent::Completed { success, attempts }) => Some((e.attempt, *success, *attempts)),
+      _ => None,
+    })
+    .collect::<Vec<_>>();
+  let started_attempts: Vec<u32> = events
+    .iter()
+    .filter_map(|e| match &e.payload {
+      EventPayload::Stage(StageEvent::Started { .. }) => Some(e.attempt),
+      _ => None,
+    })
+    .collect();
+  assert_eq!(started_attempts, vec![0, 1, 2]);
+  assert_eq!(completed, vec![(0, false, 1), (1, false, 2), (2, false, 3)]);
+}
+
+#[tokio::test]
+async fn pipeline_does_not_retry_permanent_send_failures() {
+  let (bus, log) = capture_bus();
+
+  let handle = sequenced_handle(
+    "zai-coding-plan",
+    "acct-1",
+    vec![ScriptedResponse::Http {
+      status: 401,
+      body: "nope",
+    }],
+  );
+  let selector = Arc::new(CannedSelector { handle });
+
+  let profile = Arc::new(Profile::full(
+    "smoke-retry-permanent",
+    Arc::new(DefaultExtract),
+    Arc::new(PoolResolve::new(selector)),
+    Arc::new(PersonaBuildHeaders::with_opencode_default()),
+    Arc::new(DefaultConvertRequest),
+    Arc::new(DefaultSend::new(reqwest::Client::new())),
+    Arc::new(DefaultConvertResponse::new()),
+  ));
+  let runner = PipelineRunner::new_with_retry(profile, bus, RetryPolicy::new(2, Duration::from_millis(1)));
+
+  let err = runner
+    .run(raw_chat("glm-4"))
+    .await
+    .expect_err("401 should remain permanent");
+  assert_eq!(err.stage, Stage::Send);
+  assert!(!err.recoverable);
+
+  let events = drain_until_completed(&log).await;
+  let started_attempts: Vec<u32> = events
+    .iter()
+    .filter_map(|e| match &e.payload {
+      EventPayload::Stage(StageEvent::Started { .. }) => Some(e.attempt),
+      _ => None,
+    })
+    .collect();
+  assert_eq!(started_attempts, vec![0]);
 }
