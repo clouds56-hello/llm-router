@@ -29,5 +29,6 @@ tracing = { workspace = true }
 zstd = { workspace = true }
 
 [dev-dependencies]
+tokn-mock-server = { workspace = true }
 http = { workspace = true }
 tokio = { workspace = true }

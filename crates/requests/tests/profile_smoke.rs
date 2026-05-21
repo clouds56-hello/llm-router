@@ -20,11 +20,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokn_accounts::AccountHandle;
-use tokn_core::account::AccountConfig;
+use tokn_core::account::{AccountConfig, Secret};
 use tokn_core::provider::{
   AuthKind, Endpoint, ModelCache, Provider, ProviderInfo, RequestCtx, Result as ProviderResult,
 };
 use tokn_headers::{HeaderMap, HeaderValue};
+use tokn_mock_server::{MockAuthConfig, MockLlmConfig, MockLlmServer, MockRoute};
 use tokn_requests::event::{EventPayload, Stage, StageEvent};
 use tokn_requests::pipeline::stages::ConvertedBody;
 use tokn_requests::stages::{
@@ -147,11 +148,13 @@ fn capture_bus() -> (Arc<EventBus>, Arc<Mutex<Vec<Event>>>) {
   (bus, log)
 }
 
-fn raw_chat(model: &str) -> RawInbound {
+fn raw_chat_with_headers(model: &str, header_pairs: &[(&str, &str)]) -> RawInbound {
   let body = serde_json::json!({"model": model, "messages": []});
   let decoded = Bytes::from(serde_json::to_vec(&body).unwrap());
   let mut headers = HeaderMap::new();
-  headers.insert("x-behave-as", HeaderValue::from_static("codex"));
+  for (name, value) in header_pairs {
+    headers.insert(*name, HeaderValue::from_string((*value).to_string()));
+  }
   RawInbound {
     endpoint: Endpoint::ChatCompletions,
     headers,
@@ -160,6 +163,10 @@ fn raw_chat(model: &str) -> RawInbound {
     body_json: body,
     request_id: Some(SmolStr::new("req-smoke-1")),
   }
+}
+
+fn raw_chat(model: &str) -> RawInbound {
+  raw_chat_with_headers(model, &[("x-behave-as", "codex")])
 }
 
 async fn drain_until_completed(log: &Arc<Mutex<Vec<Event>>>) -> std::sync::MutexGuard<'_, Vec<Event>> {
@@ -414,6 +421,9 @@ fn responding_handle(provider_id: &str, account_id: &str, resp: reqwest::Respons
 
 struct CannedSelector {
   handle: Arc<AccountHandle>,
+  provider_id: SmolStr,
+  upstream_endpoint: Endpoint,
+  upstream_model: SmolStr,
 }
 
 #[async_trait]
@@ -425,12 +435,40 @@ impl AccountSelector for CannedSelector {
   ) -> Result<SelectorOutcome, PipelineError> {
     Ok(SelectorOutcome::Selected {
       account_id: SmolStr::new(self.handle.config.load().id.clone()),
-      provider_id: SmolStr::new("zai-coding-plan"),
-      upstream_endpoint: Endpoint::ChatCompletions,
-      upstream_model: SmolStr::new("glm-4"),
+      provider_id: self.provider_id.clone(),
+      upstream_endpoint: self.upstream_endpoint,
+      upstream_model: self.upstream_model.clone(),
       account_handle: self.handle.clone(),
     })
   }
+}
+
+fn openai_handle(account_id: &str, base_url: &str, api_key: &str) -> Arc<AccountHandle> {
+  let config = Arc::new(AccountConfig {
+    id: account_id.to_string(),
+    provider: "openai".to_string(),
+    enabled: true,
+    tier: Default::default(),
+    tags: Vec::new(),
+    label: None,
+    base_url: Some(base_url.to_string()),
+    headers: Default::default(),
+    auth_type: None,
+    username: None,
+    api_key: Some(Secret::new(api_key.to_string())),
+    api_key_expires_at: None,
+    access_token: None,
+    access_token_expires_at: None,
+    id_token: None,
+    refresh_token: None,
+    provider_account_id: None,
+    extra: Default::default(),
+    refresh_url: None,
+    last_refresh: None,
+    settings: Default::default(),
+  });
+  let provider = tokn_accounts::registry::build_for_account(config.clone()).expect("openai provider should build");
+  Arc::new(AccountHandle::new(config, provider))
 }
 
 fn ok_response(status: u16, body: &'static str) -> reqwest::Response {
@@ -452,7 +490,12 @@ async fn full_pipeline_buffered_happy_path() {
     r#"{"id":"resp-1","choices":[{"message":{"role":"assistant","content":"hi"}}]}"#,
   );
   let handle = responding_handle("zai-coding-plan", "acct-1", resp);
-  let selector = Arc::new(CannedSelector { handle });
+  let selector = Arc::new(CannedSelector {
+    handle,
+    provider_id: SmolStr::new("zai-coding-plan"),
+    upstream_endpoint: Endpoint::ChatCompletions,
+    upstream_model: SmolStr::new("glm-4"),
+  });
 
   let profile = Arc::new(Profile::full(
     "smoke-full",
@@ -516,6 +559,78 @@ async fn full_pipeline_buffered_happy_path() {
     }
     other => panic!("expected Buffered, got {other:?}"),
   }
+}
+
+#[tokio::test]
+async fn full_pipeline_openai_mock_server_uses_opencode_headers() {
+  let (bus, _log) = capture_bus();
+  let server = MockLlmServer::start(
+    MockLlmConfig {
+      routes: vec![MockRoute::chat_completions()],
+      ..Default::default()
+    }
+    .with_auth(MockAuthConfig::bearer(["sk-test"])),
+  )
+  .await;
+  let handle = openai_handle("acct-openai", server.base_url(), "sk-test");
+  let selector = Arc::new(CannedSelector {
+    handle,
+    provider_id: SmolStr::new("openai"),
+    upstream_endpoint: Endpoint::ChatCompletions,
+    upstream_model: SmolStr::new("gpt-4o-mini"),
+  });
+
+  let profile = Arc::new(Profile::full(
+    "smoke-openai-opencode",
+    Arc::new(DefaultExtract),
+    Arc::new(PoolResolve::new(selector)),
+    Arc::new(PersonaBuildHeaders::with_opencode_default()),
+    Arc::new(DefaultConvertRequest),
+    Arc::new(DefaultSend::new(reqwest::Client::new())),
+    Arc::new(DefaultConvertResponse::new()),
+  ));
+  let runner = PipelineRunner::new(profile, bus);
+
+  let converted = runner
+    .run(raw_chat_with_headers(
+      "gpt-4o-mini",
+      &[
+        ("x-behave-as", "opencode"),
+        ("x-session-id", "sess-openai-1"),
+        ("x-opencode-project", "/tmp/demo"),
+      ],
+    ))
+    .await
+    .expect("openai mock-server pipeline must succeed");
+
+  assert_eq!(converted.status, 200);
+  match converted.body {
+    ConvertedBody::Buffered { body_json, .. } => {
+      let body_json = body_json.unwrap();
+      assert_eq!(body_json["choices"][0]["message"]["content"], "mock response");
+    }
+    other => panic!("expected Buffered, got {other:?}"),
+  }
+
+  let captured = server.last_request().expect("captured openai request");
+  assert_eq!(captured.method, reqwest::Method::POST);
+  assert_eq!(captured.path, "/chat/completions");
+  assert_eq!(captured.header("authorization"), Some("Bearer sk-test"));
+  assert_eq!(
+    captured.header("user-agent"),
+    Some("opencode/1.14.28 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.13")
+  );
+  assert_eq!(captured.header("x-session-affinity"), Some("sess-openai-1"));
+  assert_eq!(
+    captured
+      .header("content-type")
+      .map(|value| value.split(';').next().unwrap_or(value)),
+    Some("application/json")
+  );
+
+  let payload: Value = serde_json::from_slice(&captured.body).unwrap();
+  assert_eq!(payload["model"], "gpt-4o-mini");
+  assert_eq!(payload["messages"], serde_json::json!([]));
 }
 
 // ---------- PR3c: failure preserves partial outcome ----------
@@ -675,7 +790,12 @@ async fn pipeline_send_failure_preserves_partial_outcome() {
   let (bus, log) = capture_bus();
 
   let handle = failing_handle("zai-coding-plan", "acct-1");
-  let selector = Arc::new(CannedSelector { handle });
+  let selector = Arc::new(CannedSelector {
+    handle,
+    provider_id: SmolStr::new("zai-coding-plan"),
+    upstream_endpoint: Endpoint::ChatCompletions,
+    upstream_model: SmolStr::new("glm-4"),
+  });
 
   let profile = Arc::new(Profile::full(
     "smoke-fail",
@@ -775,7 +895,12 @@ async fn pipeline_retries_recoverable_send_failures_and_succeeds() {
       },
     ],
   );
-  let selector = Arc::new(CannedSelector { handle });
+  let selector = Arc::new(CannedSelector {
+    handle,
+    provider_id: SmolStr::new("zai-coding-plan"),
+    upstream_endpoint: Endpoint::ChatCompletions,
+    upstream_model: SmolStr::new("glm-4"),
+  });
 
   let profile = Arc::new(Profile::full(
     "smoke-retry-success",
@@ -854,7 +979,12 @@ async fn pipeline_stops_after_retry_budget_exhausted() {
       },
     ],
   );
-  let selector = Arc::new(CannedSelector { handle });
+  let selector = Arc::new(CannedSelector {
+    handle,
+    provider_id: SmolStr::new("zai-coding-plan"),
+    upstream_endpoint: Endpoint::ChatCompletions,
+    upstream_model: SmolStr::new("glm-4"),
+  });
 
   let profile = Arc::new(Profile::full(
     "smoke-retry-exhausted",
@@ -905,7 +1035,12 @@ async fn pipeline_does_not_retry_permanent_send_failures() {
       body: "nope",
     }],
   );
-  let selector = Arc::new(CannedSelector { handle });
+  let selector = Arc::new(CannedSelector {
+    handle,
+    provider_id: SmolStr::new("zai-coding-plan"),
+    upstream_endpoint: Endpoint::ChatCompletions,
+    upstream_model: SmolStr::new("glm-4"),
+  });
 
   let profile = Arc::new(Profile::full(
     "smoke-retry-permanent",
