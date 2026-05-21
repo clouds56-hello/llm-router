@@ -180,7 +180,7 @@ fn settings_behave_as(settings: &toml::Table) -> Option<String> {
 fn default_persona(provider_id: &str) -> Option<&'static str> {
   match provider_id {
     crate::provider::ID_CODEX => Some("codex"),
-    crate::provider::ID_DEEPSEEK | crate::provider::ID_OPENAI => Some("opencode"),
+    crate::provider::ID_DEEPSEEK | crate::provider::ID_LLAMA_CPP | crate::provider::ID_OPENAI => Some("opencode"),
     crate::provider::ID_GITHUB_COPILOT => Some("copilot"),
     crate::provider::ID_ZAI
     | crate::provider::ID_ZAI_CODING_PLAN
