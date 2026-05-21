@@ -1,0 +1,121 @@
+{
+  "requests": {
+    "expected_version": 6,
+    "seed_sql": [
+      "INSERT INTO requests (id, ts, session_id, endpoint, account_id, provider_id, model, initiator, status, stream, latency_ms, prompt_tok, completion_tok, inbound_req_method, inbound_req_url, inbound_req_headers, inbound_req_body, outbound_req_method, outbound_req_url, outbound_req_headers, outbound_req_body, outbound_resp_status, outbound_resp_headers, outbound_resp_body, inbound_resp_status, inbound_resp_headers, inbound_resp_body) VALUES (1, 100, 'sess-1', 'responses', 'acct-1', 'prov-1', 'model-1', 'user', 200, 1, 25, 11, 13, 'POST', 'http://in.local', '{\"x-test\":\"1\"}', '{\"in\":1}', 'POST', 'http://up.local', '{\"authorization\":\"<redacted>\"}', '{\"out\":2}', 201, '{\"x-upstream\":\"yes\"}', '{\"up\":true}', 200, '{\"content-type\":\"application/json\"}', '{\"ok\":true}')"
+    ],
+    "expected_rows": {
+      "requests": [
+        {
+          "id": 1,
+          "ts": 100,
+          "session_id": "sess-1",
+          "request_id": null,
+          "request_error": null,
+          "endpoint": "responses",
+          "account_id": "acct-1",
+          "provider_id": "prov-1",
+          "model": "model-1",
+          "initiator": "user",
+          "status": 200,
+          "stream": 1,
+          "latency_ms": 25,
+          "latency_header_ms": null,
+          "input_tok": 11,
+          "output_tok": 13,
+          "cached_tok": null,
+          "reasoning_tok": null,
+          "peer_addr": null,
+          "method": null,
+          "user": null,
+          "local_addr": null,
+          "mode": null,
+          "behave_as": null,
+          "inbound_req_headers": {"x-test": "1"},
+          "inbound_req_body": {"in": 1},
+          "outbound_req_headers": {"authorization": "<redacted>"},
+          "outbound_req_body": {"out": 2},
+          "outbound_resp_status": 201,
+          "outbound_resp_headers": {"x-upstream": "yes"},
+          "outbound_resp_body": {"up": true},
+          "inbound_resp_status": 200,
+          "inbound_resp_headers": {"content-type": "application/json"},
+          "inbound_resp_body": {"ok": true}
+        }
+      ],
+      "metrics": []
+    }
+  },
+  "sessions": {
+    "expected_version": 1,
+    "seed_sql": [
+      "INSERT INTO sessions (id, first_seen_ts, last_seen_ts, source, account_id, provider_id, model, message_count, part_count) VALUES ('sess-1', 100, 120, 'header', 'acct-1', 'prov-1', 'model-1', 1, 1)",
+      "INSERT INTO part_blobs (hash, part_type, content) VALUES ('hash-1', 'text', 'hello')",
+      "INSERT INTO session_parts (session_id, part_seq, message_seq, part_index, ts, endpoint, role, status, part_hash) VALUES ('sess-1', 0, 0, 0, 100, 'responses', 'user', 200, 'hash-1')"
+    ],
+    "expected_rows": {
+      "sessions": [
+        {
+          "id": "sess-1",
+          "first_seen_ts": 100,
+          "last_seen_ts": 120,
+          "source": "header",
+          "account_id": "acct-1",
+          "provider_id": "prov-1",
+          "model": "model-1",
+          "message_count": 1,
+          "part_count": 1
+        }
+      ],
+      "part_blobs": [
+        {
+          "hash": "hash-1",
+          "part_type": "text",
+          "content": "hello"
+        }
+      ],
+      "session_parts": [
+        {
+          "session_id": "sess-1",
+          "part_seq": 0,
+          "message_seq": 0,
+          "part_index": 0,
+          "ts": 100,
+          "endpoint": "responses",
+          "role": "user",
+          "status": 200,
+          "part_hash": "hash-1"
+        }
+      ]
+    }
+  },
+  "usage": {
+    "expected_version": 4,
+    "seed_sql": [
+      "INSERT INTO requests (id, ts, account_id, provider_id, model, initiator, prompt_tok, completion_tok, latency_ms, status, stream) VALUES (1, 200, 'acct-1', 'prov-1', 'model-1', 'user', 5, 7, 42, 200, 1)"
+    ],
+    "expected_rows": {
+      "requests": [
+        {
+          "id": 1,
+          "ts": 200,
+          "session_id": null,
+          "request_id": null,
+          "project_id": null,
+          "endpoint": null,
+          "account_id": "acct-1",
+          "provider_id": "prov-1",
+          "model": "model-1",
+          "initiator": "user",
+          "input_tok": 5,
+          "output_tok": 7,
+          "cached_tok": null,
+          "reasoning_tok": null,
+          "latency_ms": 42,
+          "status": 200,
+          "stream": 1
+        }
+      ]
+    }
+  }
+}
