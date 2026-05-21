@@ -19,6 +19,7 @@ members = [
   "crates/persistence",
   "crates/provider-copilot",
   "crates/provider-deepseek",
+  "crates/provider-llama-cpp",
   "crates/provider-openai",
   "crates/provider-zai",
 ]
@@ -52,6 +53,7 @@ tokn-persistence = { version = "0.2.0-rc.1", path = "crates/persistence" }
 tokn-accounts = { version = "0.2.0-rc.1", path = "crates/accounts" }
 tokn-provider-copilot = { version = "0.2.0-rc.1", path = "crates/provider-copilot" }
 tokn-provider-deepseek = { version = "0.2.0-rc.1", path = "crates/provider-deepseek" }
+tokn-provider-llama-cpp = { version = "0.2.0-rc.1", path = "crates/provider-llama-cpp" }
 tokn-provider-openai = { version = "0.2.0-rc.1", path = "crates/provider-openai" }
 tokn-provider-zai = { version = "0.2.0-rc.1", path = "crates/provider-zai" }
 

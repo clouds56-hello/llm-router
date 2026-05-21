@@ -243,9 +243,14 @@ async fn proxy_via_pipeline_inner(
       // intercepted request to a concrete `account_id` + `provider_id`.
       // Pass the full URL so descriptors with path-based `matches_url`
       // discriminate correctly. Registry strips the port internally.
+      let identity_url = if is_default_intercept_host(&host_with_port) {
+        full_url.as_str()
+      } else {
+        ""
+      };
       let identity = state
         .identity
-        .resolve(&parts.headers, &full_url, &state.provider_registry);
+        .resolve(&parts.headers, identity_url, &state.provider_registry);
       // Fallback to the bare intercepted host (not host:port and not the
       // full URL) so the synthetic provider_id stays stable across
       // requests to different paths/ports on the same upstream.
@@ -308,6 +313,12 @@ async fn proxy_via_pipeline_inner(
     Ok(converted) => crate::api::response::converted_to_axum(converted),
     Err(err) => proxy_pipeline_error_to_api_error(&err, &host_with_port).into_response(),
   }
+}
+
+fn is_default_intercept_host(host_with_port: &str) -> bool {
+  let (host, _) = split_host_port(host_with_port);
+  let host = host.trim_matches(['[', ']']);
+  super::INTERCEPT_HOSTS.contains(&host)
 }
 
 fn proxy_pipeline_error_to_api_error(err: &tokn_requests::PipelineError, host_with_port: &str) -> ApiError {

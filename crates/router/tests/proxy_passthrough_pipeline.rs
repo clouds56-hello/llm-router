@@ -244,7 +244,7 @@ async fn proxy_passthrough_pipeline_forwards_request_and_preserves_client_auth()
   }
 
   // StageEvent::Resolve: provider_id falls back to bare intercepted
-  // host (no accounts configured → no fingerprint match). account_id
+  // host (no accounts configured -> no fingerprint match). account_id
   // is the bearer-token fingerprint synthesised by
   // `AccountIdentityResolver` for the long `Authorization` header in
   // this test (≥32 chars triggers the `account_fp_<suffix>` fallback).
@@ -570,7 +570,7 @@ async fn proxy_switch_rejects_unrecognized_provider_url() {
 
   let req = Request::builder()
     .method(Method::POST)
-    .uri("/v1/chat/completions")
+    .uri("/not-a-provider")
     .header("content-type", "application/json")
     .body(())
     .unwrap();

@@ -111,6 +111,7 @@ fn builtin_descriptors() -> &'static [&'static ProviderDescriptor] {
   static LIST: &[&ProviderDescriptor] = &[
     &tokn_provider_copilot::DESCRIPTOR,
     &tokn_provider_deepseek::DESCRIPTOR,
+    &tokn_provider_llama_cpp::DESCRIPTOR,
     &tokn_provider_openai::DESCRIPTOR_OPENAI,
     &tokn_provider_openai::DESCRIPTOR_CODEX,
     &tokn_provider_zai::DESCRIPTOR_ZAI,
@@ -183,8 +184,8 @@ mod tests {
   use super::*;
   use tokn_auth::descriptor::RewriteTarget;
   use tokn_core::provider::{
-    Endpoint, ID_CODEX, ID_DEEPSEEK, ID_GITHUB_COPILOT, ID_OPENAI, ID_ZAI, ID_ZAI_CODING_PLAN, ID_ZHIPUAI,
-    ID_ZHIPUAI_CODING_PLAN,
+    Endpoint, ID_CODEX, ID_DEEPSEEK, ID_GITHUB_COPILOT, ID_LLAMA_CPP, ID_OPENAI, ID_ZAI, ID_ZAI_CODING_PLAN,
+    ID_ZHIPUAI, ID_ZHIPUAI_CODING_PLAN,
   };
 
   #[test]
@@ -198,6 +199,8 @@ mod tests {
     assert_eq!(registry.provider_id_for_url("api.z.ai"), Some(ID_ZAI));
     assert_eq!(registry.provider_id_for_url("open.bigmodel.cn"), Some(ID_ZHIPUAI));
     assert_eq!(registry.provider_id_for_url("api.deepseek.com"), Some(ID_DEEPSEEK));
+    assert_eq!(registry.provider_id_for_url("localhost"), Some(ID_LLAMA_CPP));
+    assert_eq!(registry.provider_id_for_url("127.0.0.1"), Some(ID_LLAMA_CPP));
     assert_eq!(registry.provider_id_for_url("api.openai.com"), Some(ID_OPENAI));
     assert_eq!(
       registry.provider_id_for_url("chatgpt.com/backend-api/codex/responses"),
