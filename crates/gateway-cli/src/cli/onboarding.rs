@@ -12,12 +12,12 @@ use crate::auth_registry::{known_providers, provider_auth_for};
 use crate::config::{Account, AuthType};
 use crate::util::secret::Secret;
 use anyhow::{anyhow, Context, Result};
-use llm_auth::{CredentialResult, ProviderAuth, RefreshOutcome};
+use tokn_auth::{CredentialResult, ProviderAuth, RefreshOutcome};
 
 // Re-export so existing call sites continue to use
 // `crate::cli::onboarding::CredentialSource`. New code should import it
-// directly from `llm_auth`.
-pub use llm_auth::CredentialSource;
+// directly from `tokn_auth`.
+pub use tokn_auth::CredentialSource;
 
 pub fn validate_provider(provider: &str) -> Result<()> {
   if provider_auth_for(provider).is_some() {
@@ -93,7 +93,7 @@ async fn oauth_account_from_token(
     id: id_override.clone().unwrap_or_else(|| "imported".into()),
     provider: auth.id().into(),
     enabled: true,
-    tier: llm_core::account::AccountTier::Active,
+    tier: tokn_core::account::AccountTier::Active,
     tags: Vec::new(),
     label: None,
     base_url: auth.default_base_url().map(str::to_string),
@@ -183,7 +183,7 @@ fn static_key_account_unverified(auth: &dyn ProviderAuth, id_override: Option<St
     id,
     provider: auth.id().into(),
     enabled: true,
-    tier: llm_core::account::AccountTier::Active,
+    tier: tokn_core::account::AccountTier::Active,
     tags: Vec::new(),
     label: None,
     base_url: auth.default_base_url().map(str::to_string),
@@ -257,7 +257,7 @@ async fn device_flow_login(
     id,
     provider: auth.id().into(),
     enabled: true,
-    tier: llm_core::account::AccountTier::Active,
+    tier: tokn_core::account::AccountTier::Active,
     tags: Vec::new(),
     label: None,
     base_url: auth.default_base_url().map(str::to_string),
@@ -381,8 +381,8 @@ pub(crate) fn pick_source_interactive(provider: &str) -> Result<CredentialSource
     "string" => {
       let flavor = pick_flavor_interactive(auth)?;
       let label = match flavor {
-        llm_auth::CredentialFlavor::ApiKey => "Paste API key:",
-        llm_auth::CredentialFlavor::RefreshToken => "Paste refresh token:",
+        tokn_auth::CredentialFlavor::ApiKey => "Paste API key:",
+        tokn_auth::CredentialFlavor::RefreshToken => "Paste refresh token:",
       };
       let value = inquire::Password::new(label)
         .without_confirmation()
@@ -418,8 +418,8 @@ pub(crate) fn pick_source_interactive(provider: &str) -> Result<CredentialSource
 /// Ask the user whether the credential is an API key or a refresh
 /// token. If the provider only accepts one flavor, return it without
 /// prompting.
-fn pick_flavor_interactive(auth: &dyn llm_auth::ProviderAuth) -> Result<llm_auth::CredentialFlavor> {
-  use llm_auth::CredentialFlavor::*;
+fn pick_flavor_interactive(auth: &dyn tokn_auth::ProviderAuth) -> Result<tokn_auth::CredentialFlavor> {
+  use tokn_auth::CredentialFlavor::*;
   let api = auth.supports_auth_flavor(ApiKey);
   let refresh = auth.supports_auth_flavor(RefreshToken);
   match (api, refresh) {
@@ -454,8 +454,8 @@ pub(crate) fn pick_account_id(provider: &str, source: &CredentialSource) -> Resu
     .unwrap_or("imported");
   let supports_auto_api_key = provider_auth_for(provider)
     .map(|a| {
-      a.supports_auth_flavor(llm_auth::CredentialFlavor::ApiKey)
-        && matches!(source.flavor(), Some(llm_auth::CredentialFlavor::ApiKey) | None)
+      a.supports_auth_flavor(tokn_auth::CredentialFlavor::ApiKey)
+        && matches!(source.flavor(), Some(tokn_auth::CredentialFlavor::ApiKey) | None)
     })
     .unwrap_or(false);
   let supports_auto_id = matches!(source, CredentialSource::Login) || supports_auto_api_key;

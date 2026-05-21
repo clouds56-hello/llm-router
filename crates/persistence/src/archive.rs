@@ -554,7 +554,7 @@ mod tests {
   }
 
   fn tempdir() -> PathBuf {
-    let p = std::env::temp_dir().join(format!("llm-router-archive-{}", uuid::Uuid::new_v4()));
+    let p = std::env::temp_dir().join(format!("tokn-router-archive-{}", uuid::Uuid::new_v4()));
     fs::create_dir_all(&p).unwrap();
     p
   }

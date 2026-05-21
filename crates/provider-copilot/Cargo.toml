@@ -1,5 +1,5 @@
 [package]
-name = "llm-provider-copilot"
+name = "tokn-provider-copilot"
 version.workspace = true
 edition.workspace = true
 description = "GitHub Copilot provider integration for tokn"
@@ -9,10 +9,10 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
-llm-core = { workspace = true }
-llm-auth = { workspace = true }
-llm-catalogue = { workspace = true }
-llm-headers = { workspace = true }
+tokn-core = { workspace = true }
+tokn-auth = { workspace = true }
+tokn-catalogue = { workspace = true }
+tokn-headers = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
 directories = { workspace = true }

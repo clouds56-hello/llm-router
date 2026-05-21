@@ -11,9 +11,9 @@
 use crate::db::archive::{ArchiveEvent, ArchiveEventHandler};
 use console::style;
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
-use llm_core::db::Usage;
-use llm_core::event::{Event, EventHandler};
-use llm_core::request_event::{RecordEvent, RequestEvent, RequestEventPayload, StageEvent};
+use tokn_core::db::Usage;
+use tokn_core::event::{Event, EventHandler};
+use tokn_core::request_event::{RecordEvent, RequestEvent, RequestEventPayload, StageEvent};
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Write};
@@ -836,15 +836,15 @@ fn progress_log_path(log_dir: &Path) -> PathBuf {
   let date = OffsetDateTime::now_utc()
     .format(format_description!("[year]-[month]-[day]"))
     .unwrap_or_else(|_| "unknown-date".to_string());
-  log_dir.join(format!("llm-router-progress.log.{date}"))
+  log_dir.join(format!("tokn-router-progress.log.{date}"))
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
   use bytes::Bytes;
-  use llm_core::db::UsageDetails;
-  use llm_core::request_event::{RequestEventPayload, StageEvent};
+  use tokn_core::db::UsageDetails;
+  use tokn_core::request_event::{RequestEventPayload, StageEvent};
 
   fn req(payload: RequestEventPayload) -> RequestEvent {
     RequestEvent {
@@ -859,12 +859,12 @@ mod tests {
   fn tty_handler_tracks_sent_bytes_and_usage_from_records() {
     let mut handler = ProgressEventHandler::new();
     handler.handle_request(&req(RequestEventPayload::Stage(StageEvent::Started {
-      endpoint: llm_core::request_event::EndpointLabel::custom("responses"),
+      endpoint: tokn_core::request_event::EndpointLabel::custom("responses"),
     })));
     handler.handle_request(&req(RequestEventPayload::Record(RecordEvent::UpstreamReq {
       method: "POST".into(),
       url: "https://example.test".into(),
-      headers: llm_headers::HeaderMap::new(),
+      headers: tokn_headers::HeaderMap::new(),
       body: Bytes::from_static(b"123456"),
     })));
     handler.handle_request(&req(RequestEventPayload::Record(RecordEvent::Usage(Usage {
@@ -888,7 +888,7 @@ mod tests {
   fn tty_handler_waits_for_usage_then_finalizes() {
     let mut handler = ProgressEventHandler::new();
     handler.handle_request(&req(RequestEventPayload::Stage(StageEvent::Started {
-      endpoint: llm_core::request_event::EndpointLabel::custom("responses"),
+      endpoint: tokn_core::request_event::EndpointLabel::custom("responses"),
     })));
     handler.handle_request(&req(RequestEventPayload::Stage(StageEvent::Completed {
       success: true,
@@ -909,15 +909,15 @@ mod tests {
 
   #[test]
   fn log_handler_tracks_sent_bytes_and_usage_from_records() {
-    let dir = std::env::temp_dir().join(format!("llm-router-progress-test-{}", uuid::Uuid::new_v4()));
+    let dir = std::env::temp_dir().join(format!("tokn-router-progress-test-{}", uuid::Uuid::new_v4()));
     let mut handler = ProgressLogEventHandler::new(&dir).unwrap();
     handler.handle_request(&req(RequestEventPayload::Stage(StageEvent::Started {
-      endpoint: llm_core::request_event::EndpointLabel::custom("responses"),
+      endpoint: tokn_core::request_event::EndpointLabel::custom("responses"),
     })));
     handler.handle_request(&req(RequestEventPayload::Record(RecordEvent::UpstreamReq {
       method: "POST".into(),
       url: "https://example.test".into(),
-      headers: llm_headers::HeaderMap::new(),
+      headers: tokn_headers::HeaderMap::new(),
       body: Bytes::from_static(b"123456789"),
     })));
     handler.handle_request(&req(RequestEventPayload::Record(RecordEvent::Usage(Usage {

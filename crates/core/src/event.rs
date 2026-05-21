@@ -21,7 +21,7 @@ pub enum Event {
   Account(AccountEvent),
   /// Session lifecycle events.
   Session(SessionEvent),
-  /// Requests pipeline stage events (relocated to `llm_core::request_event`).
+  /// Requests pipeline stage events (relocated to `tokn_core::request_event`).
   /// Embedded here so subscribers can observe requests stages on the same
   /// in-process bus that already carries the lifecycle events.
   Requests(RequestEvent),

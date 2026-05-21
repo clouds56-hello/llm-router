@@ -1,5 +1,5 @@
 [package]
-name = "llm-auth"
+name = "tokn-auth"
 version.workspace = true
 edition.workspace = true
 description = "Authentication provider interfaces and credential storage for tokn providers"
@@ -9,8 +9,8 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
-llm-core = { workspace = true }
-llm-config = { workspace = true }
+tokn-core = { workspace = true }
+tokn-config = { workspace = true }
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }

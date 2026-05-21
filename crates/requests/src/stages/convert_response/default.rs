@@ -4,7 +4,7 @@
 //!
 //! 1. [`convert_buffered`](DefaultConvertResponse::convert_buffered):
 //!    receives the already-drained body bytes, parses JSON, and optionally
-//!    translates via [`llm_convert::convert_response`] when upstream/inbound
+//!    translates via [`tokn_convert::convert_response`] when upstream/inbound
 //!    endpoints differ.
 //!
 //! 2. [`convert_stream`](DefaultConvertResponse::convert_stream):
@@ -20,11 +20,11 @@ use crate::pipeline::stages::{ConvertResponseStage, ConvertedBody, ConvertedResp
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::stream::BoxStream;
-use llm_convert::sse::{observer_channel, EndpointTranslator, ObserverMsg, SsePipeline};
-use llm_convert::usage::{parse_usage_any_value, usage_has_any};
-use llm_core::provider::Endpoint;
-use llm_core::request_event::RecordEvent;
-use llm_headers::HeaderMap;
+use tokn_convert::sse::{observer_channel, EndpointTranslator, ObserverMsg, SsePipeline};
+use tokn_convert::usage::{parse_usage_any_value, usage_has_any};
+use tokn_core::provider::Endpoint;
+use tokn_core::request_event::RecordEvent;
+use tokn_headers::HeaderMap;
 use serde_json::Value;
 use std::sync::Arc;
 use tracing::{debug, instrument};
@@ -90,7 +90,7 @@ impl ConvertResponseStage for DefaultConvertResponse {
       (upstream_json, body)
     } else {
       let translated =
-        llm_convert::convert_response(upstream_endpoint, inbound_endpoint, &upstream_json).map_err(|source| {
+        tokn_convert::convert_response(upstream_endpoint, inbound_endpoint, &upstream_json).map_err(|source| {
           PipelineError::permanent(
             crate::event::Stage::ConvertResponse,
             RequestsError::ResponseConversion { source },
@@ -153,12 +153,12 @@ impl ConvertResponseStage for DefaultConvertResponse {
             if !usage_has_any(&parsed) {
               continue;
             }
-            tap_events.emit(llm_core::event::Event::Requests(
-              llm_core::request_event::RequestEvent {
+            tap_events.emit(tokn_core::event::Event::Requests(
+              tokn_core::request_event::RequestEvent {
                 request_id: tap_request_id.clone(),
                 attempt: tap_attempt,
-                ts: llm_core::util::now_unix_ms(),
-                payload: llm_core::request_event::RequestEventPayload::Record(RecordEvent::Usage(parsed)),
+                ts: tokn_core::util::now_unix_ms(),
+                payload: tokn_core::request_event::RequestEventPayload::Record(RecordEvent::Usage(parsed)),
               },
             ));
           }
@@ -183,9 +183,9 @@ mod tests {
   use crate::event::{EventBus, EventPayload};
   use crate::pipeline::stages::SentResponse;
   use futures_util::StreamExt;
-  use llm_core::provider::Endpoint;
-  use llm_core::request_event::RecordEvent;
-  use llm_headers::HeaderMap;
+  use tokn_core::provider::Endpoint;
+  use tokn_core::request_event::RecordEvent;
+  use tokn_headers::HeaderMap;
   use std::sync::Arc;
 
   fn ctx(endpoint: Endpoint) -> PipelineCtx {
@@ -313,7 +313,7 @@ mod tests {
     let mut saw = false;
     for _ in 0..4 {
       if let Ok(ev) = rx.recv().await {
-        if let llm_core::event::Event::Requests(req) = &*ev {
+        if let tokn_core::event::Event::Requests(req) = &*ev {
           if let EventPayload::Record(RecordEvent::UpstreamBody { body, error }) = &req.payload {
             assert_eq!(body.as_ref(), br#"{"ok":true}"#);
             assert!(error.is_none());
@@ -351,7 +351,7 @@ mod tests {
     let mut saw_converted = false;
     for _ in 0..4 {
       if let Ok(ev) = rx.recv().await {
-        if let llm_core::event::Event::Requests(req) = &*ev {
+        if let tokn_core::event::Event::Requests(req) = &*ev {
           match &req.payload {
             EventPayload::Record(RecordEvent::UpstreamBody { body, error }) => {
               assert_eq!(body.as_ref(), b"data: {}\n\ndata: [DONE]\n\n");

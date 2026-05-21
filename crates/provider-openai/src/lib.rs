@@ -6,18 +6,18 @@ mod common;
 pub mod jwt;
 pub mod openai;
 
-pub use llm_catalogue as catalogue;
-pub use llm_core::provider::{
+pub use tokn_catalogue as catalogue;
+pub use tokn_core::provider::{
   error, AuthKind, Endpoint, EndpointRule, HeaderPatchCtx, Provider, ProviderInfo, RequestCtx, Result, TemplateVars,
   ID_CODEX, ID_OPENAI,
 };
-pub use llm_core::{account as config, provider, util};
+pub use tokn_core::{account as config, provider, util};
 
 pub use codex::CodexProvider;
 pub use openai::OpenAiProvider;
 
-use llm_auth::descriptor::{EndpointSpec, ProviderDescriptor};
-use llm_auth::provider::CredentialFlavor;
+use tokn_auth::descriptor::{EndpointSpec, ProviderDescriptor};
+use tokn_auth::provider::CredentialFlavor;
 
 pub const CODEX_DEVICE_USERCODE_URL: &str = "https://auth.openai.com/api/accounts/deviceauth/usercode";
 pub const CODEX_DEVICE_TOKEN_URL: &str = "https://auth.openai.com/api/accounts/deviceauth/token";

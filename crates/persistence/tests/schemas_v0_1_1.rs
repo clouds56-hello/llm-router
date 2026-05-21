@@ -1,4 +1,4 @@
-use llm_persistence::migrate::{self, Bootstrap, Migration};
+use tokn_persistence::migrate::{self, Bootstrap, Migration};
 use rusqlite::{params_from_iter, types::Value as SqlValue, Connection};
 use serde_json::{Map, Value};
 use std::path::{Path, PathBuf};
@@ -467,7 +467,7 @@ fn json_to_sql(value: &Value) -> SqlValue {
 }
 
 fn tempdir(name: &str) -> PathBuf {
-  let path = std::env::temp_dir().join(format!("llm-router-schema-test-{name}-{}", uuid::Uuid::new_v4()));
+  let path = std::env::temp_dir().join(format!("tokn-router-schema-test-{name}-{}", uuid::Uuid::new_v4()));
   std::fs::create_dir_all(&path).unwrap();
   path
 }

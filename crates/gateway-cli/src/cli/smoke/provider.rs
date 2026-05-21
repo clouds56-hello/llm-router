@@ -3,8 +3,8 @@ use super::OutputFormat;
 use crate::config::Config;
 use anyhow::{anyhow, Result};
 use clap::Args;
-use llm_core::provider::{match_endpoint_rule, Endpoint, ModelInfo};
-use llm_router::accounts::registry::Registry;
+use tokn_core::provider::{match_endpoint_rule, Endpoint, ModelInfo};
+use tokn_router::accounts::registry::Registry;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
@@ -30,7 +30,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: ProviderArgs) -> Result<()> {
     anyhow!("unknown provider '{}'; known: {}", args.provider_id, known)
   })?;
 
-  let static_models = llm_catalogue::default_models_for(descriptor.id);
+  let static_models = tokn_catalogue::default_models_for(descriptor.id);
   let live_models: Option<Vec<String>> = if args.live {
     Some(fetch_live_models(cfg_path.as_deref(), descriptor.id).await?)
   } else {
@@ -45,7 +45,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: ProviderArgs) -> Result<()> {
 }
 
 pub(super) fn endpoints_for_model(
-  descriptor: &'static llm_auth::descriptor::ProviderDescriptor,
+  descriptor: &'static tokn_auth::descriptor::ProviderDescriptor,
   model_id: &str,
 ) -> Vec<Endpoint> {
   let all: Vec<Endpoint> = descriptor.endpoints.iter().map(|e| e.endpoint).collect();
@@ -70,7 +70,7 @@ pub(super) fn endpoints_for_model(
 }
 
 fn print_provider_text(
-  descriptor: &'static llm_auth::descriptor::ProviderDescriptor,
+  descriptor: &'static tokn_auth::descriptor::ProviderDescriptor,
   static_models: &[ModelInfo],
   live_models: Option<&[String]>,
 ) {
@@ -123,7 +123,7 @@ fn print_provider_text(
 }
 
 fn print_provider_json(
-  descriptor: &'static llm_auth::descriptor::ProviderDescriptor,
+  descriptor: &'static tokn_auth::descriptor::ProviderDescriptor,
   static_models: &[ModelInfo],
   live_models: Option<&[String]>,
 ) -> Result<()> {
@@ -177,7 +177,7 @@ async fn fetch_live_models(cfg_path: Option<&std::path::Path>, provider_id: &str
   filter_accounts(&mut accounts, Some(provider_id), None)?;
 
   let (events, receiver, handlers, archive_runtime) = crate::server_runtime::build_event_bus(&cfg)?;
-  let _event_thread = llm_core::event::spawn_event_loop(receiver, handlers);
+  let _event_thread = tokn_core::event::spawn_event_loop(receiver, handlers);
   let state = crate::server_runtime::build_state(&cfg, &accounts, events.clone())?;
 
   let mut ids: Vec<String> = Vec::new();

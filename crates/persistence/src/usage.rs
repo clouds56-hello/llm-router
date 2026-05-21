@@ -174,7 +174,7 @@ mod tests {
 
   #[test]
   fn fresh_usage_db_records_correlation_ids() {
-    let dir = std::env::temp_dir().join(format!("llm-router-usage-{}", uuid::Uuid::new_v4()));
+    let dir = std::env::temp_dir().join(format!("tokn-router-usage-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("usage.db");
     let mut db = UsageDb::open(&path).unwrap();

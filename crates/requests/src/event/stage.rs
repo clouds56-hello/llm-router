@@ -1,12 +1,12 @@
 //! Conversions from requests's full stage-output structs into the cloneable
-//! `*Summary` types defined in `llm_core::request_event`. The runner uses
-//! these `From` impls at emit time so subscribers receive llm-core types
+//! `*Summary` types defined in `tokn_core::request_event`. The runner uses
+//! these `From` impls at emit time so subscribers receive tokn-core types
 //! while stages keep operating on the richer requests-internal structs.
 
 use crate::pipeline::stages::{
   BuiltHeaders, ConvertedBody, ConvertedRequest, ConvertedResponse, Extracted, Resolved, SentResponse,
 };
-use llm_core::request_event::{
+use tokn_core::request_event::{
   BuiltHeadersSummary, ConvertedRequestSummary, ConvertedResponseSummary, ExtractedSummary, ResolvedSummary,
   SentSummary,
 };

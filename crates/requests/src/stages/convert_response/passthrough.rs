@@ -5,7 +5,7 @@
 //! * **Non-SSE** responses: drain into bytes and return
 //!   [`ConvertedBody::Buffered`] with the original byte payload. Usage is
 //!   parsed synchronously from the JSON body via
-//!   [`parse_usage_any_json`](llm_convert::usage::parse_usage_any_json)
+//!   [`parse_usage_any_json`](tokn_convert::usage::parse_usage_any_json)
 //!   and emitted as [`RecordEvent::Usage`].
 //! * **SSE** responses (`Content-Type: text/event-stream`): return
 //!   [`ConvertedBody::Stream`] forwarding the upstream byte chunks
@@ -31,11 +31,11 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::stream::BoxStream;
 use futures_util::StreamExt;
-use llm_convert::sse::{observer_channel, ObserverMsg, SsePipeline};
-use llm_convert::usage::{parse_usage_any_json, parse_usage_any_value, usage_has_any};
-use llm_core::provider::Endpoint;
-use llm_core::request_event::RecordEvent;
-use llm_headers::HeaderMap;
+use tokn_convert::sse::{observer_channel, ObserverMsg, SsePipeline};
+use tokn_convert::usage::{parse_usage_any_json, parse_usage_any_value, usage_has_any};
+use tokn_core::provider::Endpoint;
+use tokn_core::request_event::RecordEvent;
+use tokn_headers::HeaderMap;
 use tracing::{debug, instrument};
 
 /// Pass-through ConvertResponse. Forwards bytes verbatim; usage is extracted
@@ -164,12 +164,12 @@ impl ConvertResponseStage for PassthroughConvertResponse {
               if !usage_has_any(&parsed) {
                 continue;
               }
-              parse_events.emit(llm_core::event::Event::Requests(
-                llm_core::request_event::RequestEvent {
+              parse_events.emit(tokn_core::event::Event::Requests(
+                tokn_core::request_event::RequestEvent {
                   request_id: parse_request_id.clone(),
                   attempt: parse_attempt,
-                  ts: llm_core::util::now_unix_ms(),
-                  payload: llm_core::request_event::RequestEventPayload::Record(RecordEvent::Usage(parsed)),
+                  ts: tokn_core::util::now_unix_ms(),
+                  payload: tokn_core::request_event::RequestEventPayload::Record(RecordEvent::Usage(parsed)),
                 },
               ));
             }
@@ -200,7 +200,7 @@ impl ConvertResponseStage for PassthroughConvertResponse {
 /// trust `Content-Type: text/event-stream` first, fall back to the
 /// caller-supplied hint when no `Content-Type` is set.
 fn is_sse_response(headers: &HeaderMap, fallback_stream: bool) -> bool {
-  use llm_headers::keys;
+  use tokn_headers::keys;
   match headers
     .get(&keys::CONTENT_TYPE)
     .map(|v| v.as_str())
@@ -218,8 +218,8 @@ mod tests {
   use crate::event::{EventBus, EventPayload};
   use bytes::Bytes;
   use futures_util::StreamExt;
-  use llm_core::provider::Endpoint;
-  use llm_headers::HeaderMap;
+  use tokn_core::provider::Endpoint;
+  use tokn_headers::HeaderMap;
   use std::sync::Arc;
   use std::time::Duration;
 
@@ -266,7 +266,7 @@ mod tests {
         .ok()
         .and_then(|r| r.ok());
       let Some(ev) = ev else { break };
-      if let llm_core::event::Event::Requests(req) = &*ev {
+      if let tokn_core::event::Event::Requests(req) = &*ev {
         if let EventPayload::Record(RecordEvent::Usage(u)) = &req.payload {
           assert_eq!(u.input_tokens, Some(3));
           assert_eq!(u.output_tokens, Some(4));
@@ -320,7 +320,7 @@ mod tests {
         .ok()
         .and_then(|r| r.ok());
       let Some(ev) = ev else { break };
-      if let llm_core::event::Event::Requests(req) = &*ev {
+      if let tokn_core::event::Event::Requests(req) = &*ev {
         if let EventPayload::Record(RecordEvent::Usage(u)) = &req.payload {
           assert_eq!(u.input_tokens, Some(7));
           assert_eq!(u.output_tokens, Some(9));
@@ -339,15 +339,15 @@ mod tests {
   async fn is_sse_response_detects_content_type() {
     let mut h = HeaderMap::new();
     h.insert(
-      llm_headers::keys::CONTENT_TYPE.clone(),
-      llm_headers::HeaderValue::from_string("text/event-stream; charset=utf-8".into()),
+      tokn_headers::keys::CONTENT_TYPE.clone(),
+      tokn_headers::HeaderValue::from_string("text/event-stream; charset=utf-8".into()),
     );
     assert!(is_sse_response(&h, false));
 
     let mut h = HeaderMap::new();
     h.insert(
-      llm_headers::keys::CONTENT_TYPE.clone(),
-      llm_headers::HeaderValue::from_string("application/json".into()),
+      tokn_headers::keys::CONTENT_TYPE.clone(),
+      tokn_headers::HeaderValue::from_string("application/json".into()),
     );
     assert!(!is_sse_response(&h, true), "explicit Content-Type wins over hint");
 

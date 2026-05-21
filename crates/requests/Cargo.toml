@@ -1,5 +1,5 @@
 [package]
-name = "llm-requests"
+name = "tokn-requests"
 version.workspace = true
 edition.workspace = true
 description = "Composable request pipeline stages, profiles, and eventing for tokn"
@@ -9,11 +9,11 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
-llm-accounts = { workspace = true }
-llm-core = { workspace = true }
-llm-headers = { workspace = true }
-llm-config = { workspace = true }
-llm-convert = { workspace = true }
+tokn-accounts = { workspace = true }
+tokn-core = { workspace = true }
+tokn-headers = { workspace = true }
+tokn-config = { workspace = true }
+tokn-convert = { workspace = true }
 arc-swap = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }

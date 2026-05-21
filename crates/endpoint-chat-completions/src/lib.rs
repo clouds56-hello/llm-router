@@ -23,7 +23,7 @@ pub use request::{ChatRequest, ChatToolChoice, ChatToolDef};
 pub use response::{ChatChoice, ChatResponse};
 pub use usage::ChatUsage;
 
-use llm_endpoint_core::{Endpoint, EndpointEvent, EndpointItem, EndpointRequest, EndpointResponse};
+use tokn_endpoint_core::{Endpoint, EndpointEvent, EndpointItem, EndpointRequest, EndpointResponse};
 
 impl EndpointRequest for ChatRequest {
   const ENDPOINT: Endpoint = Endpoint::ChatCompletions;

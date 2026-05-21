@@ -1,5 +1,5 @@
 [package]
-name = "llm-endpoint-macros"
+name = "tokn-endpoint-macros"
 version.workspace = true
 edition.workspace = true
 description = "Procedural macros used by tokn endpoint schema crates"

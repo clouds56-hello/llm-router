@@ -13,19 +13,19 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use llm_accounts::AccountHandle;
-use llm_core::account::AccountConfig;
-use llm_core::provider::{
+use tokn_accounts::AccountHandle;
+use tokn_core::account::AccountConfig;
+use tokn_core::provider::{
   AuthKind, Endpoint, ModelCache, Provider, ProviderInfo, RequestCtx, Result as ProviderResult,
 };
-use llm_headers::{HeaderMap, HeaderValue};
-use llm_requests::event::{EventPayload, Stage, StageEvent};
-use llm_requests::pipeline::stages::ConvertedBody;
-use llm_requests::stages::{
+use tokn_headers::{HeaderMap, HeaderValue};
+use tokn_requests::event::{EventPayload, Stage, StageEvent};
+use tokn_requests::pipeline::stages::ConvertedBody;
+use tokn_requests::stages::{
   AccountSelector, DefaultConvertRequest, DefaultConvertResponse, DefaultExtract, DefaultSend, NoopBuildHeaders,
   NoopConvertRequest, PersonaBuildHeaders, PoolResolve, SelectorOutcome,
 };
-use llm_requests::{Event, EventBus, PipelineError, PipelineRunner, Profile, RawInbound, RetryPolicy};
+use tokn_requests::{Event, EventBus, PipelineError, PipelineRunner, Profile, RawInbound, RetryPolicy};
 use serde_json::Value;
 use smol_str::SmolStr;
 use std::collections::VecDeque;
@@ -98,8 +98,8 @@ struct OkSelector;
 impl AccountSelector for OkSelector {
   async fn select(
     &self,
-    _ctx: &llm_requests::pipeline::ctx::PipelineCtx,
-    _ex: &llm_requests::stage_traits::Extracted,
+    _ctx: &tokn_requests::pipeline::ctx::PipelineCtx,
+    _ex: &tokn_requests::stage_traits::Extracted,
   ) -> Result<SelectorOutcome, PipelineError> {
     Ok(SelectorOutcome::Selected {
       account_id: SmolStr::new("acct-1"),
@@ -117,8 +117,8 @@ struct EmptySelector;
 impl AccountSelector for EmptySelector {
   async fn select(
     &self,
-    _ctx: &llm_requests::pipeline::ctx::PipelineCtx,
-    _ex: &llm_requests::stage_traits::Extracted,
+    _ctx: &tokn_requests::pipeline::ctx::PipelineCtx,
+    _ex: &tokn_requests::stage_traits::Extracted,
   ) -> Result<SelectorOutcome, PipelineError> {
     Ok(SelectorOutcome::NoAccount)
   }
@@ -134,7 +134,7 @@ fn capture_bus() -> (Arc<EventBus>, Arc<Mutex<Vec<Event>>>) {
       loop {
         match rx.recv().await {
           Ok(arc) => {
-            if let llm_core::event::Event::Requests(ev) = &*arc {
+            if let tokn_core::event::Event::Requests(ev) = &*arc {
               log.lock().unwrap().push(ev.clone());
             }
           }
@@ -420,8 +420,8 @@ struct CannedSelector {
 impl AccountSelector for CannedSelector {
   async fn select(
     &self,
-    _ctx: &llm_requests::pipeline::ctx::PipelineCtx,
-    _ex: &llm_requests::stage_traits::Extracted,
+    _ctx: &tokn_requests::pipeline::ctx::PipelineCtx,
+    _ex: &tokn_requests::stage_traits::Extracted,
   ) -> Result<SelectorOutcome, PipelineError> {
     Ok(SelectorOutcome::Selected {
       account_id: SmolStr::new(self.handle.config.load().id.clone()),
@@ -473,7 +473,7 @@ async fn full_pipeline_buffered_happy_path() {
   // Full happy-path event sequence: every stage fires exactly once,
   // followed by the terminal Completed marker. The `record` entries are
   // wire-truth captures — the mock provider bypasses
-  // `llm_core::util::http::send`, so `Record::UpstreamReq` is skipped
+  // `tokn_core::util::http::send`, so `Record::UpstreamReq` is skipped
   // and only `Record::UpstreamResp` (from Send) and
   // `Record::UpstreamBody` (from ConvertResponse) appear.
   let events = drain_until_completed(&log).await;

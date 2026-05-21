@@ -11,18 +11,18 @@ use axum::http::{HeaderMap, HeaderName, Request, Response};
 use axum::middleware::{self, Next};
 use axum::routing::{get, post};
 use axum::Router;
-use llm_accounts::registry::Registry as ProviderRegistry;
-use llm_accounts::routing::RouteResolver;
-use llm_accounts::AccountPool;
-use llm_config::Config;
-use llm_config::RouteMode;
-use llm_core::account::AccountConfig;
-use llm_core::event::EventBus;
+use tokn_accounts::registry::Registry as ProviderRegistry;
+use tokn_accounts::routing::RouteResolver;
+use tokn_accounts::AccountPool;
+use tokn_config::Config;
+use tokn_config::RouteMode;
+use tokn_core::account::AccountConfig;
+use tokn_core::event::EventBus;
 use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::Duration;
 
-const PIPELINE_RETRY_POLICY: llm_requests::RetryPolicy = llm_requests::RetryPolicy::new(2, Duration::from_millis(100));
+const PIPELINE_RETRY_POLICY: tokn_requests::RetryPolicy = tokn_requests::RetryPolicy::new(2, Duration::from_millis(100));
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::trace::TraceLayer;
 use tracing::{Level, Span};
@@ -36,26 +36,26 @@ pub struct AppState {
   pub http: reqwest::Client,
   pub events: Arc<EventBus>,
   pub body_max_bytes: usize,
-  /// Shared `llm-requests` pipeline used for router-owned JSON endpoints.
-  pub request_pipeline: Arc<llm_requests::Pipeline>,
-  /// Shared `llm-requests` pipeline used when the resolved route mode is
+  /// Shared `tokn-requests` pipeline used for router-owned JSON endpoints.
+  pub request_pipeline: Arc<tokn_requests::Pipeline>,
+  /// Shared `tokn-requests` pipeline used when the resolved route mode is
   /// [`RouteMode::Passthrough`]. Forwards the inbound request verbatim
   /// (no JSON parse, no cross-endpoint translation) while still
   /// emitting `RecordEvent::*` for observability and persistence.
-  pub passthrough_pipeline: Arc<llm_requests::Pipeline>,
-  /// Shared `llm-requests` pipeline used by the MITM proxy passthrough
+  pub passthrough_pipeline: Arc<tokn_requests::Pipeline>,
+  /// Shared `tokn-requests` pipeline used by the MITM proxy passthrough
   /// path. Unlike [`Self::passthrough_pipeline`], this variant does **no
   /// account resolution** — the intercepted TLS host is the upstream
   /// and the client's own `Authorization` reaches it unchanged. Wired
   /// via `RunConfig` keys (`proxy.host`, `proxy.path`, `proxy.method`,
   /// `proxy.provider_id`, `proxy.account_id`) that the proxy transport
   /// layer fills before calling `run_with`.
-  pub proxy_passthrough_pipeline: Arc<llm_requests::Pipeline>,
-  /// Shared `llm-requests` pipeline used by the MITM proxy `switch`
+  pub proxy_passthrough_pipeline: Arc<tokn_requests::Pipeline>,
+  /// Shared `tokn-requests` pipeline used by the MITM proxy `switch`
   /// path. This variant resolves the provider from the intercepted URL,
   /// selects a configured account for that provider, and forwards the
   /// request bytes verbatim with router-managed auth injection.
-  pub proxy_switch_pipeline: Arc<llm_requests::Pipeline>,
+  pub proxy_switch_pipeline: Arc<tokn_requests::Pipeline>,
 }
 
 /// Header name used for request ids. Honors inbound `x-request-id` if present.
@@ -73,7 +73,7 @@ pub const PROJECT_ID_HEADERS: &[&str] = &["x-opencode-project"];
 
 pub(crate) fn is_router_owned_header(name: &axum::http::HeaderName) -> bool {
   let name = name.as_str();
-  name.starts_with("x-llm-router-") || name == "x-route-mode" || name == "x-behave-as"
+  name.starts_with("x-tokn-router-") || name == "x-route-mode" || name == "x-behave-as"
 }
 
 pub(crate) fn first_header<'a>(headers: &'a HeaderMap, names: &[&str]) -> Option<&'a str> {
@@ -231,7 +231,7 @@ pub fn build_state(cfg: &Config, accounts: &[AccountConfig], events: Arc<EventBu
     AccountPool::from_accounts_with(accounts, cfg, move |account| registry.build(account))?
   };
   let route = Arc::new(RouteResolver::new(cfg.server.route_mode, &cfg.model_families));
-  let http = llm_core::util::http::build_client(&cfg.proxy.to_http_options())?;
+  let http = tokn_core::util::http::build_client(&cfg.proxy.to_http_options())?;
   let body_max_bytes = if cfg.db.enabled { cfg.db.body_max_bytes } else { 0 };
   let request_pipeline = build_request_pipeline(pool.clone(), route.clone(), http.clone(), events.clone());
   let passthrough_pipeline = build_passthrough_pipeline(pool.clone(), route.clone(), http.clone(), events.clone());
@@ -252,7 +252,7 @@ pub fn build_state(cfg: &Config, accounts: &[AccountConfig], events: Arc<EventBu
   })
 }
 
-/// Construct the default `llm-requests` pipeline for router-owned JSON
+/// Construct the default `tokn-requests` pipeline for router-owned JSON
 /// endpoints. The pipeline shares `AppState.events` so persistence
 /// (`RequestEventHandler`) receives `StageEvent::*` and `RecordEvent::*`
 /// automatically.
@@ -261,13 +261,13 @@ fn build_request_pipeline(
   route: Arc<RouteResolver>,
   http: reqwest::Client,
   events: Arc<EventBus>,
-) -> Arc<llm_requests::Pipeline> {
-  use llm_requests::stages::{
+) -> Arc<tokn_requests::Pipeline> {
+  use tokn_requests::stages::{
     DefaultConvertRequest, DefaultConvertResponse, DefaultExtract, DefaultSend, PersonaBuildHeaders,
     PoolAccountSelector, PoolResolve,
   };
   let selector = Arc::new(PoolAccountSelector::new(pool, route));
-  let profile = llm_requests::Profile::full(
+  let profile = tokn_requests::Profile::full(
     "router-default",
     Arc::new(DefaultExtract),
     Arc::new(PoolResolve::new(selector)),
@@ -276,14 +276,14 @@ fn build_request_pipeline(
     Arc::new(DefaultSend::new(http)),
     Arc::new(DefaultConvertResponse::new()),
   );
-  Arc::new(llm_requests::Pipeline::new_with_retry(
+  Arc::new(tokn_requests::Pipeline::new_with_retry(
     Arc::new(profile),
     events,
     PIPELINE_RETRY_POLICY,
   ))
 }
 
-/// Construct the passthrough `llm-requests` pipeline. Forwards the
+/// Construct the passthrough `tokn-requests` pipeline. Forwards the
 /// inbound request body bytes verbatim with no JSON parsing or
 /// cross-endpoint translation. Auth is still injected by the provider
 /// during Send (via the upstream account handle), and observability
@@ -296,13 +296,13 @@ fn build_passthrough_pipeline(
   route: Arc<RouteResolver>,
   http: reqwest::Client,
   events: Arc<EventBus>,
-) -> Arc<llm_requests::Pipeline> {
-  use llm_requests::stages::{
+) -> Arc<tokn_requests::Pipeline> {
+  use tokn_requests::stages::{
     DefaultSend, PassthroughBuildHeaders, PassthroughConvertRequest, PassthroughConvertResponse, PassthroughExtract,
     PoolAccountSelector, PoolResolve,
   };
   let selector = Arc::new(PoolAccountSelector::new(pool, route));
-  let profile = llm_requests::Profile::full(
+  let profile = tokn_requests::Profile::full(
     "router-passthrough",
     Arc::new(PassthroughExtract),
     Arc::new(PoolResolve::new(selector)),
@@ -311,14 +311,14 @@ fn build_passthrough_pipeline(
     Arc::new(DefaultSend::new(http)),
     Arc::new(PassthroughConvertResponse::new()),
   );
-  Arc::new(llm_requests::Pipeline::new_with_retry(
+  Arc::new(tokn_requests::Pipeline::new_with_retry(
     Arc::new(profile),
     events,
     PIPELINE_RETRY_POLICY,
   ))
 }
 
-/// Construct the proxy-passthrough `llm-requests` pipeline used by the
+/// Construct the proxy-passthrough `tokn-requests` pipeline used by the
 /// MITM proxy when the resolved route mode is
 /// [`RouteMode::Passthrough`]. Unlike [`build_passthrough_pipeline`],
 /// this variant performs **no account resolution** — the intercepted
@@ -327,15 +327,15 @@ fn build_passthrough_pipeline(
 ///
 /// The proxy transport layer supplies per-request hints
 /// (`proxy.host`, `proxy.path`, `proxy.method`, …) through a
-/// [`llm_requests::RunConfig`] passed to `Pipeline::run_with`.
+/// [`tokn_requests::RunConfig`] passed to `Pipeline::run_with`.
 /// [`ProxyResolve`] and [`ProxySend`] read those keys; the remaining
 /// stages are the same as the standard passthrough variant.
-fn build_proxy_passthrough_pipeline(http: reqwest::Client, events: Arc<EventBus>) -> Arc<llm_requests::Pipeline> {
-  use llm_requests::stages::{
+fn build_proxy_passthrough_pipeline(http: reqwest::Client, events: Arc<EventBus>) -> Arc<tokn_requests::Pipeline> {
+  use tokn_requests::stages::{
     PassthroughBuildHeaders, PassthroughConvertRequest, PassthroughConvertResponse, PassthroughExtract, ProxyResolve,
     ProxySend,
   };
-  let profile = llm_requests::Profile::full(
+  let profile = tokn_requests::Profile::full(
     "router-proxy-passthrough",
     Arc::new(PassthroughExtract),
     Arc::new(ProxyResolve),
@@ -344,7 +344,7 @@ fn build_proxy_passthrough_pipeline(http: reqwest::Client, events: Arc<EventBus>
     Arc::new(ProxySend::new(http)),
     Arc::new(PassthroughConvertResponse::new()),
   );
-  Arc::new(llm_requests::Pipeline::new_with_retry(
+  Arc::new(tokn_requests::Pipeline::new_with_retry(
     Arc::new(profile),
     events,
     PIPELINE_RETRY_POLICY,
@@ -355,12 +355,12 @@ fn build_proxy_switch_pipeline(
   pool: Arc<AccountPool>,
   http: reqwest::Client,
   events: Arc<EventBus>,
-) -> Arc<llm_requests::Pipeline> {
-  use llm_requests::stages::{
+) -> Arc<tokn_requests::Pipeline> {
+  use tokn_requests::stages::{
     PassthroughBuildHeaders, PassthroughConvertRequest, PassthroughConvertResponse, PassthroughExtract,
     ProxyProviderResolve, ProxySend,
   };
-  let profile = llm_requests::Profile::full(
+  let profile = tokn_requests::Profile::full(
     "router-proxy-switch",
     Arc::new(PassthroughExtract),
     Arc::new(ProxyProviderResolve::new(pool)),
@@ -369,7 +369,7 @@ fn build_proxy_switch_pipeline(
     Arc::new(ProxySend::new(http)),
     Arc::new(PassthroughConvertResponse::new()),
   );
-  Arc::new(llm_requests::Pipeline::new(Arc::new(profile), events))
+  Arc::new(tokn_requests::Pipeline::new(Arc::new(profile), events))
 }
 
 #[cfg(test)]
@@ -388,7 +388,7 @@ mod tests {
       id: "acct".into(),
       provider: "zai-coding-plan".into(),
       enabled: true,
-      tier: llm_core::account::AccountTier::Active,
+      tier: tokn_core::account::AccountTier::Active,
       tags: Vec::new(),
       label: None,
       base_url: None,

@@ -1,4 +1,4 @@
-# llm-router
+# tokn-router
 
 Turn a GitHub Copilot subscription into a local **OpenAI-compatible** API.
 
@@ -25,13 +25,13 @@ cargo install --path .
 
 ```sh
 # 1. Add a Copilot account (GitHub device flow)
-llm-router login
+tokn-router login
 
 #    or import an existing GitHub token
-llm-router import --from gh
+tokn-router import --from gh
 
 # 2. Start the local server (default 127.0.0.1:4141)
-llm-router serve
+tokn-router serve
 
 # 3. Point any OpenAI-compatible client at it
 curl http://127.0.0.1:4141/v1/chat/completions \
@@ -45,7 +45,7 @@ curl http://127.0.0.1:4141/v1/chat/completions \
 
 ## Config
 
-`~/.config/llm-router/config.toml` (mode `0600`).
+`~/.config/tokn-router/config.toml` (mode `0600`).
 
 ```toml
 [server]
@@ -97,43 +97,43 @@ match the current VS Code Copilot Chat extension and restart.
 ## Commands
 
 ```
-llm-router login [--provider PROVIDER] [--no-proxy]
-llm-router import --from gh|copilot-plugin|env [--provider PROVIDER] [--env-var NAME]
-llm-router account list|remove ID|show ID
-llm-router headers [--account ID]   # inspect resolved Copilot identity headers
-llm-router serve [--port N] [--with-proxy] [--proxy-route-mode MODE] [--no-proxy] [--allow-remote]
-llm-router proxy [start] [--port N] [--route-mode MODE] [--no-proxy] [--allow-remote]
-llm-router proxy env [--shell sh|fish|pwsh]
-llm-router proxy shell [--shell /path/to/shell]
-llm-router proxy ca path|show|regenerate
-llm-router usage [--since 24h] [--account ID]
-llm-router config get|set|unset KEY [--account ID] [--add]
-llm-router config list | edit | edit-profiles | path [--profiles] | list-profiles
+tokn-router login [--provider PROVIDER] [--no-proxy]
+tokn-router import --from gh|copilot-plugin|env [--provider PROVIDER] [--env-var NAME]
+tokn-router account list|remove ID|show ID
+tokn-router headers [--account ID]   # inspect resolved Copilot identity headers
+tokn-router serve [--port N] [--with-proxy] [--proxy-route-mode MODE] [--no-proxy] [--allow-remote]
+tokn-router proxy [start] [--port N] [--route-mode MODE] [--no-proxy] [--allow-remote]
+tokn-router proxy env [--shell sh|fish|pwsh]
+tokn-router proxy shell [--shell /path/to/shell]
+tokn-router proxy ca path|show|regenerate
+tokn-router usage [--since 24h] [--account ID]
+tokn-router config get|set|unset KEY [--account ID] [--add]
+tokn-router config list | edit | edit-profiles | path [--profiles] | list-profiles
 ```
 
 ## Proxy Mode
 
 `proxy` runs a local HTTP CONNECT forward proxy that MITMs a small allowlist of
-LLM API hosts and routes those requests through llm-router's existing account
+LLM API hosts and routes those requests through tokn-router's existing account
 pool.
 
-First run generates a local CA under `~/.config/llm-router/ca/`:
+First run generates a local CA under `~/.config/tokn-router/ca/`:
 
 ```sh
-llm-router proxy
-llm-router proxy ca show
+tokn-router proxy
+tokn-router proxy ca show
 ```
 
 Then trust the printed CA cert and inject proxy + CA env vars into your shell:
 
 ```sh
-eval "$(llm-router proxy env)"
+eval "$(tokn-router proxy env)"
 ```
 
 Or spawn a subshell with those variables already set:
 
 ```sh
-llm-router proxy shell
+tokn-router proxy shell
 ```
 
 `proxy shell` uses `SHELL` when available and falls back to `/bin/sh`. Pass
@@ -142,7 +142,7 @@ llm-router proxy shell
 The emitted env block sets:
 
 - `HTTPS_PROXY` / `HTTP_PROXY`
-- `SSL_CERT_FILE` (to a generated merged bundle containing system roots + the llm-router CA)
+- `SSL_CERT_FILE` (to a generated merged bundle containing system roots + the tokn-router CA)
 - `NODE_EXTRA_CA_CERTS`
 - `REQUESTS_CA_BUNDLE` (merged bundle)
 - `CURL_CA_BUNDLE` (merged bundle)
@@ -160,11 +160,11 @@ host = "127.0.0.1"
 port = 4142
 route_mode = "route"
 
-# optional; defaults to ~/.config/llm-router/ca
+# optional; defaults to ~/.config/tokn-router/ca
 # ca_dir = "/some/path"
 
 # extend the built-in MITM allowlist
-# intercept_hosts = ["my-llm-gateway.example.com"]
+# intercept_hosts = ["my-tokn-gateway.example.com"]
 
 # force selected hosts to pass through untouched
 # passthrough_hosts = ["api.githubcopilot.com"]
@@ -172,7 +172,7 @@ route_mode = "route"
 
 Requests to hosts outside the allowlist are tunneled through untouched.
 
-`llm-router serve --with-proxy` runs the OpenAI-compatible HTTP server and the
+`tokn-router serve --with-proxy` runs the OpenAI-compatible HTTP server and the
 MITM proxy together in one process. They share the same account pool and event
 pipeline, but each listener can keep its own default route mode via
 `[server].route_mode` and `[proxy_mode].route_mode` (or `--proxy-route-mode`).
@@ -202,19 +202,19 @@ Add a Z.ai account interactively (key is read with hidden input and verified
 against `/models`):
 
 ```sh
-llm-router login --provider zai-coding-plan
+tokn-router login --provider zai-coding-plan
 # or non-interactively from the environment
-ZAI_API_KEY=sk-... llm-router import --from env --provider zai --id work
+ZAI_API_KEY=sk-... tokn-router import --from env --provider zai --id work
 ```
 
 `/v1/models` returns the upstream OpenAI-shape entries unchanged; each entry
-gains an `x_llm_router` block with the resolved provider id, display name,
+gains an `x_tokn_router` block with the resolved provider id, display name,
 auth kind, and (when known) static capabilities/cost/limit metadata.
 
 ### Personas (`behave_as`)
 
 Profiles live in an embedded `profiles.toml`; extend or override them with
-`~/.config/llm-router/profiles.toml` (`llm-router config edit-profiles`). A
+`~/.config/tokn-router/profiles.toml` (`tokn-router config edit-profiles`). A
 persona describes client identity headers plus which inbound headers may be
 forwarded.
 
@@ -240,17 +240,17 @@ inbound headers; `deny` is applied after `forward`. Router-controlled headers
 always ignored in profiles and set by provider code.
 
 Template values are rendered from static environment values (`<os>`, `<arch>`,
-`<os-pretty>`, `<hostname>`, `<llm-router-version>`) and inbound-only request
+`<os-pretty>`, `<hostname>`, `<tokn-router-version>`) and inbound-only request
 values (`<session_id>`, `<request_id>`, `<project_cwd>`, `<interaction_id>`,
 `<account_id>`). If an inbound-only value is missing, that header is omitted;
-llm-router does not synthesize those ids.
+tokn-router does not synthesize those ids.
 
 Built-in personas: `copilot`, `opencode`, `codex`, `copilot-cli`, and
 `openclaw`.
 
 Set an account persona with `settings.behave_as` under that account. The
 downstream client may also send `X-Behave-As: <persona>` per request, which
-overrides the account setting. Use `llm-router smoke --dry-run` to inspect the
+overrides the account setting. Use `tokn-router smoke --dry-run` to inspect the
 rendered outbound headers and body without sending the request.
 
 ## License

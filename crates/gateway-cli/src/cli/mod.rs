@@ -21,9 +21,9 @@ mod usage;
 pub use error::{Error, Result};
 
 #[derive(Parser, Debug)]
-#[command(name = "llm-router", about = "GitHub Copilot -> OpenAI-compatible API")]
+#[command(name = "tokn-router", about = "GitHub Copilot -> OpenAI-compatible API")]
 pub struct Cli {
-  /// Path to config file (default: ~/.config/llm-router/config.toml)
+  /// Path to config file (default: ~/.config/tokn-router/config.toml)
   #[arg(long, global = true)]
   pub config: Option<PathBuf>,
 
@@ -88,7 +88,7 @@ impl Cli {
 }
 
 /// Read-only subcommands keep stdout uncluttered by suppressing
-/// info-level chatter from `llm_router`. Mutating commands surface
+/// info-level chatter from `tokn_router`. Mutating commands surface
 /// progress at info; the long-running server gets full info logging.
 fn run_mode_for(cmd: &Cmd) -> RunMode {
   use account::AccountCmd;

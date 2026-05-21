@@ -9,8 +9,8 @@ use crate::pipeline::stages::{ConvertResponseStage, ConvertedBody, ConvertedResp
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::stream::BoxStream;
-use llm_core::provider::Endpoint;
-use llm_headers::HeaderMap;
+use tokn_core::provider::Endpoint;
+use tokn_headers::HeaderMap;
 
 pub mod default;
 pub mod passthrough;

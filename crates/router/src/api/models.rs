@@ -9,7 +9,7 @@ use tracing::{debug, instrument};
 
 /// Union `data` arrays from every provider, dedup by `id`. For each entry,
 /// overlay our static `ProviderInfo`/`ModelInfo` metadata under
-/// `"x_llm_router"` so OpenAI-shape stays intact for legacy clients while
+/// `"x_tokn_router"` so OpenAI-shape stays intact for legacy clients while
 /// richer consumers (TUIs, dashboards) can pick up capabilities/costs/limits.
 #[instrument(name = "list_models", skip_all, fields(accounts = tracing::field::Empty, models = tracing::field::Empty))]
 pub async fn list_models(State(s): State<AppState>) -> Result<Json<Value>, ApiError> {
@@ -64,7 +64,7 @@ pub async fn list_models(State(s): State<AppState>) -> Result<Json<Value>, ApiEr
   Ok(Json(json!({ "object": "list", "data": out })))
 }
 
-/// Attach an `x_llm_router` block describing the provider and (when known)
+/// Attach an `x_tokn_router` block describing the provider and (when known)
 /// the model's static capability/cost/limit metadata.
 fn enrich(entry: &mut Value, id: &str, provider: &dyn crate::provider::Provider) {
   let info = provider.info();
@@ -92,7 +92,7 @@ fn enrich(entry: &mut Value, id: &str, provider: &dyn crate::provider::Provider)
   }
 
   if let Some(obj) = entry.as_object_mut() {
-    obj.insert("x_llm_router".into(), Value::Object(meta));
+    obj.insert("x_tokn_router".into(), Value::Object(meta));
   }
 }
 

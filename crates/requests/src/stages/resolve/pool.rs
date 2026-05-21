@@ -1,4 +1,4 @@
-//! Production [`AccountSelector`] backed by [`llm_accounts::AccountPool`].
+//! Production [`AccountSelector`] backed by [`tokn_accounts::AccountPool`].
 //!
 //! [`PoolAccountSelector`] bridges the requests [`AccountSelector`] trait
 //! to the existing [`AccountPool`] + [`RouteResolver`] machinery. It
@@ -16,7 +16,7 @@ use crate::pipeline::ctx::PipelineCtx;
 use crate::pipeline::error::{PipelineError, RequestsError};
 use crate::pipeline::stages::Extracted;
 use async_trait::async_trait;
-use llm_accounts::{AccountPool, EndpointAcquire, RouteResolver};
+use tokn_accounts::{AccountPool, EndpointAcquire, RouteResolver};
 use smol_str::SmolStr;
 use std::sync::Arc;
 

@@ -1,4 +1,4 @@
-use llm_endpoint_messages::{MessagesEvent, MessagesRequest, MessagesResponse};
+use tokn_endpoint_messages::{MessagesEvent, MessagesRequest, MessagesResponse};
 use serde_json::json;
 
 #[test]

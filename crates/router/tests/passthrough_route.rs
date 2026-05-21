@@ -7,7 +7,7 @@
 //!
 //! * The upstream receives the inbound body **verbatim** (no
 //!   re-serialization).
-//! * Router-owned `x-route-mode` / `x-llm-router-*` / `x-behave-as`
+//! * Router-owned `x-route-mode` / `x-tokn-router-*` / `x-behave-as`
 //!   headers are dropped before forwarding.
 //! * The upstream `Authorization: Bearer ...` is injected by the
 //!   provider (not the original inbound auth).
@@ -22,12 +22,12 @@
 use axum::body::{to_bytes, Body};
 use axum::http::{Method, Request, StatusCode};
 use bytes::Bytes;
-use llm_core::account::{AccountConfig, AccountTier, AuthType};
-use llm_core::event::EventBus;
-use llm_router::api::build_state;
-use llm_router::api::router;
-use llm_router::config::{Account as AccountCfg, Config};
-use llm_router::util::secret::Secret;
+use tokn_core::account::{AccountConfig, AccountTier, AuthType};
+use tokn_core::event::EventBus;
+use tokn_router::api::build_state;
+use tokn_router::api::router;
+use tokn_router::config::{Account as AccountCfg, Config};
+use tokn_router::util::secret::Secret;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tower::ServiceExt;
@@ -97,7 +97,7 @@ async fn passthrough_route_forwards_body_verbatim_and_injects_auth() {
   // Build router state with our mock upstream as the account base_url.
   let cfg = Config::default();
   let acct_router = test_account(upstream_url.clone());
-  // Convert router-local AccountCfg → llm_core::AccountConfig via TOML
+  // Convert router-local AccountCfg → tokn_core::AccountConfig via TOML
   // round-trip. `build_state` reads `AccountConfig`.
   let acct_core: AccountConfig = {
     let s = toml::to_string(&acct_router).unwrap();
@@ -116,7 +116,7 @@ async fn passthrough_route_forwards_body_verbatim_and_injects_auth() {
     .uri("/v1/chat/completions")
     .header("content-type", "application/json")
     .header("authorization", "Bearer client-side-secret-must-not-leak")
-    .header("x-llm-router-local-addr", "127.0.0.1:9999")
+    .header("x-tokn-router-local-addr", "127.0.0.1:9999")
     .header("x-route-mode", "passthrough")
     .header("x-behave-as", "codex")
     .body(Body::from(inbound_body.clone()))
@@ -145,8 +145,8 @@ async fn passthrough_route_forwards_body_verbatim_and_injects_auth() {
   // Router-owned headers are stripped.
   let lower = raw_req_str.to_ascii_lowercase();
   assert!(
-    !lower.contains("x-llm-router-local-addr"),
-    "x-llm-router-* must be stripped"
+    !lower.contains("x-tokn-router-local-addr"),
+    "x-tokn-router-* must be stripped"
   );
   assert!(!lower.contains("x-route-mode"), "x-route-mode must be stripped");
   assert!(!lower.contains("x-behave-as"), "x-behave-as must be stripped");
@@ -169,8 +169,8 @@ async fn passthrough_route_forwards_body_verbatim_and_injects_auth() {
 /// * The Content-Type header is preserved end-to-end.
 #[tokio::test]
 async fn passthrough_route_streams_sse_verbatim_and_emits_usage() {
-  use llm_core::event::Event as CoreEvent;
-  use llm_core::request_event::{RecordEvent, RequestEventPayload};
+  use tokn_core::event::Event as CoreEvent;
+  use tokn_core::request_event::{RecordEvent, RequestEventPayload};
 
   let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
   let addr = listener.local_addr().unwrap();

@@ -7,7 +7,7 @@
 //! GLM and a few others). The mapping here produces a *baseline* `ModelInfo`;
 //! providers can post-process it to layer on their quirks.
 
-use llm_core::provider::{CacheCost, Capabilities, Cost, Interleaved, Limits, Modalities, ModelInfo};
+use tokn_core::provider::{CacheCost, Capabilities, Cost, Interleaved, Limits, Modalities, ModelInfo};
 
 use super::schema;
 

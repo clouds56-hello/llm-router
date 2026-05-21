@@ -1,6 +1,6 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use llm_endpoint_core::{Extras, FinishReason, Role};
+use tokn_endpoint_core::{Extras, FinishReason, Role};
 
 use crate::usage::ChatUsage;
 

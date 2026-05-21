@@ -281,7 +281,7 @@ mod tests {
 
   #[test]
   fn fresh_day_file_has_canonical_columns() {
-    let dir = std::env::temp_dir().join(format!("llm-router-req-{}", uuid::Uuid::new_v4()));
+    let dir = std::env::temp_dir().join(format!("tokn-router-req-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("2099-01-01.db");
     let conn = open_day_db(&path).unwrap();

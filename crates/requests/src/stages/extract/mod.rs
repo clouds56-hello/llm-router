@@ -20,8 +20,8 @@ use crate::pipeline::error::PipelineError;
 use crate::pipeline::stages::{ExtractStage, Extracted, RawInbound};
 use crate::utils::codec::request_content_encoding;
 use async_trait::async_trait;
-use llm_core::ClientId;
-use llm_headers::HeaderMap;
+use tokn_core::ClientId;
+use tokn_headers::HeaderMap;
 use serde_json::Value;
 use smol_str::SmolStr;
 use std::sync::Arc;
@@ -153,7 +153,7 @@ mod tests {
   use super::*;
   use crate::event::EventBus;
   use bytes::Bytes;
-  use llm_core::provider::Endpoint;
+  use tokn_core::provider::Endpoint;
   use std::sync::Arc;
 
   fn ctx() -> PipelineCtx {
@@ -176,8 +176,8 @@ mod tests {
     let mut h = HeaderMap::new();
     for (k, v) in pairs {
       h.insert(
-        llm_headers::HeaderName::new(*k),
-        llm_headers::HeaderValue::from_string((*v).to_string()),
+        tokn_headers::HeaderName::new(*k),
+        tokn_headers::HeaderValue::from_string((*v).to_string()),
       );
     }
     h

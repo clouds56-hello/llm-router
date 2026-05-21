@@ -7,9 +7,9 @@ pub mod usage;
 pub use requests::{read_request_row, RequestEventHandler};
 
 use bytes::Bytes;
-pub use llm_core::db::{DbPaths, HttpSnapshot, MessageRecord, PartRecord};
+pub use tokn_core::db::{DbPaths, HttpSnapshot, MessageRecord, PartRecord};
 #[allow(unused_imports)]
-pub(crate) use llm_core::db::{Usage, UsageDetails};
+pub(crate) use tokn_core::db::{Usage, UsageDetails};
 use snafu::Snafu;
 pub use usage::UsageDb;
 
@@ -17,7 +17,7 @@ pub use usage::UsageDb;
 /// is sensitive (`authorization`, `proxy-authorization`, `cookie`, anything
 /// containing `api-key`). Public so both inbound (server::forward) and
 /// outbound (db::requests) capture paths share the same redaction policy.
-pub fn headers_json(headers: &llm_headers::HeaderMap) -> Bytes {
+pub fn headers_json(headers: &tokn_headers::HeaderMap) -> Bytes {
   use serde_json::{Map, Value};
   let mut out = Map::new();
   for (name, value) in headers {

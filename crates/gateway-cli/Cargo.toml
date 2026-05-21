@@ -1,5 +1,5 @@
 [package]
-name = "llm-gateway-cli"
+name = "tokn-gateway-cli"
 version.workspace = true
 edition.workspace = true
 documentation.workspace = true
@@ -11,26 +11,26 @@ readme = "../../README.md"
 
 [features]
 default = ["lzma"]
-lzma = ["llm-persistence/lzma"]
+lzma = ["tokn-persistence/lzma"]
 
 [[bin]]
-name = "llm-gateway"
+name = "tokn-gateway"
 path = "src/main.rs"
 
 [dependencies]
-llm-core = { workspace = true }
-llm-config = { workspace = true }
-llm-catalogue = { workspace = true }
-llm-convert = { workspace = true }
-llm-router = { workspace = true }
-llm-requests = { workspace = true }
-llm-persistence = { workspace = true }
-llm-provider-copilot = { workspace = true }
-llm-provider-deepseek = { workspace = true }
-llm-provider-openai = { workspace = true }
-llm-provider-zai = { workspace = true }
-llm-auth = { workspace = true }
-llm-headers = { workspace = true }
+tokn-core = { workspace = true }
+tokn-config = { workspace = true }
+tokn-catalogue = { workspace = true }
+tokn-convert = { workspace = true }
+tokn-router = { workspace = true }
+tokn-requests = { workspace = true }
+tokn-persistence = { workspace = true }
+tokn-provider-copilot = { workspace = true }
+tokn-provider-deepseek = { workspace = true }
+tokn-provider-openai = { workspace = true }
+tokn-provider-zai = { workspace = true }
+tokn-auth = { workspace = true }
+tokn-headers = { workspace = true }
 anyhow = { workspace = true }
 arc-swap = { workspace = true }
 async-trait = { workspace = true }

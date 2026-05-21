@@ -1,18 +1,18 @@
-//! Proxy MITM passthrough dispatch via the shared `llm-requests`
+//! Proxy MITM passthrough dispatch via the shared `tokn-requests`
 //! [`Pipeline`].
 //!
 //! This is the pipeline-based replacement for [`super::passthrough::proxy_passthrough`].
-//! It builds a [`llm_requests::RawInbound`] from the intercepted request,
-//! supplies a [`llm_requests::RunConfig`] populated with the resolved
+//! It builds a [`tokn_requests::RawInbound`] from the intercepted request,
+//! supplies a [`tokn_requests::RunConfig`] populated with the resolved
 //! authority / method / path / scheme under the `proxy.*` keys, and
 //! invokes [`AppState::proxy_passthrough_pipeline`] via
-//! [`llm_requests::Pipeline::run_with`].
+//! [`tokn_requests::Pipeline::run_with`].
 //!
 //! Host/port resolution lives in this module — see
 //! [`resolve_host_with_port`]. The resolved value is used as the
 //! upstream authority (URL host) **and** as the outbound `Host` header
 //! (preserved verbatim by
-//! [`PassthroughBuildHeaders::preserve_host`](llm_requests::stages::PassthroughBuildHeaders::preserve_host)).
+//! [`PassthroughBuildHeaders::preserve_host`](tokn_requests::stages::PassthroughBuildHeaders::preserve_host)).
 //!
 //! The pipeline itself ([`ProxyResolve`] + [`ProxySend`]) reads those
 //! keys, dispatches the request to `{scheme}://{host}{path}` preserving
@@ -20,8 +20,8 @@
 //! `RecordEvent::*` observability stream — no legacy `LegacyRequest`
 //! events are produced here.
 //!
-//! [`ProxyResolve`]: llm_requests::stages::ProxyResolve
-//! [`ProxySend`]: llm_requests::stages::ProxySend
+//! [`ProxyResolve`]: tokn_requests::stages::ProxyResolve
+//! [`ProxySend`]: tokn_requests::stages::ProxySend
 //! [`AppState::proxy_passthrough_pipeline`]: crate::api::AppState::proxy_passthrough_pipeline
 
 use crate::api::error::ApiError;
@@ -34,11 +34,11 @@ use axum::http::{HeaderValue, Request, Response};
 use axum::response::IntoResponse;
 use bytes::Bytes;
 use http::header::HOST;
-use llm_accounts::routing::ResolveError;
-use llm_core::event::Event as CoreEvent;
-use llm_core::provider::Endpoint;
-use llm_core::request_event::{RecordEvent, RequestEvent, RequestEventPayload};
-use llm_requests::pipeline::error::RequestsError;
+use tokn_accounts::routing::ResolveError;
+use tokn_core::event::Event as CoreEvent;
+use tokn_core::provider::Endpoint;
+use tokn_core::request_event::{RecordEvent, RequestEvent, RequestEventPayload};
+use tokn_requests::pipeline::error::RequestsError;
 use smol_str::SmolStr;
 
 /// Dispatch an intercepted MITM request through the proxy-passthrough
@@ -231,11 +231,11 @@ async fn proxy_via_pipeline_inner(
     ProxyPipelineMode::Switch => "switch",
   };
 
-  let mut cfg_builder = llm_requests::RunConfig::builder()
-    .with_str(llm_requests::stages::resolve::proxy::keys::HOST, &host_with_port)
-    .with_str(llm_requests::stages::send::proxy::send_keys::PATH, &path_and_query)
-    .with_str(llm_requests::stages::send::proxy::send_keys::METHOD, method.as_str())
-    .with_str(llm_requests::stages::send::proxy::send_keys::SCHEME, scheme);
+  let mut cfg_builder = tokn_requests::RunConfig::builder()
+    .with_str(tokn_requests::stages::resolve::proxy::keys::HOST, &host_with_port)
+    .with_str(tokn_requests::stages::send::proxy::send_keys::PATH, &path_and_query)
+    .with_str(tokn_requests::stages::send::proxy::send_keys::METHOD, method.as_str())
+    .with_str(tokn_requests::stages::send::proxy::send_keys::SCHEME, scheme);
   let pipeline = match mode {
     ProxyPipelineMode::Passthrough => {
       // Identity resolution — fingerprint the inbound bearer against
@@ -251,11 +251,11 @@ async fn proxy_via_pipeline_inner(
       // requests to different paths/ports on the same upstream.
       let resolved_provider_id = identity.provider_id.unwrap_or_else(|| intercepted_host.to_string());
       cfg_builder = cfg_builder.with_str(
-        llm_requests::stages::resolve::proxy::keys::PROVIDER_ID,
+        tokn_requests::stages::resolve::proxy::keys::PROVIDER_ID,
         &resolved_provider_id,
       );
       if let Some(account_id) = identity.account_id.as_deref() {
-        cfg_builder = cfg_builder.with_str(llm_requests::stages::resolve::proxy::keys::ACCOUNT_ID, account_id);
+        cfg_builder = cfg_builder.with_str(tokn_requests::stages::resolve::proxy::keys::ACCOUNT_ID, account_id);
       }
       &state.proxy_passthrough_pipeline
     }
@@ -267,8 +267,8 @@ async fn proxy_via_pipeline_inner(
         .into_response();
       };
       cfg_builder = cfg_builder
-        .with_str(llm_requests::stages::resolve::proxy::keys::PROVIDER_ID, provider_id)
-        .with(llm_requests::stages::send::proxy::send_keys::INJECT_AUTH, true);
+        .with_str(tokn_requests::stages::resolve::proxy::keys::PROVIDER_ID, provider_id)
+        .with(tokn_requests::stages::send::proxy::send_keys::INJECT_AUTH, true);
       &state.proxy_switch_pipeline
     }
   };
@@ -283,7 +283,7 @@ async fn proxy_via_pipeline_inner(
   state.events.emit(CoreEvent::Requests(RequestEvent {
     request_id: SmolStr::new(&hx.request_id),
     attempt: 0,
-    ts: llm_core::util::now_unix_ms(),
+    ts: tokn_core::util::now_unix_ms(),
     payload: RequestEventPayload::Record(RecordEvent::InboundConnection {
       local_addr: local_addr.map(SmolStr::from),
       peer_addr: peer_addr.map(SmolStr::from),
@@ -295,7 +295,7 @@ async fn proxy_via_pipeline_inner(
   }));
   let cfg = cfg_builder.build();
 
-  let raw = llm_requests::RawInbound {
+  let raw = tokn_requests::RawInbound {
     endpoint,
     headers: (&parts.headers).into(),
     raw_body,
@@ -310,7 +310,7 @@ async fn proxy_via_pipeline_inner(
   }
 }
 
-fn proxy_pipeline_error_to_api_error(err: &llm_requests::PipelineError, host_with_port: &str) -> ApiError {
+fn proxy_pipeline_error_to_api_error(err: &tokn_requests::PipelineError, host_with_port: &str) -> ApiError {
   tracing::warn!(host = %host_with_port, error = %err.message(), "proxy pipeline failed");
   match err.inner() {
     RequestsError::Resolve {

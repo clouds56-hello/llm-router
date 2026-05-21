@@ -1,2 +1,2 @@
-pub use llm_config::profiles;
-pub use llm_core::provider::*;
+pub use tokn_config::profiles;
+pub use tokn_core::provider::*;

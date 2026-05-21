@@ -1,9 +1,9 @@
 # Built-in persona profiles. The user may extend or override these by adding
-# matching sections to ~/.config/llm-router/profiles.toml.
+# matching sections to ~/.config/tokn-router/profiles.toml.
 #
 # `forward` is an allow-list of inbound headers that the persona may preserve.
 # Router-controlled headers (authorization, content-type, accept, host, etc.)
-# are always controlled by llm-router/provider code and ignored here.
+# are always controlled by tokn-router/provider code and ignored here.
 
 [copilot]
 verified = true

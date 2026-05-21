@@ -34,11 +34,11 @@ fn main() {
     format!("{base_version}+{commit_id}")
   };
 
-  println!("cargo:rustc-env=LLM_ROUTER_BASE_VERSION={base_version}");
-  println!("cargo:rustc-env=LLM_ROUTER_COMMIT_ID={commit_id}");
-  println!("cargo:rustc-env=LLM_ROUTER_VERSION={full_version}");
+  println!("cargo:rustc-env=tokn_ROUTER_BASE_VERSION={base_version}");
+  println!("cargo:rustc-env=tokn_ROUTER_COMMIT_ID={commit_id}");
+  println!("cargo:rustc-env=tokn_ROUTER_VERSION={full_version}");
   println!(
-    "cargo:rustc-env=LLM_ROUTER_VERSION_DIRTY={}",
+    "cargo:rustc-env=tokn_ROUTER_VERSION_DIRTY={}",
     if is_dirty { "1" } else { "0" }
   );
 }

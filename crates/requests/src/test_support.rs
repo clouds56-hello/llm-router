@@ -8,12 +8,12 @@
 //! published crate surface.
 
 use async_trait::async_trait;
-use llm_accounts::AccountHandle;
-use llm_core::account::AccountConfig;
-use llm_core::pipeline::InputTransformer;
-use llm_core::provider::error;
-use llm_core::provider::{AuthKind, Endpoint, ModelCache, Provider, ProviderInfo, RequestCtx};
-use llm_headers::{HeaderMap, HeaderName, HeaderValue};
+use tokn_accounts::AccountHandle;
+use tokn_core::account::AccountConfig;
+use tokn_core::pipeline::InputTransformer;
+use tokn_core::provider::error;
+use tokn_core::provider::{AuthKind, Endpoint, ModelCache, Provider, ProviderInfo, RequestCtx};
+use tokn_headers::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
 
@@ -91,7 +91,7 @@ impl Provider for MockProvider {
   fn input_transformer(&self) -> Option<&dyn InputTransformer> {
     self.transformer.as_deref()
   }
-  fn patch_headers(&self, headers: &mut HeaderMap, _ctx: &llm_core::provider::HeaderPatchCtx<'_>) -> error::Result<()> {
+  fn patch_headers(&self, headers: &mut HeaderMap, _ctx: &tokn_core::provider::HeaderPatchCtx<'_>) -> error::Result<()> {
     for (name, value) in &self.header_patch {
       headers.insert(HeaderName::new(name.clone()), HeaderValue::from_string(value.clone()));
     }

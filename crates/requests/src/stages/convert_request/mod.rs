@@ -12,7 +12,7 @@
 //!   [`InputTransformer`] (when any), and re-serializes / re-compresses
 //!   the result so [`Send`] can drop it straight onto the wire.
 //!
-//! [`InputTransformer`]: llm_core::pipeline::InputTransformer
+//! [`InputTransformer`]: tokn_core::pipeline::InputTransformer
 //! [`Send`]: crate::pipeline::stages::SendStage
 
 mod default;

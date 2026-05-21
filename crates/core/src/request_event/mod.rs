@@ -1,9 +1,9 @@
-//! Event payload types for the `llm-requests` pipeline.
+//! Event payload types for the `tokn-requests` pipeline.
 //!
-//! These types live in `llm-core` so that the workspace's
-//! [`llm_core::event::Event`] enum can embed a [`Requests(RequestEvent)`]
+//! These types live in `tokn-core` so that the workspace's
+//! [`tokn_core::event::Event`] enum can embed a [`Requests(RequestEvent)`]
 //! variant without inverting the dep graph (requests already depends on
-//! llm-core).
+//! tokn-core).
 //!
 //! Three payload shapes are supported as peers under
 //! [`RequestEventPayload`]:
@@ -19,8 +19,8 @@
 //!   decorator stages (e.g. retry, cache) to publish their own
 //!   structured records without modifying either of the closed enums.
 //!
-//! The event bus itself is `llm_core::event::EventBus` (a tokio broadcast
-//! channel); requests publishes `llm_core::event::Event::Requests(RequestEvent
+//! The event bus itself is `tokn_core::event::EventBus` (a tokio broadcast
+//! channel); requests publishes `tokn_core::event::Event::Requests(RequestEvent
 //! { ... })` directly onto it.
 //!
 //! [`Requests(RequestEvent)`]: crate::event::Event::Requests

@@ -48,7 +48,7 @@ pub struct Profiles {
   table: BTreeMap<String, PersonaProfile>,
 }
 
-pub use llm_headers::TemplateVars;
+pub use tokn_headers::TemplateVars;
 
 static GLOBAL: OnceLock<Profiles> = OnceLock::new();
 static WARNED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
@@ -295,7 +295,7 @@ fn is_known_template(name: &str) -> bool {
       | "arch"
       | "os-pretty"
       | "hostname"
-      | "llm-router-version"
+      | "tokn-router-version"
       | "session_id"
       | "request_id"
       | "project_cwd"
@@ -319,7 +319,7 @@ fn static_template_value(name: &str) -> Option<String> {
     }),
     "os-pretty" => Some(os_pretty()),
     "hostname" => std::env::var("HOSTNAME").ok().filter(|s| !s.trim().is_empty()),
-    "llm-router-version" => Some(llm_core::util::version::full().to_string()),
+    "tokn-router-version" => Some(tokn_core::util::version::full().to_string()),
     _ => None,
   }
 }
@@ -354,7 +354,7 @@ fn os_pretty() -> String {
 }
 
 pub fn user_profiles_path() -> Option<PathBuf> {
-  llm_core::util::paths::config_dir().map(|dir| dir.join("profiles.toml"))
+  tokn_core::util::paths::config_dir().map(|dir| dir.join("profiles.toml"))
 }
 
 pub fn warn_if_unverified(persona: &str, upstream: &str, resolved: &ResolvedProfile) {

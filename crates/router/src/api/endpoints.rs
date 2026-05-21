@@ -5,10 +5,10 @@ use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
-use llm_accounts::routing::{route_mode_as_str, ResolveError};
-use llm_core::event::Event as CoreEvent;
-use llm_core::request_event::{RecordEvent, RequestEvent, RequestEventPayload};
-use llm_requests::pipeline::error::RequestsError;
+use tokn_accounts::routing::{route_mode_as_str, ResolveError};
+use tokn_core::event::Event as CoreEvent;
+use tokn_core::request_event::{RecordEvent, RequestEvent, RequestEventPayload};
+use tokn_requests::pipeline::error::RequestsError;
 use smol_str::SmolStr;
 use tracing::instrument;
 
@@ -20,7 +20,7 @@ async fn handle(
 ) -> Result<Response, ApiError> {
   let hx = request_header_extract(&inbound);
   let local_addr = inbound
-    .get("x-llm-router-local-addr")
+    .get("x-tokn-router-local-addr")
     .and_then(|v| v.to_str().ok())
     .map(str::to_string)
     .or_else(|| {
@@ -29,7 +29,7 @@ async fn handle(
         .and_then(|v| v.to_str().ok())
         .map(str::to_string)
     });
-  // Router-owned JSON endpoints run through llm-requests and skip duplicate
+  // Router-owned JSON endpoints run through tokn-requests and skip duplicate
   // lifecycle emission. The pipeline emits its own StageEvent/RecordEvent
   // stream which RequestEventHandler consumes; emitting a second bootstrap
   // event here would duplicate the request row before the pipeline begins.
@@ -38,7 +38,7 @@ async fn handle(
   state.events.emit(CoreEvent::Requests(RequestEvent {
     request_id: SmolStr::new(&hx.request_id),
     attempt: 0,
-    ts: llm_core::util::now_unix_ms(),
+    ts: tokn_core::util::now_unix_ms(),
     payload: RequestEventPayload::Record(RecordEvent::InboundConnection {
       local_addr: local_addr.clone().map(SmolStr::from),
       peer_addr: None,
@@ -48,11 +48,11 @@ async fn handle(
       url: None,
     }),
   }));
-  if matches!(mode, Some(llm_config::RouteMode::Switch)) {
+  if matches!(mode, Some(tokn_config::RouteMode::Switch)) {
     return Err(ApiError::bad_request("switch mode only applies in proxy mode"));
   }
   let decoded = super::codec::decode_json_request(&inbound, body)?;
-  let raw = llm_requests::RawInbound {
+  let raw = tokn_requests::RawInbound {
     endpoint: parser.endpoint(),
     headers: (&inbound).into(),
     raw_body: decoded.raw_body.clone(),
@@ -60,7 +60,7 @@ async fn handle(
     body_json: decoded.value.clone(),
     request_id: Some(SmolStr::new(&hx.request_id)),
   };
-  let pipeline = if matches!(mode, Some(llm_config::RouteMode::Passthrough)) {
+  let pipeline = if matches!(mode, Some(tokn_config::RouteMode::Passthrough)) {
     &state.passthrough_pipeline
   } else {
     &state.request_pipeline
@@ -71,7 +71,7 @@ async fn handle(
   }
 }
 
-fn pipeline_error_to_api_error(err: llm_requests::PipelineError) -> ApiError {
+fn pipeline_error_to_api_error(err: tokn_requests::PipelineError) -> ApiError {
   match err.inner() {
     RequestsError::Resolve {
       source: ResolveError::InvalidRouteMode { .. },
@@ -89,7 +89,7 @@ fn pipeline_error_to_api_error(err: llm_requests::PipelineError) -> ApiError {
   }
 }
 
-fn request_record_mode(mode: Option<llm_config::RouteMode>) -> &'static str {
+fn request_record_mode(mode: Option<tokn_config::RouteMode>) -> &'static str {
   match mode {
     Some(mode) => route_mode_as_str(mode),
     None => "route",

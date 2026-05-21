@@ -16,8 +16,8 @@
 
 use crate::event::Stage;
 use crate::utils::codec::CodecError;
-use llm_convert::error::ConvertError;
-use llm_core::provider::Endpoint;
+use tokn_convert::error::ConvertError;
+use tokn_core::provider::Endpoint;
 use smol_str::SmolStr;
 use snafu::Snafu;
 
@@ -28,7 +28,7 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 pub enum RequestsError {
   #[snafu(display("{source}"))]
   Resolve {
-    source: llm_accounts::routing::ResolveError,
+    source: tokn_accounts::routing::ResolveError,
   },
 
   #[snafu(display("session expired: {session_id}"))]
@@ -41,7 +41,7 @@ pub enum RequestsError {
   RequestConversion { source: ConvertError },
 
   #[snafu(display("provider input_transformer failed: {source}"))]
-  ProviderInputTransformer { source: llm_core::provider::Error },
+  ProviderInputTransformer { source: tokn_core::provider::Error },
 
   #[snafu(display("serialize upstream body: {source}"))]
   SerializeUpstreamBody { source: serde_json::Error },
@@ -77,19 +77,19 @@ pub enum RequestsError {
   Other { source: BoxError },
 }
 
-/// Chain-formatted wrapper for [`llm_core::provider::Error`]. Reqwest's
+/// Chain-formatted wrapper for [`tokn_core::provider::Error`]. Reqwest's
 /// top-level `Display` hides the underlying transport cause (DNS failure,
 /// TLS error, connection refused, etc.); this wrapper walks the full
 /// `std::error::Error::source()` chain so the root cause is visible.
 #[derive(Debug)]
-pub struct ProviderError(llm_core::provider::Error);
+pub struct ProviderError(tokn_core::provider::Error);
 
 impl ProviderError {
-  pub fn new(err: llm_core::provider::Error) -> Self {
+  pub fn new(err: tokn_core::provider::Error) -> Self {
     Self(err)
   }
 
-  pub fn inner(&self) -> &llm_core::provider::Error {
+  pub fn inner(&self) -> &tokn_core::provider::Error {
     &self.0
   }
 }

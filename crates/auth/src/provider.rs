@@ -1,16 +1,16 @@
 //! Provider-agnostic authentication contracts.
 //!
-//! `llm-auth` orchestrates account lifecycle (login, import, refresh,
+//! `tokn-auth` orchestrates account lifecycle (login, import, refresh,
 //! status) but holds zero provider-specific HTTP code. Each provider crate
 //! implements [`ProviderAuth`] and exposes a `provider_auth()` accessor;
-//! `llm-auth` looks up the impl by `AccountConfig::provider` and dispatches.
+//! `tokn-auth` looks up the impl by `AccountConfig::provider` and dispatches.
 //!
-//! Keeping the trait here (rather than in `llm-auth`) avoids a circular
-//! dep: provider crates already depend on `llm-core`, and `llm-auth` will
+//! Keeping the trait here (rather than in `tokn-auth`) avoids a circular
+//! dep: provider crates already depend on `tokn-core`, and `tokn-auth` will
 //! depend on both.
 
 use async_trait::async_trait;
-use llm_core::account::AccountConfig;
+use tokn_core::account::AccountConfig;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -293,7 +293,7 @@ pub type Result<T> = std::result::Result<T, AuthError>;
 /// Implementations must be cheap to construct (typically zero-sized) and
 /// hold no state — all per-call inputs are passed as arguments. Each
 /// provider crate exposes a `provider_auth() -> &'static dyn ProviderAuth`
-/// accessor; `llm-auth` builds a static dispatch table at startup.
+/// accessor; `tokn-auth` builds a static dispatch table at startup.
 #[async_trait]
 pub trait ProviderAuth: Send + Sync {
   /// Provider id this impl handles (e.g. `"github-copilot"`). Must match

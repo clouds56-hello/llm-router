@@ -24,17 +24,17 @@ use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use clap::Args;
 use futures_util::StreamExt;
-use llm_config::RouteMode;
-use llm_core::event::Event as CoreEvent;
-use llm_core::request_event::{RecordEvent, RequestEvent, RequestEventPayload};
-use llm_requests::event::{BuiltHeadersSummary, ConvertedRequestSummary, ResolvedSummary};
-use llm_requests::pipeline::stages::{ConvertedBody, ConvertedResponse};
-use llm_requests::stages::{
+use tokn_config::RouteMode;
+use tokn_core::event::Event as CoreEvent;
+use tokn_core::request_event::{RecordEvent, RequestEvent, RequestEventPayload};
+use tokn_requests::event::{BuiltHeadersSummary, ConvertedRequestSummary, ResolvedSummary};
+use tokn_requests::pipeline::stages::{ConvertedBody, ConvertedResponse};
+use tokn_requests::stages::{
   DefaultConvertRequest, DefaultConvertResponse, DefaultExtract, DefaultSend, PersonaBuildHeaders, PoolAccountSelector,
   PoolResolve,
 };
-use llm_requests::{Event, EventBus, EventPayload, PipelineError, PipelineRunner, Profile, RawInbound, StageEvent};
-use llm_router::api::AppState;
+use tokn_requests::{Event, EventBus, EventPayload, PipelineError, PipelineRunner, Profile, RawInbound, StageEvent};
+use tokn_router::api::AppState;
 use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -149,7 +149,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
   // (when `cfg.db.enabled`), so emitting `Event::Requests(_)` on it persists
   // the smoke run into `requests/<YYYY-MM-DD>.db`.
   let (events, receiver, handlers, archive_runtime) = crate::server_runtime::build_event_bus(&cfg)?;
-  let _event_thread = llm_core::event::spawn_event_loop(receiver, handlers);
+  let _event_thread = tokn_core::event::spawn_event_loop(receiver, handlers);
   let state = crate::server_runtime::build_state(&cfg, &accounts, events.clone())?;
   let requests_dir = if cfg.db.enabled {
     Some(cfg.db.resolve_paths()?.requests_dir)
@@ -257,7 +257,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
   bus.emit(CoreEvent::Requests(RequestEvent {
     request_id: request_id.clone().into(),
     attempt: 0,
-    ts: llm_core::util::now_unix_ms(),
+    ts: tokn_core::util::now_unix_ms(),
     payload: RequestEventPayload::Record(RecordEvent::InboundConnection {
       local_addr: None,
       peer_addr: None,
@@ -290,7 +290,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
       }
 
       let persisted = match (requests_dir.as_deref(), snapshot.request_id.as_ref()) {
-        (Some(dir), Some(id)) => match llm_persistence::read_request_row(dir, id.as_str()) {
+        (Some(dir), Some(id)) => match tokn_persistence::read_request_row(dir, id.as_str()) {
           Ok(row) => row,
           Err(e) => {
             eprintln!("warning: failed to read persisted request row: {e}");
@@ -315,7 +315,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
 
   let snapshot = captured.snapshot();
   let persisted = match (requests_dir.as_deref(), snapshot.request_id.as_ref()) {
-    (Some(dir), Some(id)) => match llm_persistence::read_request_row(dir, id.as_str()) {
+    (Some(dir), Some(id)) => match tokn_persistence::read_request_row(dir, id.as_str()) {
       Ok(row) => row,
       Err(e) => {
         eprintln!("warning: failed to read persisted request row: {e}");
@@ -798,7 +798,7 @@ fn print_persisted_text(persisted: Option<&serde_json::Map<String, Value>>) {
   }
 }
 
-fn headers_json_value(headers: &llm_headers::HeaderMap, redact: bool) -> Value {
+fn headers_json_value(headers: &tokn_headers::HeaderMap, redact: bool) -> Value {
   let mut map = serde_json::Map::new();
   for (name, value) in headers.iter() {
     let v = value.as_str();
@@ -830,7 +830,7 @@ fn redact_header(name: &str, value: &str, redact: bool) -> String {
 }
 
 pub(super) fn filter_accounts(
-  accounts: &mut Vec<llm_core::account::AccountConfig>,
+  accounts: &mut Vec<tokn_core::account::AccountConfig>,
   provider: Option<&str>,
   account: Option<&str>,
 ) -> Result<()> {
@@ -876,8 +876,8 @@ fn build_request_body(endpoint: Endpoint, model: &str, message: &str, stream: bo
   }
 }
 
-fn build_inbound_headers(overrides: &[(String, String)]) -> Result<llm_headers::HeaderMap> {
-  use llm_headers::{HeaderMap, HeaderName, HeaderValue};
+fn build_inbound_headers(overrides: &[(String, String)]) -> Result<tokn_headers::HeaderMap> {
+  use tokn_headers::{HeaderMap, HeaderName, HeaderValue};
   let mut h = HeaderMap::new();
   h.insert(
     HeaderName::new("content-type"),
@@ -944,7 +944,7 @@ fn route_mode_name(mode: RouteMode) -> &'static str {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use llm_headers::HeaderMap;
+  use tokn_headers::HeaderMap;
 
   #[test]
   fn headers_json_value_preserves_multi_values_in_order() {

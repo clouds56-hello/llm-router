@@ -2,7 +2,7 @@
 //! truth for the registry.
 //!
 //! Each provider crate exports one or more [`ProviderDescriptor`]
-//! `static`s. The registry in `llm-router::accounts::registry` walks the
+//! `static`s. The registry in `tokn-router::accounts::registry` walks the
 //! built-in list and uses the data here to:
 //!
 //! * resolve provider id ↔ host(s) ↔ canonical base URL,
@@ -13,12 +13,12 @@
 //!   token endpoint, …) so they live in one place instead of being
 //!   sprinkled across `auth_*.rs` modules.
 //!
-//! `ProviderDescriptor` lives in `llm-auth` (rather than `llm-core`) so it
+//! `ProviderDescriptor` lives in `tokn-auth` (rather than `tokn-core`) so it
 //! can carry a `build_auth: fn() -> &'static dyn ProviderAuth` field
 //! without creating a `core ↔ auth` dependency cycle.
 
-use llm_core::account::AccountConfig;
-use llm_core::provider::{Endpoint, EndpointRule, Provider, Result};
+use tokn_core::account::AccountConfig;
+use tokn_core::provider::{Endpoint, EndpointRule, Provider, Result};
 use std::sync::Arc;
 
 use crate::provider::{CredentialFlavor, ProviderAuth};

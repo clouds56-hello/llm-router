@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use llm_endpoint_core::ToolChoice;
-use llm_endpoint_macros::LenientFields;
+use tokn_endpoint_core::ToolChoice;
+use tokn_endpoint_macros::LenientFields;
 
 /// Scalar / small-enum generation knobs accepted by the OpenAI Chat
 /// Completions API request body (`POST /v1/chat/completions`).

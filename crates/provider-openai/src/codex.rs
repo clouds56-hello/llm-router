@@ -1,8 +1,8 @@
 use crate::common::{self, Credential};
 use async_trait::async_trait;
-use llm_core::account::AccountConfig;
-use llm_headers::keys::CHATGPT_ACCOUNT_ID;
-use llm_headers::{HeaderMap, HeaderValue};
+use tokn_core::account::AccountConfig;
+use tokn_headers::keys::CHATGPT_ACCOUNT_ID;
+use tokn_headers::{HeaderMap, HeaderValue};
 use reqwest::Method;
 use serde_json::Value;
 use std::sync::Arc;
@@ -47,7 +47,7 @@ impl CodexProvider {
         auth_kind: AuthKind::OAuthDeviceFlow,
         default_models: crate::catalogue::default_models_for(crate::ID_OPENAI),
         default_endpoints: crate::DEFAULT_ENDPOINTS_CODEX,
-        model_cache: Arc::new(llm_core::provider::ModelCache::default()),
+        model_cache: Arc::new(tokn_core::provider::ModelCache::default()),
       },
     })
   }
@@ -227,7 +227,7 @@ fn normalize_model_entry(entry: Value) -> Option<Value> {
 mod tests {
   use super::*;
   use crate::util::secret::Secret;
-  use llm_core::account::AccountTier;
+  use tokn_core::account::AccountTier;
 
   fn acct(access: Option<&str>) -> AccountConfig {
     AccountConfig {

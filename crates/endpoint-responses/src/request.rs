@@ -1,8 +1,8 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 
-pub use llm_endpoint_core::ToolChoice as ResponsesToolChoice;
-use llm_endpoint_core::{drain_into_extras, peel_lenient, take_optional, take_optional_default, take_required, Extras};
+pub use tokn_endpoint_core::ToolChoice as ResponsesToolChoice;
+use tokn_endpoint_core::{drain_into_extras, peel_lenient, take_optional, take_optional_default, take_required, Extras};
 
 use crate::item::InputItem;
 use crate::parameters::{ResponsesExtraParameters, ResponsesRequestParameters};

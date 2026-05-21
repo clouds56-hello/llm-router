@@ -3,10 +3,10 @@ use crate::api::AppState;
 use crate::pipeline::parse::RequestParser;
 use crate::provider::Endpoint;
 use bytes::Bytes;
-use llm_accounts::{AccountHandle, EndpointAcquire};
-use llm_config::RouteMode;
-use llm_core::pipeline::{ParsedRequest, RequestMeta};
-use llm_core::provider::TemplateVars;
+use tokn_accounts::{AccountHandle, EndpointAcquire};
+use tokn_config::RouteMode;
+use tokn_core::pipeline::{ParsedRequest, RequestMeta};
+use tokn_core::provider::TemplateVars;
 use serde_json::Value;
 use std::sync::Arc;
 use tracing::warn;
@@ -60,7 +60,7 @@ fn resolve_request(
       parsed
         .meta
         .inbound_headers
-        .get(llm_accounts::routing::RouteResolver::mode_header())
+        .get(tokn_accounts::routing::RouteResolver::mode_header())
         .map(|v| v.as_str()),
     )
     .map_err(|e| ApiError::bad_request(e.to_string()))?;
@@ -150,7 +150,7 @@ fn build_profile_headers(
 ) -> Option<reqwest::header::HeaderMap> {
   let persona = selected_persona(meta, account)?;
   crate::proxy::header_pipeline::build_headers(crate::proxy::header_pipeline::HeaderPipelineInput {
-    profiles: llm_config::profiles::Profiles::global(),
+    profiles: tokn_config::profiles::Profiles::global(),
     persona: persona.as_str(),
     provider_id: account.provider.info().id.as_str(),
     inbound,
@@ -193,7 +193,7 @@ fn default_persona(provider_id: &str) -> Option<&'static str> {
 fn account_extra_headers(headers: &std::collections::BTreeMap<String, String>) -> reqwest::header::HeaderMap {
   let mut out = reqwest::header::HeaderMap::new();
   for (name, value) in headers {
-    if llm_config::profiles::is_router_controlled(name) {
+    if tokn_config::profiles::is_router_controlled(name) {
       continue;
     }
     let Ok(name) = reqwest::header::HeaderName::from_bytes(name.as_bytes()) else {
@@ -231,8 +231,8 @@ pub fn dry_run_request(
   let (meta, body, account, _) = resolve_request(state, parsed, 0)?;
   let prepared = prepare_dry_run(meta, body, account, raw_body, content_encoding)
     .map_err(|e| ApiError::bad_gateway(e.to_string()))?;
-  let mut headers: llm_headers::HeaderMap = prepared.profile_headers.as_ref().map(|h| h.into()).unwrap_or_default();
-  let inbound_lh: llm_headers::HeaderMap = (&prepared.provider_headers).into();
+  let mut headers: tokn_headers::HeaderMap = prepared.profile_headers.as_ref().map(|h| h.into()).unwrap_or_default();
+  let inbound_lh: tokn_headers::HeaderMap = (&prepared.provider_headers).into();
   prepared
     .account
     .provider

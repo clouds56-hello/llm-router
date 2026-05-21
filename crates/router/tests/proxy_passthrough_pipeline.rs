@@ -19,18 +19,18 @@
 use axum::body::to_bytes;
 use axum::http::{Method, Request, StatusCode};
 use bytes::Bytes;
-use llm_config::RouteMode;
-use llm_core::account::{AccountTier, AuthType};
-use llm_core::event::EventBus;
-use llm_router::api::build_state;
-use llm_router::config::Config;
-use llm_router::proxy::passthrough_pipeline::{proxy_passthrough_via_pipeline_inner, proxy_switch_via_pipeline_inner};
-use llm_router::util::secret::Secret;
+use tokn_config::RouteMode;
+use tokn_core::account::{AccountTier, AuthType};
+use tokn_core::event::EventBus;
+use tokn_router::api::build_state;
+use tokn_router::config::Config;
+use tokn_router::proxy::passthrough_pipeline::{proxy_passthrough_via_pipeline_inner, proxy_switch_via_pipeline_inner};
+use tokn_router::util::secret::Secret;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-fn openai_account() -> llm_router::config::Account {
-  llm_router::config::Account {
+fn openai_account() -> tokn_router::config::Account {
+  tokn_router::config::Account {
     id: "openai-acct".into(),
     provider: "openai".into(),
     enabled: true,
@@ -57,8 +57,8 @@ fn openai_account() -> llm_router::config::Account {
 
 #[tokio::test]
 async fn proxy_passthrough_pipeline_forwards_request_and_preserves_client_auth() {
-  use llm_core::event::Event as CoreEvent;
-  use llm_core::request_event::{RecordEvent, RequestEventPayload};
+  use tokn_core::event::Event as CoreEvent;
+  use tokn_core::request_event::{RecordEvent, RequestEventPayload};
 
   // Mock TCP upstream — captures the request, returns a known JSON.
   let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -107,7 +107,7 @@ async fn proxy_passthrough_pipeline_forwards_request_and_preserves_client_auth()
     .uri("/v1/chat/completions")
     .header("content-type", "application/json")
     .header("authorization", "Bearer client-bearer-should-reach-upstream")
-    .header("x-llm-router-local-addr", "127.0.0.1:9999")
+    .header("x-tokn-router-local-addr", "127.0.0.1:9999")
     .body(())
     .unwrap();
   let (parts, ()) = req.into_parts();
@@ -152,8 +152,8 @@ async fn proxy_passthrough_pipeline_forwards_request_and_preserves_client_auth()
 
   // Router-owned headers are stripped.
   assert!(
-    !lower.contains("x-llm-router-local-addr"),
-    "x-llm-router-* headers must be stripped before upstream send, got:\n{raw_req_str}"
+    !lower.contains("x-tokn-router-local-addr"),
+    "x-tokn-router-* headers must be stripped before upstream send, got:\n{raw_req_str}"
   );
 
   // Upstream Host header is the resolved authority with the non-default
@@ -167,7 +167,7 @@ async fn proxy_passthrough_pipeline_forwards_request_and_preserves_client_auth()
   // we can assert ordering, content, and absence in one pass. The drain
   // stops as soon as we see `StageEvent::Completed` (the runner emits
   // it exactly once at the very end) or after a hard 2s budget.
-  let mut events: Vec<llm_core::request_event::RequestEvent> = Vec::new();
+  let mut events: Vec<tokn_core::request_event::RequestEvent> = Vec::new();
   let drain_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
   loop {
     let remaining = drain_deadline.saturating_duration_since(tokio::time::Instant::now());
@@ -181,7 +181,7 @@ async fn proxy_passthrough_pipeline_forwards_request_and_preserves_client_auth()
     let req = req.clone();
     let done = matches!(
       &req.payload,
-      RequestEventPayload::Stage(llm_core::request_event::StageEvent::Completed { .. })
+      RequestEventPayload::Stage(tokn_core::request_event::StageEvent::Completed { .. })
     );
     events.push(req);
     if done {
@@ -202,7 +202,7 @@ async fn proxy_passthrough_pipeline_forwards_request_and_preserves_client_auth()
   let debug_dump = || format!("event stream was:\n  {}", kinds.join("\n  "));
 
   // --- Stage stream: presence + ordering ---
-  use llm_core::request_event::StageEvent;
+  use tokn_core::request_event::StageEvent;
   let pos =
     |pred: &dyn Fn(&RequestEventPayload) -> bool| -> Option<usize> { events.iter().position(|e| pred(&e.payload)) };
 
@@ -239,7 +239,7 @@ async fn proxy_passthrough_pipeline_forwards_request_and_preserves_client_auth()
   if let RequestEventPayload::Stage(StageEvent::Started { endpoint }) = &events[p_started].payload {
     assert_eq!(
       *endpoint,
-      llm_core::request_event::EndpointLabel::Known(llm_core::provider::Endpoint::ChatCompletions)
+      tokn_core::request_event::EndpointLabel::Known(tokn_core::provider::Endpoint::ChatCompletions)
     );
   }
 
@@ -320,8 +320,8 @@ async fn proxy_passthrough_pipeline_forwards_request_and_preserves_client_auth()
     assert_eq!(host_hdr, expected_authority, "wire-truth Host header");
     // Router-owned headers stripped before send.
     assert!(
-      headers.get("x-llm-router-local-addr").is_none(),
-      "wire-truth must not include x-llm-router-* headers"
+      headers.get("x-tokn-router-local-addr").is_none(),
+      "wire-truth must not include x-tokn-router-* headers"
     );
   } else {
     unreachable!()
@@ -414,8 +414,8 @@ async fn proxy_passthrough_pipeline_forwards_request_and_preserves_client_auth()
 /// → no `latency_ms` write, no `clear_request`).
 #[tokio::test]
 async fn proxy_passthrough_pipeline_streams_emit_bodies_and_completed() {
-  use llm_core::event::Event as CoreEvent;
-  use llm_core::request_event::{RecordEvent, RequestEventPayload, StageEvent};
+  use tokn_core::event::Event as CoreEvent;
+  use tokn_core::request_event::{RecordEvent, RequestEventPayload, StageEvent};
 
   // Mock TCP upstream that emits a 3-frame SSE response.
   let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -490,7 +490,7 @@ async fn proxy_passthrough_pipeline_streams_emit_bodies_and_completed() {
   server.await.unwrap();
 
   // Drain pipeline events until we see Completed (or hard timeout).
-  let mut collected: Vec<llm_core::request_event::RequestEvent> = Vec::new();
+  let mut collected: Vec<tokn_core::request_event::RequestEvent> = Vec::new();
   let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
   loop {
     let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());

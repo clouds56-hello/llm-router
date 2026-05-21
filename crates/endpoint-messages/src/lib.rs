@@ -19,7 +19,7 @@ pub use request::{MessagesRequest, MessagesToolChoice, MessagesToolDef, SystemPr
 pub use response::MessagesResponse;
 pub use usage::MessagesUsage;
 
-use llm_endpoint_core::{Endpoint, EndpointEvent, EndpointItem, EndpointRequest, EndpointResponse};
+use tokn_endpoint_core::{Endpoint, EndpointEvent, EndpointItem, EndpointRequest, EndpointResponse};
 
 impl EndpointRequest for MessagesRequest {
   const ENDPOINT: Endpoint = Endpoint::Messages;

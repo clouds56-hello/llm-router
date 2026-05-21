@@ -1,7 +1,7 @@
 use crate::util::secret::Secret;
 use crate::{HeaderPatchCtx, Result};
-use llm_headers::keys::{ACCEPT, AUTHORIZATION, CONTENT_ENCODING, CONTENT_TYPE};
-use llm_headers::{HeaderMap, HeaderValue};
+use tokn_headers::keys::{ACCEPT, AUTHORIZATION, CONTENT_ENCODING, CONTENT_TYPE};
+use tokn_headers::{HeaderMap, HeaderValue};
 
 pub enum Credential {
   ApiKey(Secret<String>),

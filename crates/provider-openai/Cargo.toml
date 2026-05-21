@@ -1,5 +1,5 @@
 [package]
-name = "llm-provider-openai"
+name = "tokn-provider-openai"
 version.workspace = true
 edition.workspace = true
 description = "OpenAI and Codex provider integration for tokn"
@@ -9,10 +9,10 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
-llm-core = { workspace = true }
-llm-auth = { workspace = true }
-llm-catalogue = { workspace = true }
-llm-headers = { workspace = true }
+tokn-core = { workspace = true }
+tokn-auth = { workspace = true }
+tokn-catalogue = { workspace = true }
+tokn-headers = { workspace = true }
 async-trait = { workspace = true }
 base64 = "0.22"
 bytes = { workspace = true }
@@ -26,4 +26,4 @@ toml = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
-llm-mock-server = { workspace = true }
+tokn-mock-server = { workspace = true }

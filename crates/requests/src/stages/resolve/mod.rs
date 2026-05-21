@@ -4,8 +4,8 @@
 //! * [`stage`] — the generic [`PoolResolve`] stage and the
 //!   [`AccountSelector`] trait it consults.
 //! * [`pool`] — [`PoolAccountSelector`], the production [`AccountSelector`]
-//!   implementation backed by [`llm_accounts::AccountPool`] +
-//!   [`llm_accounts::RouteResolver`].
+//!   implementation backed by [`tokn_accounts::AccountPool`] +
+//!   [`tokn_accounts::RouteResolver`].
 //! * [`proxy`] — [`ProxyResolve`], the no-account variant used by the
 //!   MITM proxy passthrough pipeline. Reads `proxy.host` from
 //!   `PipelineCtx::config` and emits a `Resolved` with a stub

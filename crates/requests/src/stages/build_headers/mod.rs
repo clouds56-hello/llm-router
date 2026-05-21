@@ -4,7 +4,7 @@
 //!   for the `without_send` profile when callers don't care about outbound
 //!   headers.
 //! - [`PersonaBuildHeaders`] composes the real outbound `HeaderMap` from the
-//!   inbound request via the [`llm_headers`] persona + overlay registry.
+//!   inbound request via the [`tokn_headers`] persona + overlay registry.
 
 pub mod passthrough;
 pub mod persona;

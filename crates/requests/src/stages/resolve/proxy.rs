@@ -17,17 +17,17 @@
 //!   the outbound request directly from the bag.
 //!
 //! [`RunConfig`]: crate::RunConfig
-//! [`AccountHandle`]: llm_accounts::AccountHandle
+//! [`AccountHandle`]: tokn_accounts::AccountHandle
 
 use crate::event::Stage;
 use crate::pipeline::ctx::PipelineCtx;
 use crate::pipeline::error::{PipelineError, RequestsError};
 use crate::pipeline::stages::{Extracted, ResolveStage, Resolved};
 use async_trait::async_trait;
-use llm_accounts::{AccountHandle, AccountPool, EndpointAcquire, RouteResolution, RouteSelector};
-use llm_config::RouteMode;
-use llm_core::account::AccountConfig;
-use llm_core::provider::{AuthKind, ModelCache, Provider, ProviderInfo};
+use tokn_accounts::{AccountHandle, AccountPool, EndpointAcquire, RouteResolution, RouteSelector};
+use tokn_config::RouteMode;
+use tokn_core::account::AccountConfig;
+use tokn_core::provider::{AuthKind, ModelCache, Provider, ProviderInfo};
 use serde_json::Value;
 use smol_str::SmolStr;
 use std::sync::Arc;
@@ -192,14 +192,14 @@ impl Provider for ProxyStubProvider {
     &self.info
   }
 
-  async fn list_models(&self, _http: &reqwest::Client) -> llm_core::provider::error::Result<Value> {
+  async fn list_models(&self, _http: &reqwest::Client) -> tokn_core::provider::error::Result<Value> {
     Ok(Value::Null)
   }
 
   async fn chat(
     &self,
-    _ctx: llm_core::provider::RequestCtx<'_>,
-  ) -> llm_core::provider::error::Result<reqwest::Response> {
+    _ctx: tokn_core::provider::RequestCtx<'_>,
+  ) -> tokn_core::provider::error::Result<reqwest::Response> {
     unreachable!("ProxyStubProvider::chat called; proxy pipeline must use ProxySend, not DefaultSend")
   }
 }
@@ -211,8 +211,8 @@ mod tests {
   use crate::pipeline::config::RunConfig;
   use crate::pipeline::stages::Extracted;
   use bytes::Bytes;
-  use llm_core::provider::Endpoint;
-  use llm_headers::HeaderMap;
+  use tokn_core::provider::Endpoint;
+  use tokn_headers::HeaderMap;
 
   fn fake_extracted() -> Extracted {
     Extracted {
@@ -286,9 +286,9 @@ mod tests {
       label: None,
       base_url: None,
       headers: Default::default(),
-      auth_type: Some(llm_core::account::AuthType::Bearer),
+      auth_type: Some(tokn_core::account::AuthType::Bearer),
       username: None,
-      api_key: Some(llm_core::account::Secret::new("sk-test".to_string())),
+      api_key: Some(tokn_core::account::Secret::new("sk-test".to_string())),
       api_key_expires_at: None,
       access_token: None,
       access_token_expires_at: None,
@@ -300,10 +300,10 @@ mod tests {
       last_refresh: None,
       settings: Default::default(),
     };
-    let mut router_cfg = llm_config::Config::default();
+    let mut router_cfg = tokn_config::Config::default();
     router_cfg.pool.failure_cooldown_secs = 0;
-    let pool = llm_accounts::AccountPool::from_accounts_with(&[account], &router_cfg, |cfg| {
-      llm_accounts::registry::build_for_account(cfg)
+    let pool = tokn_accounts::AccountPool::from_accounts_with(&[account], &router_cfg, |cfg| {
+      tokn_accounts::registry::build_for_account(cfg)
     })
     .unwrap();
 

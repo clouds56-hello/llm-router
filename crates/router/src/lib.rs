@@ -4,14 +4,14 @@ pub mod api;
 pub mod pipeline;
 pub mod proxy;
 
-pub use llm_accounts as accounts;
-pub use llm_config as config;
-pub use llm_config::profiles;
-pub use llm_convert as convert;
-pub use llm_core::{db, provider, util};
+pub use tokn_accounts as accounts;
+pub use tokn_config as config;
+pub use tokn_config::profiles;
+pub use tokn_convert as convert;
+pub use tokn_core::{db, provider, util};
 
 /// Read-only view of the router's intercept-host allow-list. Exposed so the
-/// `llm-accounts` registry coverage test (now living in
+/// `tokn-accounts` registry coverage test (now living in
 /// `crates/router/tests/intercept_hosts_coverage.rs`) can verify that every
 /// descriptor host is intercepted without making the constant itself `pub`.
 pub fn proxy_intercept_hosts() -> &'static [&'static str] {

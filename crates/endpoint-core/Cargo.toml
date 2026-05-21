@@ -1,5 +1,5 @@
 [package]
-name = "llm-endpoint-core"
+name = "tokn-endpoint-core"
 version.workspace = true
 edition.workspace = true
 description = "Shared endpoint primitives and traits used by tokn endpoint crates"

@@ -1,21 +1,21 @@
 //! [`ProviderAuth`] impl for github-copilot.
 //!
 //! Wraps the existing `oauth`, `token`, and `user` modules in the
-//! provider-agnostic contract defined by `llm-core::auth`. Holds no state;
+//! provider-agnostic contract defined by `tokn-core::auth`. Holds no state;
 //! exposed via [`provider_auth()`].
 
 use crate::config::CopilotHeaders;
 use async_trait::async_trait;
-use llm_auth::{
+use tokn_auth::{
   default_import_from, AuthError, CredentialResult, CredentialSource, DeviceCodeHandle, DeviceFlowOutcome,
   ProviderAuth, QuotaSnapshot, RefreshOutcome, Result, VerifyOutcome,
 };
-use llm_core::account::AccountConfig;
+use tokn_core::account::AccountConfig;
 
 /// Singleton impl. Zero-sized; safe to hand out as `&'static`.
 pub struct CopilotAuth;
 
-/// Static accessor used by `llm-auth`'s dispatch table.
+/// Static accessor used by `tokn-auth`'s dispatch table.
 pub fn provider_auth() -> &'static dyn ProviderAuth {
   &CopilotAuth
 }
@@ -68,7 +68,7 @@ impl ProviderAuth for CopilotAuth {
       .await
       .map_err(|e| AuthError::Upstream(e.to_string()))?;
     tracing::info!(
-      target: "llm_auth::login",
+      target: "tokn_auth::login",
       verification_uri = %dc.verification_uri,
       user_code = %dc.user_code,
       expires_in = dc.expires_in,
@@ -164,14 +164,14 @@ impl ProviderAuth for CopilotAuth {
     // other metered bucket > preferred unmetered (rendered as unlimited).
     let snaps = &info.quota_snapshots;
     let preferred = ["premium_interactions", "chat", "completions"];
-    let metered: Option<llm_auth::MeteredBucket> = preferred
+    let metered: Option<tokn_auth::MeteredBucket> = preferred
       .iter()
       .find_map(|k| {
         snaps.get(*k).and_then(|s| {
           if s.unlimited {
             None
           } else {
-            Some(llm_auth::MeteredBucket {
+            Some(tokn_auth::MeteredBucket {
               label: k.to_string(),
               remaining: s.remaining.unwrap_or(0),
               entitlement: s.entitlement,
@@ -182,7 +182,7 @@ impl ProviderAuth for CopilotAuth {
       .or_else(|| {
         snaps.iter().find_map(|(k, s)| {
           if !s.unlimited && s.entitlement.is_some() {
-            Some(llm_auth::MeteredBucket {
+            Some(tokn_auth::MeteredBucket {
               label: k.clone(),
               remaining: s.remaining.unwrap_or(0),
               entitlement: s.entitlement,
@@ -196,7 +196,7 @@ impl ProviderAuth for CopilotAuth {
         preferred.iter().find_map(|k| {
           snaps.get(*k).and_then(|s| {
             if s.unlimited {
-              Some(llm_auth::MeteredBucket {
+              Some(tokn_auth::MeteredBucket {
                 label: k.to_string(),
                 remaining: 0,
                 entitlement: None,
@@ -245,7 +245,7 @@ async fn fetch_github_username(client: &reqwest::Client, gh_token: &str) -> Resu
     .get("https://api.github.com/user")
     .header("authorization", format!("token {gh_token}"))
     .header("accept", "application/json")
-    .header("user-agent", llm_core::util::version::llm_router_user_agent())
+    .header("user-agent", tokn_core::util::version::tokn_router_user_agent())
     .send()
     .await
     .map_err(|e| AuthError::Network(e.to_string()))?

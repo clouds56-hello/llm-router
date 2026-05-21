@@ -1,7 +1,7 @@
 //! Catalogue source resolution.
 //!
 //! At process start we pick exactly one source and freeze it: either the
-//! disk cache (if a previous `llm-router update` left one) or the snapshot
+//! disk cache (if a previous `tokn-router update` left one) or the snapshot
 //! embedded at build time. There is no auto-refresh — the explicit `update`
 //! subcommand is the only way to grow the cached copy.
 
@@ -50,7 +50,7 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 pub enum Source {
   /// Compile-time `include_bytes!` of `models.dev/api.json`.
   Embedded,
-  /// On-disk JSON, written by `llm-router update`.
+  /// On-disk JSON, written by `tokn-router update`.
   DiskCache(PathBuf),
 }
 
@@ -61,14 +61,14 @@ static GLOBAL: OnceLock<(Catalogue, Source)> = OnceLock::new();
 
 /// Path of the on-disk catalogue cache, if we can determine an XDG cache dir.
 pub fn cache_path() -> Option<PathBuf> {
-  llm_core::util::paths::cache_dir().map(|dir| dir.join("catalogue.json"))
+  tokn_core::util::paths::cache_dir().map(|dir| dir.join("catalogue.json"))
 }
 
 /// Borrow the global catalogue, loading it on first call.
 ///
 /// Lookup order:
 ///   1. On-disk cache at [`cache_path`] — the result of a successful
-///      `llm-router update`.
+///      `tokn-router update`.
 ///   2. The embedded snapshot — always present, always parses.
 ///
 /// If the disk cache exists but fails to parse we log a warning and fall
@@ -122,7 +122,7 @@ fn parse_embedded() -> Catalogue {
   serde_json::from_slice(EMBEDDED).expect("embedded models.dev snapshot must parse — fix build.rs")
 }
 
-/// Outcome of a successful `llm-router update` run.
+/// Outcome of a successful `tokn-router update` run.
 #[derive(Debug)]
 pub struct UpdateReport {
   pub providers: usize,

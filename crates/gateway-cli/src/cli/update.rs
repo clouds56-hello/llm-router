@@ -1,4 +1,4 @@
-//! `llm-router update` — refresh the on-disk models.dev catalogue cache.
+//! `tokn-router update` — refresh the on-disk models.dev catalogue cache.
 //!
 //! The cache (when present) is preferred over the snapshot embedded at
 //! build time. Without this command the binary still works — it just runs
@@ -8,7 +8,7 @@ use anyhow::Result;
 use clap::Args;
 use std::time::Duration;
 
-use llm_catalogue::loader::{self, Source};
+use tokn_catalogue::loader::{self, Source};
 
 const DEFAULT_URL: &str = "https://models.dev/api.json";
 
@@ -35,7 +35,7 @@ pub async fn run(args: UpdateArgs) -> Result<()> {
 
   let http = reqwest::Client::builder()
     .timeout(Duration::from_secs(args.timeout))
-    .user_agent(llm_core::util::version::llm_router_user_agent())
+    .user_agent(tokn_core::util::version::tokn_router_user_agent())
     .build()?;
 
   println!("fetching {} ...", args.url);
@@ -70,7 +70,7 @@ fn print_status() -> Result<()> {
             println!("cache age    : {dur}");
           }
         }
-        Err(_) => println!("cache size   : (no file — run `llm-router update`)"),
+        Err(_) => println!("cache size   : (no file — run `tokn-router update`)"),
       }
     }
     None => println!("cache path   : (no XDG cache dir resolvable)"),

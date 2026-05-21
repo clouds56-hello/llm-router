@@ -1,13 +1,13 @@
 //! Provider-id → [`ProviderAuth`] dispatch.
 //!
 //! Both the dispatch table and the list of known providers are derived
-//! from the [`llm_router::accounts::registry::Registry`] descriptor list,
+//! from the [`tokn_router::accounts::registry::Registry`] descriptor list,
 //! which now carries `build_auth: Option<fn() -> &'static dyn ProviderAuth>`
-//! on every [`llm_auth::ProviderDescriptor`]. Adding a new provider only
+//! on every [`tokn_auth::ProviderDescriptor`]. Adding a new provider only
 //! requires registering its descriptor; this module needs no edits.
 
-use llm_auth::ProviderAuth;
-use llm_router::accounts::registry::Registry;
+use tokn_auth::ProviderAuth;
+use tokn_router::accounts::registry::Registry;
 use std::sync::OnceLock;
 
 fn registry() -> &'static Registry {

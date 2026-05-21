@@ -9,7 +9,7 @@ pub mod loader;
 pub mod mapping;
 pub mod schema;
 
-use llm_core::provider::ModelInfo;
+use tokn_core::provider::ModelInfo;
 
 /// Build our internal model list for a given models.dev provider id.
 ///

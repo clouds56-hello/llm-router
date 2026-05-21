@@ -1,15 +1,15 @@
-//! Derive macros for `llm-endpoint-core`.
+//! Derive macros for `tokn-endpoint-core`.
 //!
 //! Currently provides [`LenientFields`], which lists a struct's
 //! JSON field names (honouring `#[serde(rename = "...")]`) at compile
-//! time so the lenient-deserialize helpers in `llm-endpoint-core` know
+//! time so the lenient-deserialize helpers in `tokn-endpoint-core` know
 //! which keys belong to which parameters substruct.
 
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{parse_macro_input, Data, DeriveInput, Fields, Lit, Meta};
 
-/// Derive `llm_endpoint_core::LenientFields` for a struct with named
+/// Derive `tokn_endpoint_core::LenientFields` for a struct with named
 /// fields. Each `pub` (or otherwise) field contributes its JSON key
 /// name to the emitted `FIELDS` constant, taking
 /// `#[serde(rename = "...")]` into account.
@@ -85,7 +85,7 @@ pub fn derive_lenient_fields(input: TokenStream) -> TokenStream {
   let lit_keys = keys.iter().map(|k| quote! { #k });
 
   let expanded = quote! {
-    impl ::llm_endpoint_core::LenientFields for #name {
+    impl ::tokn_endpoint_core::LenientFields for #name {
       const FIELDS: &'static [&'static str] = &[ #( #lit_keys ),* ];
     }
   };

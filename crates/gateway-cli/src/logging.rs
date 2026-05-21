@@ -11,7 +11,7 @@
 //! - `target = both` *(default)*: stderr + rotating file
 //!
 //! File output uses [`tracing_appender::rolling::daily`] with names like
-//! `llm-router.log.2026-04-28`. The returned [`Guard`] must outlive the
+//! `tokn-router.log.2026-04-28`. The returned [`Guard`] must outlive the
 //! process-wide subscriber; drop it during shutdown to flush.
 
 use crate::config::{LogFormat, LogTarget, LoggingConfig};
@@ -22,7 +22,7 @@ use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, Env
 
 /// Determines the default log filter applied when neither env nor config
 /// provide one — also lets read-only CLI subcommands suppress info-level
-/// noise from `llm_router`.
+/// noise from `tokn_router`.
 #[derive(Copy, Clone, Debug)]
 pub enum RunMode {
   /// Long-running server process: full info-level logging.
@@ -37,9 +37,9 @@ pub enum RunMode {
 impl RunMode {
   fn default_directive(self) -> &'static str {
     match self {
-      RunMode::Server => "info,llm_router=info",
-      RunMode::ReadOnlyCli => "warn,llm_router=warn",
-      RunMode::MutatingCli => "warn,llm_router=info",
+      RunMode::Server => "info,tokn_router=info",
+      RunMode::ReadOnlyCli => "warn,tokn_router=warn",
+      RunMode::MutatingCli => "warn,tokn_router=info",
     }
   }
 }
@@ -66,7 +66,7 @@ pub fn init(cfg: &LoggingConfig, mode: RunMode) -> Guard {
     LogTarget::File | LogTarget::Both => match resolve_logs_dir(cfg) {
       Ok(dir) => match std::fs::create_dir_all(&dir) {
         Ok(()) => {
-          let appender = tracing_appender::rolling::daily(&dir, "llm-router.log");
+          let appender = tracing_appender::rolling::daily(&dir, "tokn-router.log");
           let (nb, g) = tracing_appender::non_blocking(appender);
           (Some(make_layer(cfg, nb, false)), Some(g))
         }
@@ -98,7 +98,7 @@ pub fn init(cfg: &LoggingConfig, mode: RunMode) -> Guard {
 /// Minimal stderr-only subscriber for early-startup diagnostics (before
 /// the config is loaded). Honors `RUST_LOG`; never panics.
 pub fn init_basic() {
-  let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,llm_router=info"));
+  let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,tokn_router=info"));
   let _ = tracing_subscriber::fmt()
     .with_writer(std::io::stderr)
     .with_env_filter(filter)
@@ -227,30 +227,30 @@ mod tests {
     let mut cfg = LoggingConfig::default();
 
     // 1. RUST_LOG wins.
-    std::env::set_var("RUST_LOG", "trace,llm_router=trace");
-    cfg.level = "warn,llm_router=warn".into();
+    std::env::set_var("RUST_LOG", "trace,tokn_router=trace");
+    cfg.level = "warn,tokn_router=warn".into();
     let f = build_filter(&cfg, RunMode::Server);
     assert!(format!("{f}").contains("trace"), "env should win: {f}");
 
     // 2. Config level wins over RunMode default when env is unset.
     std::env::remove_var("RUST_LOG");
-    cfg.level = "warn,llm_router=debug".into();
+    cfg.level = "warn,tokn_router=debug".into();
     let f = build_filter(&cfg, RunMode::Server);
     let s = format!("{f}");
-    assert!(s.contains("llm_router=debug"), "config should win: {s}");
+    assert!(s.contains("tokn_router=debug"), "config should win: {s}");
 
     // 3. RunMode default applies when both env and config are empty/unset.
     cfg.level = String::new();
     let f = build_filter(&cfg, RunMode::ReadOnlyCli);
     let s = format!("{f}");
-    assert!(s.contains("llm_router=warn"), "run-mode default: {s}");
+    assert!(s.contains("tokn_router=warn"), "run-mode default: {s}");
 
     // 4. Malformed env directive falls through to config.
     std::env::set_var("RUST_LOG", "this is not a filter ===");
-    cfg.level = "info,llm_router=info".into();
+    cfg.level = "info,tokn_router=info".into();
     let f = build_filter(&cfg, RunMode::Server);
     let s = format!("{f}");
-    assert!(s.contains("llm_router=info"), "fallback on bad env: {s}");
+    assert!(s.contains("tokn_router=info"), "fallback on bad env: {s}");
 
     std::env::remove_var("RUST_LOG");
   }

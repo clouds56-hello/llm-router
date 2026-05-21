@@ -42,8 +42,8 @@ mod tests {
   use super::*;
   use crate::event::EventBus;
   use bytes::Bytes;
-  use llm_core::provider::Endpoint;
-  use llm_headers::HeaderMap;
+  use tokn_core::provider::Endpoint;
+  use tokn_headers::HeaderMap;
   use serde_json::json;
   use smol_str::SmolStr;
   use std::sync::Arc;

@@ -8,8 +8,8 @@
 //! Run with `UPDATE_GOLDEN=1` to overwrite `expected.sse` with the current
 //! (normalized) actual output. Useful for bootstrapping a new case.
 
-use llm_convert::provider::Endpoint;
-use llm_convert::sse::{EndpointTranslator, EventTransformer, SseEvent};
+use tokn_convert::provider::Endpoint;
+use tokn_convert::sse::{EndpointTranslator, EventTransformer, SseEvent};
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};

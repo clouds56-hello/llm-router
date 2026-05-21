@@ -5,7 +5,7 @@
 //! categories stripped:
 //!
 //! 1. **Router-owned** — anything matching `is_router_owned_header` (i.e.
-//!    `x-llm-router-*`, `x-route-mode`, `x-behave-as`). These are internal
+//!    `x-tokn-router-*`, `x-route-mode`, `x-behave-as`). These are internal
 //!    transport metadata that must never leave the router.
 //! 2. **Hop-by-hop** — `host`, `connection`, `proxy-authorization`,
 //!    `proxy-connection`, `te`, `trailer`, `transfer-encoding`, `upgrade`,
@@ -22,7 +22,7 @@ use crate::pipeline::ctx::PipelineCtx;
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::stages::{BuildHeadersStage, BuiltHeaders, Extracted, Resolved};
 use async_trait::async_trait;
-use llm_headers::{HeaderMap, TemplateVars};
+use tokn_headers::{HeaderMap, TemplateVars};
 
 /// Hop-by-hop header names (lowercase) that must not be forwarded
 /// verbatim to the upstream. The transport layer sets its own value for
@@ -40,11 +40,11 @@ const HOP_BY_HOP_HEADERS: &[&str] = &[
 ];
 
 /// Router-owned header names (lowercase) that must never leak upstream.
-/// Mirrors `llm_router::api::is_router_owned_header` — duplicated here
-/// to keep `llm-requests` free of any dependency on the legacy router
+/// Mirrors `tokn_router::api::is_router_owned_header` — duplicated here
+/// to keep `tokn-requests` free of any dependency on the legacy router
 /// crate.
 fn is_router_owned(name: &str) -> bool {
-  name.starts_with("x-llm-router-") || name == "x-route-mode" || name == "x-behave-as"
+  name.starts_with("x-tokn-router-") || name == "x-route-mode" || name == "x-behave-as"
 }
 
 #[derive(Default)]
@@ -120,8 +120,8 @@ mod tests {
   use crate::event::EventBus;
   use crate::pipeline::ctx::PipelineCtx;
   use bytes::Bytes;
-  use llm_core::provider::Endpoint;
-  use llm_headers::{HeaderName, HeaderValue};
+  use tokn_core::provider::Endpoint;
+  use tokn_headers::{HeaderName, HeaderValue};
   use serde_json::json;
   use smol_str::SmolStr;
   use std::sync::Arc;
@@ -176,7 +176,7 @@ mod tests {
       ("accept", "application/json"),
       ("host", "api.openai.com"),
       ("connection", "keep-alive"),
-      ("x-llm-router-local-addr", "127.0.0.1:8080"),
+      ("x-tokn-router-local-addr", "127.0.0.1:8080"),
       ("x-route-mode", "passthrough"),
       ("x-behave-as", "codex"),
       ("x-custom-thing", "hello"),
@@ -192,7 +192,7 @@ mod tests {
     assert!(!out.headers.contains_key("host"), "host stripped");
     assert!(!out.headers.contains_key("connection"), "connection stripped");
     assert!(
-      !out.headers.contains_key("x-llm-router-local-addr"),
+      !out.headers.contains_key("x-tokn-router-local-addr"),
       "router-owned stripped"
     );
     assert!(!out.headers.contains_key("x-route-mode"));
@@ -215,7 +215,7 @@ mod tests {
       ("host", "api.example.com:8443"),
       ("connection", "keep-alive"),
       ("authorization", "Bearer tok"),
-      ("x-llm-router-local-addr", "127.0.0.1:8080"),
+      ("x-tokn-router-local-addr", "127.0.0.1:8080"),
     ]);
     let out = PassthroughBuildHeaders::preserve_host()
       .build_headers(&ctx(), &extracted(h), &resolved("openai"))
@@ -231,7 +231,7 @@ mod tests {
       "other hop-by-hop still stripped"
     );
     assert!(
-      !out.headers.contains_key("x-llm-router-local-addr"),
+      !out.headers.contains_key("x-tokn-router-local-addr"),
       "router-owned still stripped"
     );
     assert!(out.headers.contains_key("authorization"));

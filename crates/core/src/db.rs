@@ -57,9 +57,9 @@ pub struct HttpSnapshot {
   pub method: Option<String>,
   /// Response status (req side has no status).
   pub status: Option<u16>,
-  pub req_headers: llm_headers::HeaderMap,
+  pub req_headers: tokn_headers::HeaderMap,
   pub req_body: Bytes,
-  pub resp_headers: llm_headers::HeaderMap,
+  pub resp_headers: tokn_headers::HeaderMap,
   pub resp_body: Bytes,
 }
 

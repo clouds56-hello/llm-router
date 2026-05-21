@@ -13,12 +13,12 @@ use http::header::{HeaderValue, CONNECTION, HOST, UPGRADE};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper_util::rt::TokioIo;
-use llm_accounts::registry::Registry;
-use llm_accounts::routing::{route_mode_as_str, RouteResolver};
-use llm_auth::descriptor::RewriteTarget;
-use llm_config::RouteMode;
-use llm_core::event::Event as CoreEvent;
-use llm_core::request_event::{EndpointLabel, RecordEvent, RequestEvent, RequestEventPayload, Stage, StageEvent};
+use tokn_accounts::registry::Registry;
+use tokn_accounts::routing::{route_mode_as_str, RouteResolver};
+use tokn_auth::descriptor::RewriteTarget;
+use tokn_config::RouteMode;
+use tokn_core::event::Event as CoreEvent;
+use tokn_core::request_event::{EndpointLabel, RecordEvent, RequestEvent, RequestEventPayload, Stage, StageEvent};
 use smol_str::SmolStr;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -298,7 +298,7 @@ async fn route_intercepted_request(
     HOST,
     HeaderValue::from_str(&host).unwrap_or_else(|_| HeaderValue::from_static("localhost")),
   );
-  builder = builder.header("x-llm-router-local-addr", local.to_string());
+  builder = builder.header("x-tokn-router-local-addr", local.to_string());
   let body = Body::new(body);
   let request = builder.body(body).unwrap_or_else(|_| Request::new(Body::empty()));
 
@@ -318,7 +318,7 @@ fn emit_router_not_implemented(
   local: SocketAddr,
   mode: Option<RouteMode>,
 ) {
-  let ts = llm_core::util::now_unix_ms();
+  let ts = tokn_core::util::now_unix_ms();
   let path_and_query = req
     .uri()
     .path_and_query()
@@ -330,7 +330,7 @@ fn emit_router_not_implemented(
   let request_id = SmolStr::new(&hx.request_id);
   let api_err = ApiError::not_implemented(path.clone(), host.to_string());
   let response_body = serde_json::from_slice(&api_err.body_bytes()).unwrap_or(serde_json::Value::Null);
-  let mut response_headers = llm_headers::HeaderMap::new();
+  let mut response_headers = tokn_headers::HeaderMap::new();
   response_headers.insert("content-type", "application/json");
 
   state.events.emit(CoreEvent::Requests(RequestEvent {
@@ -370,7 +370,7 @@ fn emit_router_not_implemented(
     attempt: 0,
     ts,
     payload: RequestEventPayload::Stage(StageEvent::ConvertResponse(
-      llm_core::request_event::ConvertedResponseSummary {
+      tokn_core::request_event::ConvertedResponseSummary {
         status: api_err.status().as_u16(),
         headers: response_headers,
         body: Some(std::sync::Arc::new(response_body)),

@@ -9,7 +9,7 @@ pub use request::{dry_run_request, DryRunEndpoint, DryRunOutput};
 mod tests {
   use super::*;
   use axum::http::{HeaderMap, HeaderValue};
-  use llm_provider_zai::Endpoint;
+  use tokn_provider_zai::Endpoint;
   use serde_json::json;
 
   #[test]

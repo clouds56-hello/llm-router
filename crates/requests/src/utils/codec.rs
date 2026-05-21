@@ -2,7 +2,7 @@
 //!
 //! Ported from `crates/router/src/api/codec.rs`. The legacy version was
 //! coupled to `axum::http::HeaderMap` and the gateway `ApiError`; this
-//! port reuses `llm_headers::HeaderMap` + `llm_headers::HeaderValue` and
+//! port reuses `tokn_headers::HeaderMap` + `tokn_headers::HeaderValue` and
 //! exposes a self-contained [`CodecError`] so requests stages stay free
 //! of HTTP-server framework imports.
 //!
@@ -25,13 +25,13 @@ use bytes::Bytes;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
-use llm_headers::keys::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH};
-use llm_headers::{HeaderMap, HeaderValue};
+use tokn_headers::keys::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH};
+use tokn_headers::{HeaderMap, HeaderValue};
 use serde_json::Value;
 use snafu::Snafu;
 use std::io::{Read, Write};
 
-/// `Vary` is not currently exported from `llm_headers::keys`; keep a
+/// `Vary` is not currently exported from `tokn_headers::keys`; keep a
 /// module-local constant so we stay aligned with the legacy router
 /// behaviour without taking a churny dependency on the headers crate.
 const VARY_HEADER: &str = "vary";

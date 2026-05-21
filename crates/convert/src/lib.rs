@@ -1,4 +1,4 @@
-pub use llm_core::provider;
+pub use tokn_core::provider;
 
 pub mod chat;
 pub mod error;

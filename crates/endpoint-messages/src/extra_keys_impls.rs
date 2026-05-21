@@ -2,7 +2,7 @@
 
 #![cfg(debug_assertions)]
 
-use llm_endpoint_core::{join_path, push_extras, ExtraKeys};
+use tokn_endpoint_core::{join_path, push_extras, ExtraKeys};
 
 use crate::content::{ContentBlock, ContentBlockDelta};
 use crate::event::MessagesEvent;

@@ -1,5 +1,5 @@
-//! Adapter helpers for materializing a [`llm_requests::ConvertedResponse`]
-//! into an axum `Response` for the router's default `llm-requests` path.
+//! Adapter helpers for materializing a [`tokn_requests::ConvertedResponse`]
+//! into an axum `Response` for the router's default `tokn-requests` path.
 //!
 //! The router rebuilds response headers instead of forwarding upstream
 //! headers verbatim. A fresh header map is built containing only what the
@@ -13,7 +13,7 @@
 use axum::body::Body;
 use axum::http::{header, HeaderMap, HeaderValue, Response, StatusCode};
 use axum::response::IntoResponse;
-use llm_requests::pipeline::stages::{ConvertedBody, ConvertedResponse};
+use tokn_requests::pipeline::stages::{ConvertedBody, ConvertedResponse};
 
 /// Convert a [`ConvertedResponse`] into an axum response.
 ///

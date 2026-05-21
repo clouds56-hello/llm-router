@@ -8,7 +8,7 @@
 //! - **Responses**:        `{ "type": "function", "name", "description", "parameters", "strict"? }`
 //! - **Anthropic Messages**: `{ "name", "description", "input_schema" }`
 //!
-//! When llm-router translates a request between endpoints (e.g. a client hits
+//! When tokn-router translates a request between endpoints (e.g. a client hits
 //! `/v1/responses` but the selected account only supports
 //! `/chat/completions`), tool entries that pass through unchanged confuse the
 //! upstream and produce errors like

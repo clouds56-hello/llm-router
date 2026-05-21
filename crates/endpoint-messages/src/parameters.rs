@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use llm_endpoint_macros::LenientFields;
+use tokn_endpoint_macros::LenientFields;
 
 use crate::request::MessagesToolChoice;
 

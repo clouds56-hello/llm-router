@@ -6,7 +6,7 @@
 //! 1. **Model rewrite** — overwrite `body.model` with the upstream model
 //!    selected by Resolve.
 //! 2. **Cross-endpoint convert** — when the inbound endpoint differs
-//!    from the account's upstream endpoint, run `llm_convert` to
+//!    from the account's upstream endpoint, run `tokn_convert` to
 //!    translate the JSON shape (e.g. Responses → Chat). Pass-through is
 //!    free when both endpoints match.
 //! 3. **Provider [`InputTransformer`]** — give the provider a final
@@ -44,7 +44,7 @@ impl ConvertRequestStage for DefaultConvertRequest {
     let mut upstream_body = rewrite_model(&extracted.body_json, resolved.upstream_model.as_str());
 
     if resolved.upstream_endpoint != ctx.endpoint {
-      upstream_body = llm_convert::convert_request(ctx.endpoint, resolved.upstream_endpoint, &upstream_body)
+      upstream_body = tokn_convert::convert_request(ctx.endpoint, resolved.upstream_endpoint, &upstream_body)
         .map_err(|source| perm(RequestsError::RequestConversion { source }))?;
     }
 
@@ -101,9 +101,9 @@ mod tests {
   use crate::pipeline::stages::{Extracted, Resolved};
   use crate::test_support::{mock_handle, mock_handle_with_provider, MockProvider};
   use crate::utils::codec::{decode_body_bytes, encode_body_bytes, ContentEncodingKind};
-  use llm_core::pipeline::InputTransformer;
-  use llm_core::provider::{Endpoint, Result as ProviderResult};
-  use llm_headers::HeaderMap;
+  use tokn_core::pipeline::InputTransformer;
+  use tokn_core::provider::{Endpoint, Result as ProviderResult};
+  use tokn_headers::HeaderMap;
   use std::sync::Arc;
 
   fn ctx_at(endpoint: Endpoint) -> PipelineCtx {
@@ -133,7 +133,7 @@ mod tests {
   }
 
   fn resolved_with(
-    handle: Arc<llm_accounts::AccountHandle>,
+    handle: Arc<tokn_accounts::AccountHandle>,
     upstream_endpoint: Endpoint,
     upstream_model: &str,
   ) -> Resolved {
@@ -201,7 +201,7 @@ mod tests {
   #[tokio::test]
   async fn cross_endpoint_convert_runs_when_endpoints_differ() {
     // Responses → ChatCompletions. We don't assert on the exact shape
-    // (that's `llm_convert`'s responsibility) — just that the body
+    // (that's `tokn_convert`'s responsibility) — just that the body
     // mutated and was re-serialized into `debug_outbound_body`.
     let body = serde_json::json!({
       "model": "input-model",
@@ -262,7 +262,7 @@ mod tests {
     struct Boom;
     impl InputTransformer for Boom {
       fn transform_input(&self, _endpoint: Endpoint, _body: Value) -> ProviderResult<Value> {
-        Err(llm_core::provider::error::Error::Profiles { message: "boom".into() })
+        Err(tokn_core::provider::error::Error::Profiles { message: "boom".into() })
       }
     }
     let body = serde_json::json!({"model": "input-model"});

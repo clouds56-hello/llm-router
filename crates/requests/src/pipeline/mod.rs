@@ -225,7 +225,7 @@ impl PipelineRunner {
 
     match &converted_response.body {
       stages::ConvertedBody::Buffered { body_bytes, .. } => {
-        ctx.emit_record(llm_core::request_event::RecordEvent::ConvertedBody {
+        ctx.emit_record(tokn_core::request_event::RecordEvent::ConvertedBody {
           body: body_bytes.clone(),
           error: None,
         });

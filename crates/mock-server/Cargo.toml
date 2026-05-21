@@ -1,8 +1,8 @@
 [package]
-name = "llm-mock-server"
+name = "tokn-mock-server"
 version.workspace = true
 edition.workspace = true
-description = "Shared test fixtures for llm-router workspace"
+description = "Shared test fixtures for tokn-router workspace"
 documentation.workspace = true
 homepage.workspace = true
 repository.workspace = true

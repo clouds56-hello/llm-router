@@ -29,7 +29,7 @@
 //! verify the new file. The next loader pass will ignore it (yaml wins).
 
 use anyhow::{Context, Result};
-use llm_core::account::AccountConfig;
+use tokn_core::account::AccountConfig;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -64,7 +64,7 @@ impl AuthStore {
   /// Load `auth.yaml` from the given path, falling back to the legacy
   /// `accounts = [...]` table in `config.toml` if `auth.yaml` is missing.
   ///
-  /// `auth_path` overrides the default `~/.config/llm-router/auth.yaml`.
+  /// `auth_path` overrides the default `~/.config/tokn-router/auth.yaml`.
   /// `config_path` is consulted only for the migration fallback; pass the
   /// effective config.toml path. When the legacy fallback fires, this
   /// function writes the migrated `auth.yaml` to disk and emits a
@@ -182,7 +182,7 @@ fn load_legacy_accounts(config_path: &Path) -> Result<Option<Vec<AccountConfig>>
   }
   let raw = std::fs::read_to_string(config_path).with_context(|| format!("reading {}", config_path.display()))?;
   // Minimal local schema: accounts have moved to auth.yaml, so we can no
-  // longer go through `llm_config::Config`. We only care about the legacy
+  // longer go through `tokn_config::Config`. We only care about the legacy
   // `[[accounts]]` table here; everything else in config.toml is ignored.
   #[derive(serde::Deserialize)]
   struct LegacyAccounts {
@@ -198,10 +198,10 @@ fn load_legacy_accounts(config_path: &Path) -> Result<Option<Vec<AccountConfig>>
   }
 }
 
-/// Default path: `~/.config/llm-router/auth.yaml` (or the platform
+/// Default path: `~/.config/tokn-router/auth.yaml` (or the platform
 /// equivalent via `directories::ProjectDirs`).
 pub fn default_auth_path() -> PathBuf {
-  if let Some(dirs) = directories::ProjectDirs::from("", "", "llm-router") {
+  if let Some(dirs) = directories::ProjectDirs::from("", "", "tokn-router") {
     dirs.config_dir().join(AUTH_FILE_NAME)
   } else {
     PathBuf::from(AUTH_FILE_NAME)
@@ -230,7 +230,7 @@ fn write_secured(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use llm_core::account::{AccountTier, AuthType};
+  use tokn_core::account::{AccountTier, AuthType};
 
   fn sample_account(id: &str) -> AccountConfig {
     AccountConfig {

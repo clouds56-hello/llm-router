@@ -1,6 +1,6 @@
-pub const BASE: &str = env!("LLM_ROUTER_BASE_VERSION");
-pub const COMMIT_ID: &str = env!("LLM_ROUTER_COMMIT_ID");
-pub const FULL: &str = env!("LLM_ROUTER_VERSION");
+pub const BASE: &str = env!("tokn_ROUTER_BASE_VERSION");
+pub const COMMIT_ID: &str = env!("tokn_ROUTER_COMMIT_ID");
+pub const FULL: &str = env!("tokn_ROUTER_VERSION");
 
 pub fn base() -> &'static str {
   BASE
@@ -15,9 +15,9 @@ pub fn full() -> &'static str {
 }
 
 pub fn is_dirty() -> bool {
-  option_env!("LLM_ROUTER_VERSION_DIRTY") == Some("1")
+  option_env!("tokn_ROUTER_VERSION_DIRTY") == Some("1")
 }
 
-pub fn llm_router_user_agent() -> String {
-  format!("llm-router/{FULL}")
+pub fn tokn_router_user_agent() -> String {
+  format!("tokn-router/{FULL}")
 }
