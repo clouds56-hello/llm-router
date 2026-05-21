@@ -1,6 +1,5 @@
 pub mod error;
 pub mod paths;
-pub mod profiles;
 
 use directories::ProjectDirs;
 pub use error::{Error, Result};

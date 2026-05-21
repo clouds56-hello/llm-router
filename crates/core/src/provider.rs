@@ -270,7 +270,7 @@ pub struct RequestCtx<'a> {
   pub stream: bool,
   pub initiator: &'a str,
   pub inbound_headers: &'a HeaderMap,
-  pub profile_headers: Option<HeaderMap>,
+  pub client_headers: Option<HeaderMap>,
   pub outbound: Option<OutboundCapture>,
   pub vars: TemplateVars,
 }

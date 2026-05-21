@@ -106,7 +106,7 @@ fn run_mode_for(cmd: &Cmd) -> RunMode {
       | AccountCmd::Switch(_) => RunMode::MutatingCli,
     },
     Cmd::Config(args) => match args.cmd {
-      Set(_) | Unset(_) | Edit | EditProfiles | Init(_) => RunMode::MutatingCli,
+      Set(_) | Unset(_) | Edit | Init(_) => RunMode::MutatingCli,
       _ => RunMode::ReadOnlyCli,
     },
     _ => RunMode::ReadOnlyCli,

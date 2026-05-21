@@ -76,7 +76,7 @@ impl DeepSeekProvider {
   async fn upstream_post(&self, ctx: RequestCtx<'_>, path: &str, what: &'static str) -> Result<reqwest::Response> {
     let url = self.url(path);
     debug!(%url, "POST deepseek upstream");
-    let mut headers = ctx.profile_headers.clone().unwrap_or_default();
+    let mut headers = ctx.client_headers.clone().unwrap_or_default();
     self.patch_headers(
       &mut headers,
       &HeaderPatchCtx {

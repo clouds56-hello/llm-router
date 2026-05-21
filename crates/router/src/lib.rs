@@ -6,7 +6,6 @@ pub mod proxy;
 
 pub use tokn_accounts as accounts;
 pub use tokn_config as config;
-pub use tokn_config::profiles;
 pub use tokn_convert as convert;
 pub use tokn_core::{db, provider, util};
 

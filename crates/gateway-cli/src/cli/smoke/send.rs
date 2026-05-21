@@ -34,7 +34,7 @@ use tokn_core::request_event::{RecordEvent, RequestEvent, RequestEventPayload};
 use tokn_requests::event::{BuiltHeadersSummary, ConvertedRequestSummary, ResolvedSummary};
 use tokn_requests::pipeline::stages::{ConvertedBody, ConvertedResponse};
 use tokn_requests::stages::{
-  DefaultConvertRequest, DefaultConvertResponse, DefaultExtract, DefaultSend, PersonaBuildHeaders, PoolAccountSelector,
+  ClientIdBuildHeaders, DefaultConvertRequest, DefaultConvertResponse, DefaultExtract, DefaultSend, PoolAccountSelector,
   PoolResolve,
 };
 use tokn_requests::{Event, EventBus, EventPayload, PipelineError, PipelineRunner, Profile, RawInbound, StageEvent};
@@ -230,7 +230,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
   let selector = Arc::new(PoolAccountSelector::new(state.pool.clone(), state.route.clone()));
   let extract = Arc::new(DefaultExtract);
   let resolve = Arc::new(PoolResolve::new(selector));
-  let build_headers = Arc::new(PersonaBuildHeaders::with_opencode_default());
+  let build_headers = Arc::new(ClientIdBuildHeaders::with_provider_defaults());
   let convert_request = Arc::new(DefaultConvertRequest);
 
   let profile = if args.dry_run {

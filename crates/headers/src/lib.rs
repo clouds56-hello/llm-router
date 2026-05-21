@@ -9,13 +9,12 @@
 //!   case while supporting case-insensitive lookup and duplicate names.
 //! * [`keys`] — a catalogue of static [`HeaderName`] constants for popular headers.
 //! * [`TemplateVars`] — per-request correlation metadata extracted from inbound
-//!   headers, shared between profile rendering and provider header construction.
-//! * [`Persona`] — the originating client tool ("opencode", "codex-cli", etc.).
-//! * [`HeaderSchema`] — a trait implemented by typed (provider, persona) header
+//!   headers, shared between header rendering and provider header construction.
+//! * [`HeaderSchema`] — a trait implemented by typed (provider, client) header
 //!   structs to round-trip between their typed form and a [`HeaderMap`].
-//! * [`schemas`] — concrete persona/overlay structs implementing [`HeaderSchema`].
+//! * [`schemas`] — concrete client/overlay structs implementing [`HeaderSchema`].
 //! * [`registry`] — runtime lookup of (`PersonaKind`, `OverlayKind`) for a given
-//!   `(provider_id, persona)` pair, with inheritance fallback.
+//!   `(provider_id, client_id)` pair.
 //!
 //! Phase 1 is purely additive: nothing in the workspace depends on this crate
 //! yet. Phase 2 will swap [`HeaderMap`] in for `reqwest::header::HeaderMap`
@@ -37,7 +36,6 @@ pub mod vars;
 pub use error::Error;
 pub use map::HeaderMap;
 pub use name::HeaderName;
-pub use persona::{detect_persona, Persona};
 pub use schema::HeaderSchema;
 pub use value::HeaderValue;
 pub use vars::TemplateVars;

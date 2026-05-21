@@ -225,7 +225,7 @@ impl Provider for ZaiProvider {
 
     let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
     debug!(%url, "POST zai chat");
-    let mut headers = ctx.profile_headers.clone().unwrap_or_default();
+    let mut headers = ctx.client_headers.clone().unwrap_or_default();
     self.patch_headers(
       &mut headers,
       &HeaderPatchCtx {
@@ -401,7 +401,7 @@ mod tests {
       stream: false,
       initiator: "user",
       inbound_headers: &inbound,
-      profile_headers: None,
+      client_headers: None,
       outbound: Some(capture.clone()),
       vars: TemplateVars::default(),
     };

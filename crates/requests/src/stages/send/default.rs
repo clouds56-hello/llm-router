@@ -52,7 +52,7 @@ impl SendStage for DefaultSend {
     body: &ConvertedRequest,
   ) -> Result<SentResponse, PipelineError> {
     let initiator: &str = extracted.initiator.as_str();
-    // Persona headers are passed via `profile_headers`. The provider's
+    // Client-derived headers are passed via `client_headers`. The provider's
     // own `patch_headers` will run on top to inject auth + content-type;
     // `inbound_headers` therefore only needs to provide template-vars-
     // adjacent context — empty is fine because we already populated
@@ -74,7 +74,7 @@ impl SendStage for DefaultSend {
       stream: extracted.stream,
       initiator,
       inbound_headers: &inbound_headers,
-      profile_headers: Some(headers.headers.clone()),
+      client_headers: Some(headers.headers.clone()),
       outbound: Some(capture.clone()),
       vars: headers.vars.clone(),
     };

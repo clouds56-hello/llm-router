@@ -1,10 +1,11 @@
-//! The originating client tool ("persona") that issued an inbound request.
+//! Internal header-building identity used to synthesize client-specific
+//! outbound headers.
 //!
-//! Personas are an open enum: known tools have dedicated variants (so call
-//! sites can `match` exhaustively), and unknown tool identifiers fall back to
-//! [`Persona::Custom`].
+//! This remains an open enum because the header registry still uses a
+//! fallback `Custom` variant internally, but router-facing code should use
+//! [`tokn_core::ClientId`] rather than inferring identity from inbound
+//! headers.
 
-use crate::keys;
 use crate::map::HeaderMap;
 use crate::schema::HeaderSchema;
 use crate::schemas::{ClaudeCodeHeaders, ClineHeaders, CodexCliHeaders, CopilotCliHeaders, OpencodeHeaders};
@@ -69,33 +70,6 @@ impl Persona {
       Self::CopilotCli => CopilotCliHeaders::build(vars, inbound).dump(),
       Self::Custom(_) => HeaderMap::new(),
     }
-  }
-}
-
-/// Detect the originating client persona from inbound headers.
-///
-/// Strategy: inspect the `User-Agent` header for a leading `slug/` token
-/// matching one of the known persona slugs (`opencode`, `codex_exec`,
-/// `codex-tui`, `claude-cli`/`claude-code`, `cline`, `copilot`). Returns
-/// [`Persona::Custom`] with the raw slug if no match is found, or
-/// `Persona::Custom("unknown")` if the `User-Agent` header is absent or
-/// malformed.
-pub fn detect_persona(inbound: &HeaderMap) -> Persona {
-  let ua = match inbound.get(&keys::USER_AGENT) {
-    Some(v) => v.as_str(),
-    None => return Persona::Custom(SmolStr::new("unknown")),
-  };
-  let slug = match ua.split_once('/') {
-    Some((s, _)) => s,
-    None => ua,
-  };
-  match slug {
-    "opencode" => Persona::Opencode,
-    "codex_exec" | "codex-tui" | "codex" | "codex-cli" => Persona::CodexCli,
-    "claude-cli" | "claude-code" => Persona::ClaudeCode,
-    "cline" => Persona::Cline,
-    "copilot" | "copilot-cli" => Persona::CopilotCli,
-    other => Persona::Custom(SmolStr::new(other)),
   }
 }
 
@@ -170,42 +144,6 @@ mod tests {
     assert_eq!(s, "\"foo\"");
     let back: Persona = serde_json::from_str(&s).unwrap();
     assert_eq!(back, p);
-  }
-
-  #[test]
-  fn detect_persona_recognizes_known_slugs() {
-    let cases = [
-      ("opencode/1.14.28 ai-sdk/...", Persona::Opencode),
-      ("codex_exec/0.130.0", Persona::CodexCli),
-      ("codex-tui/0.131.0", Persona::CodexCli),
-      ("claude-cli/1.0.0", Persona::ClaudeCode),
-      ("cline/3.0.0", Persona::Cline),
-      ("copilot/1.0.25", Persona::CopilotCli),
-    ];
-    for (ua, expected) in cases {
-      let mut m = HeaderMap::new();
-      m.insert(
-        keys::USER_AGENT.clone(),
-        crate::HeaderValue::from_string(ua.to_string()),
-      );
-      assert_eq!(detect_persona(&m), expected, "UA {ua}");
-    }
-  }
-
-  #[test]
-  fn detect_persona_unknown_ua_returns_custom_with_slug() {
-    let mut m = HeaderMap::new();
-    m.insert(
-      keys::USER_AGENT.clone(),
-      crate::HeaderValue::from_string("my-bespoke-tool/2.0".to_string()),
-    );
-    assert_eq!(detect_persona(&m), Persona::Custom(SmolStr::new("my-bespoke-tool")));
-  }
-
-  #[test]
-  fn detect_persona_missing_ua_returns_custom_unknown() {
-    let m = HeaderMap::new();
-    assert_eq!(detect_persona(&m), Persona::Custom(SmolStr::new("unknown")));
   }
 
   #[test]

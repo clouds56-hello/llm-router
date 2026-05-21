@@ -1,8 +1,7 @@
-//! `tokn-router config` subcommand — git-style key/value access plus profile
-//! helpers. Comment-preserving edits via `toml_edit`.
+//! `tokn-router config` subcommand — git-style key/value access. Comment-
+//! preserving edits via `toml_edit`.
 
 use crate::config::{paths, Config};
-use crate::provider::profiles::{self, Profiles};
 use crate::util::http::build_client;
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Subcommand};
@@ -30,15 +29,8 @@ pub enum ConfigCmd {
   List,
   /// Open the config file in $EDITOR; validates after save
   Edit,
-  /// Open the user profiles file in $EDITOR; validates after save
-  EditProfiles,
-  /// Print the path to the config file (or `--profiles` for profiles.toml)
-  Path {
-    #[arg(long)]
-    profiles: bool,
-  },
-  /// List known persona profiles and verified status
-  ListProfiles,
+  /// Print the path to the config file
+  Path,
   /// Initialize config with onboarding wizard
   Init(InitArgs),
 }
@@ -133,9 +125,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: ConfigArgs) -> Result<()> {
     ConfigCmd::Unset(a) => cmd_unset(&path, a),
     ConfigCmd::List => cmd_list(&path),
     ConfigCmd::Edit => cmd_edit(&path),
-    ConfigCmd::EditProfiles => cmd_edit_profiles(),
-    ConfigCmd::Path { profiles } => cmd_path(&path, profiles),
-    ConfigCmd::ListProfiles => cmd_list_profiles(),
+    ConfigCmd::Path => cmd_path(&path),
     ConfigCmd::Init(a) => cmd_init(&path, a).await,
   }
 }
@@ -279,40 +269,8 @@ fn cmd_edit(path: &std::path::Path) -> Result<()> {
   Ok(())
 }
 
-fn cmd_edit_profiles() -> Result<()> {
-  let path = profiles::user_profiles_path().ok_or_else(|| anyhow!("could not resolve user profiles path"))?;
-  if let Some(parent) = path.parent() {
-    std::fs::create_dir_all(parent).ok();
-  }
-  if !path.exists() {
-    std::fs::write(
-      &path,
-      b"# User-defined personas. See built-in profiles.toml for schema.\n",
-    )?;
-  }
-  open_in_editor(&path)?;
-  let raw = std::fs::read_to_string(&path)?;
-  Profiles::parse(&raw).map_err(|e| anyhow!("validation failed: edited profiles.toml is invalid: {e}"))?;
-  println!("ok");
-  Ok(())
-}
-
-fn cmd_path(path: &std::path::Path, want_profiles: bool) -> Result<()> {
-  if want_profiles {
-    let p = profiles::user_profiles_path().ok_or_else(|| anyhow!("could not resolve user profiles path"))?;
-    println!("{}", p.display());
-  } else {
-    println!("{}", path.display());
-  }
-  Ok(())
-}
-
-fn cmd_list_profiles() -> Result<()> {
-  let p = Profiles::global();
-  for (name, verified) in p.personas() {
-    let tag = if verified { "verified" } else { "UNVERIFIED" };
-    println!("{name:<16}  {tag}");
-  }
+fn cmd_path(path: &std::path::Path) -> Result<()> {
+  println!("{}", path.display());
   Ok(())
 }
 

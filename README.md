@@ -107,7 +107,7 @@ tokn-router proxy shell [--shell /path/to/shell]
 tokn-router proxy ca path|show|regenerate
 tokn-router usage [--since 24h] [--account ID]
 tokn-router config get|set|unset KEY [--account ID] [--add]
-tokn-router config list | edit | edit-profiles | path [--profiles] | list-profiles
+tokn-router config list | edit | path
 ```
 
 ## Proxy Mode

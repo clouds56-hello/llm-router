@@ -1,9 +1,9 @@
-//! Registry mapping `(provider, persona)` to the typed header schema pair.
+//! Registry mapping `(provider, client_id)` to the typed header schema pair.
 //!
-//! Each successful lookup yields a [`ResolvedSchema`] describing which persona
+//! Each successful lookup yields a [`ResolvedSchema`] describing which header
 //! struct and (optional) overlay struct should be applied. Composition is
 //! overlay-wins via [`HeaderMap::merge_replacing`]: any name set by both the
-//! persona and the overlay takes the overlay's value.
+//! client-id headers and the overlay takes the overlay's value.
 //!
 //! Unknown personas for a known provider fall back to [`PersonaKind::Opencode`]
 //! as a sensible default base. Unknown providers return [`None`].
@@ -62,7 +62,7 @@ impl ResolvedSchema {
   }
 }
 
-/// Look up the schema pair for a given `(provider, persona)`. Returns `None`
+/// Look up the schema pair for a given `(provider, client_id)`. Returns `None`
 /// for unknown providers; for known providers, falls back to
 /// [`PersonaKind::Opencode`] as the base persona when the input persona is
 /// [`Persona::Custom`].
@@ -73,13 +73,13 @@ pub fn lookup(provider: &str, persona: &Persona) -> Option<ResolvedSchema> {
       persona: base,
       overlay: matches!(base, PersonaKind::CodexCli).then_some(OverlayKind::Codex),
     }),
-    "copilot" => Some(ResolvedSchema {
+    "copilot" | "github-copilot" => Some(ResolvedSchema {
       persona: base,
       overlay: Some(OverlayKind::Copilot),
     }),
-    "deepseek" | "zai" => Some(ResolvedSchema {
+    "deepseek" | "zai" | "zai-coding-plan" | "zhipuai" | "zhipuai-coding-plan" | "codex" => Some(ResolvedSchema {
       persona: base,
-      overlay: None,
+      overlay: matches!(provider, "codex").then_some(OverlayKind::Codex),
     }),
     _ => None,
   }
